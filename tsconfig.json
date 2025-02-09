@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "es2020", // Target ECMAScript version
+    "module": "NodeNext", // Use Node.js module resolution 
+    "moduleResolution": "NodeNext", // Align module resolution with 'module'
+    "strict": true, // Enable stricter type checking
+    "esModuleInterop": true, // Improve compatibility with ES modules
+    "forceConsistentCasingInFileNames": true, // Enforce consistent casing 
+    "skipLibCheck": true // Skip type checking for external libraries
+  }
+}

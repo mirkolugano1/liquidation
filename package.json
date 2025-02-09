@@ -1,0 +1,22 @@
+{
+    "devDependencies": {
+        "dotenv": "^16.4.7",
+        "ethers": "^6.13.5",
+        "express": "^4.21.2",
+        "fs": "^0.0.1-security",
+        "lodash": "^4.17.21",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.7.3",
+        "web3": "^4.16.0"
+    },
+    "scripts": {
+        "test": "npx ts-node --transpileOnly clients/test.ts",
+        "webServer": "npx ts-node --transpileOnly clients/webServer.ts",
+        "healthFactorCheck": "npx ts-node --transpileOnly clients/healthFactorCheck.ts",
+        "encrypt": "npx ts-node --transpileOnly encryption.ts encrypt",
+        "decrypt": "npx ts-node --transpileOnly encryption.ts decrypt"
+    },
+    "dependencies": {
+        "@types/lodash": "^4.17.15"
+    }
+}
