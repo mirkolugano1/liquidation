@@ -5,7 +5,9 @@ const { ethers } = require("ethers");
 
 class WebhookEngine {
     addresses: string[] = [];
+    uniqueAddresses: string[] = [];
     addressesFilePath: string = "./data/addresses.txt";
+    addAddressTreshold = 0;
 
     ifaceBorrow: any;
     borrowEventAbi: string[] = [
@@ -37,6 +39,10 @@ class WebhookEngine {
 
         let addressesText = await common.loadData(this.addressesFilePath);
         this.addresses = addressesText?.split("\n") || [];
+
+        //TODO change this to 100 when data will be saved on a Blob
+        if (process.env.LIQUIDATIONENVIRONMENT == "prod")
+            this.addAddressTreshold = 0;
     }
 
     async processAaveEvent(req: any, res: any) {
@@ -110,31 +116,39 @@ class WebhookEngine {
                     (normalizedAddress) => {
                         return (
                             !normalizedAddress ||
-                            _.includes(this.addresses, normalizedAddress)
+                            _.includes(this.addresses, normalizedAddress) ||
+                            _.includes(this.uniqueAddresses, normalizedAddress)
                         );
                     }
                 );
 
                 if (uniqueAddresses.length > 0) {
+                    this.uniqueAddresses = _.uniq(
+                        _.union(this.uniqueAddresses, uniqueAddresses)
+                    );
+
                     this.addresses = _.uniq(
                         _.union(this.addresses, uniqueAddresses)
                     );
 
-                    common.log(
-                        "uniqueAddresses: " + uniqueAddresses.join(", ")
-                    );
+                    if (this.uniqueAddresses.length > this.addAddressTreshold) {
+                        //Add to file if not already present
+                        //TODO replace with blob storage save
+                        //AND CHANGE "ADD TRESHOLD" ABOVE
+                        await common.saveData(
+                            this.addressesFilePath,
+                            this.uniqueAddresses.join("\n") + "\n"
+                        );
 
-                    //Add to database if not already present
-                    await common.saveData(
-                        this.addressesFilePath,
-                        uniqueAddresses.join("\n") + "\n"
-                    );
+                        this.uniqueAddresses = [];
+                    }
                 }
             }
         }
     }
 
     normalizeAddress(address: string) {
+        if (!address) return "";
         const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
         const firstNonZeroIndex = addressWithoutPrefix.search(/[^0]/); // Find the index of the first non-zero character
         const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end

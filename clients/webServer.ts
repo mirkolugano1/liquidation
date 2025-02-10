@@ -1,3 +1,4 @@
+import common from "../common/common";
 import webhookEngine from "../engines/webhookEngine";
 const express = require("express");
 const app = express();
@@ -14,5 +15,5 @@ app.post("/aaveEvent", async (req: any, res: any) => {
 
 app.listen(80, async () => {
     await webhookEngine.initializeProcessAaveEvent();
-    console.log("Server is running on http://localhost:80");
+    common.log("Server is running on http://localhost:80");
 });

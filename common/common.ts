@@ -13,10 +13,10 @@ class Common {
     }
 
     requiredEnvironmentVariables: string[] = [
-        "ENCRYPTION_PWD",
-        "PRIVATE_KEY_ENCRYPTED",
-        "ALCHEMY_KEY_ENCRYPTED",
-        "LIQUIDATION_ENVIRONMENT",
+        "ENCRYPTIONPWD",
+        "PRIVATEKEYENCRYPTED",
+        "ALCHEMYKEYENCRYPTED",
+        "LIQUIDATIONENVIRONMENT",
     ];
 
     checkRequiredEnvironmentVariables() {
