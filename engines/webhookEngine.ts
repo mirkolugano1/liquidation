@@ -4,6 +4,13 @@ import fileUtilities from "../common/fileUtilities";
 const { ethers } = require("ethers");
 
 class WebhookEngine {
+    requiredEnvironmentVariables: string[] = [
+        "ENCRYPTIONPWD",
+        "ALCHEMYKEYENCRYPTED",
+        "LIQUIDATIONENVIRONMENT",
+        "APPLICATIONINSIGHTSINSTRUMENTATIONKEY",
+    ];
+
     addresses: string[] = [];
     uniqueAddresses: string[] = [];
     addressesFilePath: string = "./data/addresses.txt";
@@ -32,7 +39,9 @@ class WebhookEngine {
     //#region Alchemy Webhook
 
     async initializeProcessAaveEvent() {
-        common.checkRequiredEnvironmentVariables();
+        common.checkRequiredEnvironmentVariables(
+            this.requiredEnvironmentVariables
+        );
 
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
@@ -41,8 +50,7 @@ class WebhookEngine {
         this.addresses = addressesText?.split("\n") || [];
 
         //TODO change this to 100 when data will be saved on a Blob
-        if (process.env.LIQUIDATIONENVIRONMENT == "prod")
-            this.addAddressTreshold = 0;
+        if (common.isProd) this.addAddressTreshold = 0;
     }
 
     async processAaveEvent(req: any, res: any) {

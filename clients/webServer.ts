@@ -14,6 +14,7 @@ app.post("/aaveEvent", async (req: any, res: any) => {
 });
 
 app.listen(80, async () => {
-    await webhookEngine.initializeProcessAaveEvent();
-    common.log("Server is running on http://localhost:80");
+    //common.log("Server is up and running!");
+    //await webhookEngine.initializeProcessAaveEvent();
+    //common.log("WebhookEngine is initialized");
 });

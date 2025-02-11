@@ -4,6 +4,13 @@ import encryption from "../common/encryption";
 const { ethers } = require("ethers");
 
 class HealthFactorCheckEngine {
+    requiredEnvironmentVariables: string[] = [
+        "ENCRYPTIONPWD",
+        "PRIVATEKEYENCRYPTED",
+        "LIQUIDATIONENVIRONMENT",
+        "APPLICATIONINSIGHTSINSTRUMENTATIONKEY",
+    ];
+
     addresses: string[] = [];
     addressesFilePath: string = "./data/addresses.txt";
 
@@ -22,11 +29,13 @@ class HealthFactorCheckEngine {
     lendingPoolContract: any;
 
     async initializeHealthFactorCheckLoop() {
-        common.checkRequiredEnvironmentVariables();
+        common.checkRequiredEnvironmentVariables(
+            this.requiredEnvironmentVariables
+        );
 
         //Load required environment variables
-        const _privateKey = process.env.PRIVATE_KEY_ENCRYPTED; //Metamask
-        const _alchemyKey = process.env.ALCHEMY_KEY_ENCRYPTED;
+        const _privateKey = process.env.PRIVATEKEYENCRYPTED; //Metamask
+        const _alchemyKey = process.env.ALCHEMYKEYENCRYPTED;
         //load for required environment variables
 
         //Setup & variables definition
