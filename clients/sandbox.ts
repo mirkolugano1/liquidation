@@ -1,6 +1,4 @@
 import common from "../common/common";
-import fileUtilities from "../common/fileUtilities";
-import webhookEngine from "../engines/webhookEngine";
 require("dotenv").config();
 
 async function main() {
@@ -8,7 +6,7 @@ async function main() {
     //console.log("test");
     //await webhookEngine.test();
     common.isProd = true;
-    common.log("Mirkos test log");
+    //common.log("Mirkos test log");
 }
 
 main()

@@ -12,6 +12,7 @@
         "web3": "^4.16.0"
     },
     "scripts": {
+        "build": "tsc",
         "sandbox": "npx ts-node --transpileOnly clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly clients/webServer.ts",
         "healthFactorCheck": "npx ts-node --transpileOnly clients/healthFactorCheck.ts",
