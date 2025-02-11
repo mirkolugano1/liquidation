@@ -8,7 +8,7 @@ class HealthFactorCheckEngine {
         "ENCRYPTIONPWD",
         "PRIVATEKEYENCRYPTED",
         "LIQUIDATIONENVIRONMENT",
-        "APPLICATIONINSIGHTSINSTRUMENTATIONKEY",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING",
     ];
 
     addresses: string[] = [];

@@ -9,6 +9,7 @@ REQUIRED ENVIRONMENT VARIABLES:
 //Imports
 import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 import common from "../common/common";
+require("dotenv").config();
 
 //Main function
 async function main() {

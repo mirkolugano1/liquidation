@@ -13,7 +13,7 @@ class Common {
 
             // Replace with your Application Insights Instrumentation Key
             appInsights
-                .setup(process.env.APPLICATIONINSIGHTSINSTRUMENTATIONKEY)
+                .setup(process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)
                 .setAutoCollectExceptions(true)
                 .start();
 

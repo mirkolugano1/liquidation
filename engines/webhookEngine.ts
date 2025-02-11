@@ -8,7 +8,7 @@ class WebhookEngine {
         "ENCRYPTIONPWD",
         "ALCHEMYKEYENCRYPTED",
         "LIQUIDATIONENVIRONMENT",
-        "APPLICATIONINSIGHTSINSTRUMENTATIONKEY",
+        "APPLICATIONINSIGHTS_CONNECTION_STRING",
     ];
 
     addresses: string[] = [];

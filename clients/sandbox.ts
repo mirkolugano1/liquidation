@@ -1,6 +1,7 @@
 import common from "../common/common";
 import fileUtilities from "../common/fileUtilities";
 import webhookEngine from "../engines/webhookEngine";
+require("dotenv").config();
 
 async function main() {
     //await fileUtilities.writeToTextFile("./data/aaveEvent.json", "test");

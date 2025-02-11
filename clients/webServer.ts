@@ -1,5 +1,7 @@
 import common from "../common/common";
 import webhookEngine from "../engines/webhookEngine";
+require("dotenv").config();
+
 const express = require("express");
 const app = express();
 
