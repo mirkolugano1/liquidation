@@ -1,6 +1,9 @@
 import _ from "lodash";
 import fileUtilities from "./fileUtilities";
 
+require("@azure/opentelemetry-instrumentation-azure-sdk");
+require("@azure/core-tracing");
+
 class Common {
     public appInsights: any = null;
     public isProd: boolean = false;
