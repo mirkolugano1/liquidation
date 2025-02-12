@@ -70,6 +70,7 @@ class Common {
     async loadData(source: string): Promise<string | undefined> {
         if (this.isProd) {
             //TODO fetch data from cloud storage blob
+            await fileUtilities.readFromTextFile(source);
         } else {
             return await fileUtilities.readFromTextFile(source);
         }
@@ -78,7 +79,8 @@ class Common {
 
     async saveData(dest: string, str: string) {
         if (this.isProd) {
-            //TODO save data to cloud storage blob
+            //TODO later save data to cloud storage blob
+            await fileUtilities.appendToTextFile(dest, str);
         } else {
             await fileUtilities.appendToTextFile(dest, str);
         }

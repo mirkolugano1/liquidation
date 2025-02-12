@@ -17,6 +17,11 @@ app.get("/healthcheck", (req: any, res: any) => {
     res.send("Ok");
 });
 
+app.post("/testpost", async (req: any, res: any) => {
+    console.log("testpost api hit.");
+    console.log(JSON.stringify(req.body));
+});
+
 app.post("/aaveEvent", async (req: any, res: any) => {
     common.log("Aave event received");
     await webhookEngine.processAaveEvent(req, res);
