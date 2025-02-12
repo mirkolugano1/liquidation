@@ -46,6 +46,7 @@ class WebhookEngine {
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
+        await fileUtilities.ensureDirectoryExists("./data");
         await fileUtilities.ensureFileExists(this.addressesFilePath);
 
         let addressesText = await common.loadData(this.addressesFilePath);

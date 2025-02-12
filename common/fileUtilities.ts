@@ -42,6 +42,12 @@ class FileUtilities {
         await fs.appendFile(filePath, data);
     }
 
+    async ensureDirectoryExists(dir: string) {
+        if (!(await this.fileExists(dir))) {
+            await fs.mkdir(dir);
+        }
+    }
+
     async ensureFileExists(filePath: string) {
         if (!filePath) throw new Error("File path is required");
         if (!(await this.fileExists(filePath)))
