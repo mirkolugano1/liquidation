@@ -1,6 +1,6 @@
 import common from "../common/common";
 import _ from "lodash";
-import fileUtilities from "../common/fileUtilities";
+import { CloudStorageManager } from "../common/cloudStorageManager";
 const { ethers } = require("ethers");
 
 class WebhookEngine {
@@ -9,11 +9,11 @@ class WebhookEngine {
         "ALCHEMYKEYENCRYPTED",
         "LIQUIDATIONENVIRONMENT",
         "APPLICATIONINSIGHTS_CONNECTION_STRING",
+        "CLOUDSTORAGEACCESSKEYENCRYPTED",
     ];
 
     addresses: string[] = [];
     uniqueAddresses: string[] = [];
-    addressesFilePath: string = "./data/addresses.txt";
     addAddressTreshold = 0;
 
     ifaceBorrow: any;
@@ -26,6 +26,7 @@ class WebhookEngine {
         "event Deposit(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referral)",
     ];
 
+    private cloudStorageManager = new CloudStorageManager();
     private static instance: WebhookEngine;
     private constructor() {}
 
@@ -46,14 +47,15 @@ class WebhookEngine {
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
-        await fileUtilities.ensureDirectoryExists("./data");
-        await fileUtilities.ensureFileExists(this.addressesFilePath);
+        await this.cloudStorageManager.initializeBlobClient(
+            "data",
+            "addresses.txt"
+        );
 
-        let addressesText = await common.loadData(this.addressesFilePath);
+        let addressesText = await this.cloudStorageManager.readBlob();
         this.addresses = addressesText?.split("\n") || [];
 
-        //TODO change this to 100 when data will be saved on a Blob
-        if (common.isProd) this.addAddressTreshold = 0;
+        if (common.isProd) this.addAddressTreshold = 50;
     }
 
     async processAaveEvent(req: any, res: any) {
@@ -143,14 +145,9 @@ class WebhookEngine {
                     );
 
                     if (this.uniqueAddresses.length > this.addAddressTreshold) {
-                        //Add to file if not already present
-                        //TODO replace with blob storage save
-                        //AND CHANGE "ADD TRESHOLD" ABOVE
-                        await common.saveData(
-                            this.addressesFilePath,
-                            this.uniqueAddresses.join("\n") + "\n"
+                        await this.cloudStorageManager.writeBlob(
+                            this.addresses.join("\n")
                         );
-
                         this.uniqueAddresses = [];
                     }
                 }
@@ -164,19 +161,6 @@ class WebhookEngine {
         const firstNonZeroIndex = addressWithoutPrefix.search(/[^0]/); // Find the index of the first non-zero character
         const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end
         return "0x" + normalized.padStart(40, "0"); // Ensure the address is 40 characters long by padding with zeros if necessary
-    }
-
-    async test() {
-        await this.initializeProcessAaveEvent();
-        let addressesToAdd: string[] = [
-            "0x23c7601c1e4cd0b8f2c1beb5802a89b6e0cc71f3",
-            "0x00000000000000000000000074de5d4fcbf63e00296fd95d33236b9794016631",
-        ];
-        let uniqueAddresses = _.reject(
-            _.uniq(addressesToAdd),
-            (address) => !address || _.includes(this.addresses, address)
-        );
-        console.log(uniqueAddresses);
     }
 
     //#endregion Alchemy Webhook

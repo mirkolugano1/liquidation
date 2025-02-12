@@ -1,5 +1,6 @@
 {
     "devDependencies": {
+        "@azure/storage-blob": "^12.26.0",
         "applicationinsights": "^3.5.0",
         "dotenv": "^16.4.7",
         "ethers": "^6.13.5",

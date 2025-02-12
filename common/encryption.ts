@@ -11,12 +11,8 @@ class Encryption {
         return Encryption.instance;
     }
 
-    async encrypt(
-        stringToEncrypt: string,
-        password: string = process.env.ENCRYPTION_PWD!
-    ) {
+    async encrypt(stringToEncrypt: string, password: string) {
         const key = crypto.createHash("sha256").update(password).digest();
-
         const iv = crypto.randomBytes(16); // Initialization Vector for AES-256-CBC
         const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
         const encrypted = Buffer.concat([
