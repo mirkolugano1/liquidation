@@ -40,6 +40,7 @@ class Common {
     }
 
     async log(str: string, severity: string = "Information") {
+        console.log(str);
         if (this.isProd) {
             let trackType: string;
             switch (severity) {
@@ -62,7 +63,6 @@ class Common {
                 severity: appInsightsSeverity,
             });
         } else {
-            console.log(str);
             await fileUtilities.appendToTextFile("./data/log.txt", str + "\n");
         }
     }
