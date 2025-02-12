@@ -1,6 +1,7 @@
 import common from "../common/common";
 import _ from "lodash";
 import encryption from "../common/encryption";
+import { CloudStorageManager } from "../common/cloudStorageManager";
 const { ethers } = require("ethers");
 
 class HealthFactorCheckEngine {
@@ -11,8 +12,8 @@ class HealthFactorCheckEngine {
         "APPLICATIONINSIGHTS_CONNECTION_STRING",
     ];
 
+    cloudStorageManager: CloudStorageManager = new CloudStorageManager();
     addresses: string[] = [];
-    addressesFilePath: string = "./data/addresses.txt";
 
     private static instance: HealthFactorCheckEngine;
     private constructor() {}
@@ -141,11 +142,16 @@ class HealthFactorCheckEngine {
             lendingPoolAbi,
             signer
         );
+
+        await this.cloudStorageManager.initializeBlobClient(
+            "data",
+            "addresses.txt"
+        );
     }
 
     async performHealthFactorCheckLoop() {
         while (true) {
-            let addressesText = await common.loadData(this.addressesFilePath);
+            let addressesText = await this.cloudStorageManager.readBlob();
             this.addresses = addressesText?.split("\n") || [];
 
             for (const userAddress of this.addresses) {
