@@ -5,6 +5,7 @@ require("@azure/opentelemetry-instrumentation-azure-sdk");
 require("@azure/core-tracing");
 
 class Common {
+    public addressesFilePath = "/home/data/addresses.txt";
     public appInsights: any = null;
     public isProd: boolean = false;
     private static instance: Common;

@@ -13,6 +13,7 @@ require("dotenv").config();
 
 //Main function
 async function main() {
+    common.log("Started healthFactorCheck");
     await healthFactorCheckEngine.initializeHealthFactorCheckLoop();
     await healthFactorCheckEngine.performHealthFactorCheckLoop();
 }

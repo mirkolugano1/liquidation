@@ -1,4 +1,5 @@
 import * as fs from "fs/promises";
+const path = require("path");
 
 class FileUtilities {
     private static instance: FileUtilities;
@@ -42,16 +43,15 @@ class FileUtilities {
         await fs.appendFile(filePath, data);
     }
 
-    async ensureDirectoryExists(dir: string) {
-        if (!(await this.fileExists(dir))) {
-            await fs.mkdir(dir);
-        }
-    }
-
     async ensureFileExists(filePath: string) {
         if (!filePath) throw new Error("File path is required");
-        if (!(await this.fileExists(filePath)))
+        if (!(await this.fileExists(filePath))) {
+            const dirname = path.dirname(filePath);
+            if (!(await this.fileExists(dirname))) {
+                await fs.mkdir(dirname, { recursive: true });
+            }
             await fs.writeFile(filePath, "");
+        }
     }
 }
 

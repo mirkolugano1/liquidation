@@ -2,6 +2,7 @@ import common from "../common/common";
 import _ from "lodash";
 import encryption from "../common/encryption";
 import { CloudStorageManager } from "../common/cloudStorageManager";
+import fileUtilities from "../common/fileUtilities";
 const { ethers } = require("ethers");
 
 class HealthFactorCheckEngine {
@@ -37,13 +38,16 @@ class HealthFactorCheckEngine {
         //Load required environment variables
         const _privateKey = process.env.PRIVATEKEYENCRYPTED; //Metamask
         const _alchemyKey = process.env.ALCHEMYKEYENCRYPTED;
+        const _encryptionPwd = process.env.ENCRYPTIONPWD!;
         //load for required environment variables
 
         //Setup & variables definition
-        const Web3 = require("web3");
         const ethers = require("ethers");
         const alchemyUrl = `https://eth-mainnet.g.alchemy.com/v2/${_alchemyKey}`;
-        const privateKey = encryption.decrypt(_privateKey || "");
+        const privateKey = await encryption.decrypt(
+            _privateKey || "",
+            _encryptionPwd
+        );
         const lendingPoolAddress = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2";
         const lendingPoolAbi = [
             {
@@ -129,10 +133,8 @@ class HealthFactorCheckEngine {
         ];
         //end setup and variables definition
 
-        // Create a Web3 provider
-        const provider = new Web3.providers.HttpProvider(alchemyUrl);
-        const web3 = new Web3(provider);
-
+        const provider = new ethers.JsonRpcProvider(alchemyUrl);
+        console.log(privateKey);
         // Create a signer from private key
         const signer = new ethers.Wallet(privateKey, provider);
 
@@ -143,15 +145,17 @@ class HealthFactorCheckEngine {
             signer
         );
 
-        await this.cloudStorageManager.initializeBlobClient(
-            "data",
-            "addresses.txt"
-        );
+        await fileUtilities.ensureFileExists(common.addressesFilePath);
+
+        common.log("HFCE: init complete");
     }
 
     async performHealthFactorCheckLoop() {
         while (true) {
-            let addressesText = await this.cloudStorageManager.readBlob();
+            common.log("HFCE: start loop healthCheck factor check");
+            let addressesText = await fileUtilities.readFromTextFile(
+                common.addressesFilePath
+            );
             this.addresses = addressesText?.split("\n") || [];
 
             for (const userAddress of this.addresses) {
@@ -162,8 +166,15 @@ class HealthFactorCheckEngine {
                     );
 
                 // Extract health factor
-                const healthFactor = userAccountData[5];
+                //const healthFactor = userAccountData[5];
 
+                common.log(
+                    "account: " +
+                        userAddress +
+                        ", data: " +
+                        JSON.stringify(userAccountData)
+                );
+                /*
                 // Fetch market prices (replace with actual price fetching logic)
                 const collateralAssetPrice = await this.fetchMarketPrice(
                     "0xCollateralAsset"
@@ -206,8 +217,9 @@ class HealthFactorCheckEngine {
 
                     common.log(
                         `Transaction confirmed: ${receipt.transactionHash}`
-                    );
+                    );                    
                 }
+                    */
             }
         }
     }

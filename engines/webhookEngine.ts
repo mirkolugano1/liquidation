@@ -1,6 +1,7 @@
 import common from "../common/common";
 import _ from "lodash";
 import { CloudStorageManager } from "../common/cloudStorageManager";
+import fileUtilities from "../common/fileUtilities";
 const { ethers } = require("ethers");
 
 class WebhookEngine {
@@ -47,15 +48,12 @@ class WebhookEngine {
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
-        await this.cloudStorageManager.initializeBlobClient(
-            "data",
-            "addresses.txt"
-        );
-
-        let addressesText = await this.cloudStorageManager.readBlob();
-        this.addresses = addressesText?.split("\n") || [];
-
-        if (common.isProd) this.addAddressTreshold = 50;
+        if (!(await fileUtilities.fileExists(common.addressesFilePath)))
+            await fileUtilities.ensureFileExists(common.addressesFilePath);
+        else {
+            let addressesText = await this.cloudStorageManager.readBlob();
+            this.addresses = addressesText?.split("\n") || [];
+        }
     }
 
     async processAaveEvent(req: any, res: any) {
@@ -136,6 +134,10 @@ class WebhookEngine {
                 );
 
                 if (uniqueAddresses.length > 0) {
+                    common.log(
+                        "unique addresses: " + uniqueAddresses.join(",")
+                    );
+
                     this.uniqueAddresses = _.uniq(
                         _.union(this.uniqueAddresses, uniqueAddresses)
                     );
@@ -145,8 +147,14 @@ class WebhookEngine {
                     );
 
                     if (this.uniqueAddresses.length > this.addAddressTreshold) {
-                        await this.cloudStorageManager.writeBlob(
-                            this.addresses.join("\n")
+                        common.log(
+                            "adding unique addresses: " +
+                                this.uniqueAddresses.join(",")
+                        );
+
+                        await fileUtilities.appendToTextFile(
+                            common.addressesFilePath,
+                            this.uniqueAddresses.join(",")
                         );
                         this.uniqueAddresses = [];
                     }

@@ -16,7 +16,7 @@
         "build": "tsc",
         "sandbox": "npx ts-node --transpileOnly clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly clients/webServer.ts",
-        "healthFactorCheck": "npx ts-node --transpileOnly clients/healthFactorCheck.ts",
+        "hfc": "npx ts-node --transpileOnly clients/healthFactorCheck.ts",
         "encrypt": "npx ts-node --transpileOnly encryption.ts encrypt",
         "decrypt": "npx ts-node --transpileOnly encryption.ts decrypt"
     },
