@@ -134,10 +134,6 @@ class WebhookEngine {
                 );
 
                 if (uniqueAddresses.length > 0) {
-                    common.log(
-                        "unique addresses: " + uniqueAddresses.join(",")
-                    );
-
                     this.uniqueAddresses = _.uniq(
                         _.union(this.uniqueAddresses, uniqueAddresses)
                     );
@@ -147,14 +143,9 @@ class WebhookEngine {
                     );
 
                     if (this.uniqueAddresses.length > this.addAddressTreshold) {
-                        common.log(
-                            "adding unique addresses: " +
-                                this.uniqueAddresses.join(",")
-                        );
-
                         await fileUtilities.appendToTextFile(
                             common.addressesFilePath,
-                            this.uniqueAddresses.join(",")
+                            this.uniqueAddresses.join("\n") + "\n"
                         );
                         this.uniqueAddresses = [];
                     }
