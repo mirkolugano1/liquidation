@@ -1,5 +1,7 @@
 {
     "devDependencies": {
+        "@azure/identity": "^4.7.0",
+        "@azure/keyvault-secrets": "^4.9.0",
         "@azure/storage-blob": "^12.26.0",
         "applicationinsights": "^3.5.0",
         "dotenv": "^16.4.7",
@@ -7,6 +9,7 @@
         "express": "^4.21.2",
         "fs": "^0.0.1-security",
         "lodash": "^4.17.21",
+        "mssql": "^11.0.1",
         "npx": "^10.2.2",
         "ts-node": "^10.9.2",
         "typescript": "^5.7.3",

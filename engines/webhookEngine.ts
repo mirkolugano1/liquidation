@@ -1,16 +1,18 @@
 import common from "../common/common";
 import _ from "lodash";
-import { CloudStorageManager } from "../common/cloudStorageManager";
 import fileUtilities from "../common/fileUtilities";
+import sqlManager from "../data/sqlManager";
 const { ethers } = require("ethers");
 
 class WebhookEngine {
     requiredEnvironmentVariables: string[] = [
+        "SQLSERVER",
+        "SQLUSER",
+        "SQLPASSWORDENCRYPTED",
         "ENCRYPTIONPWD",
         "ALCHEMYKEYENCRYPTED",
         "LIQUIDATIONENVIRONMENT",
         "APPLICATIONINSIGHTS_CONNECTION_STRING",
-        "CLOUDSTORAGEACCESSKEYENCRYPTED",
     ];
 
     addresses: string[] = [];
@@ -27,7 +29,6 @@ class WebhookEngine {
         "event Deposit(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referral)",
     ];
 
-    private cloudStorageManager = new CloudStorageManager();
     private static instance: WebhookEngine;
     private constructor() {}
 
@@ -40,20 +41,22 @@ class WebhookEngine {
 
     //#region Alchemy Webhook
 
+    getVariable(key: string) {
+        return JSON.stringify((this as any)[key]);
+    }
+
     async initializeProcessAaveEvent() {
-        common.checkRequiredEnvironmentVariables(
+        await common.checkRequiredEnvironmentVariables(
             this.requiredEnvironmentVariables
         );
 
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
-        if (!(await fileUtilities.fileExists(common.addressesFilePath)))
-            await fileUtilities.ensureFileExists(common.addressesFilePath);
-        else {
-            let addressesText = await this.cloudStorageManager.readBlob();
-            this.addresses = addressesText?.split("\n") || [];
-        }
+        this.addresses = _.map(
+            await sqlManager.execQuery("SELECT * FROM addresses"),
+            "address"
+        );
     }
 
     async processAaveEvent(req: any, res: any) {
@@ -67,7 +70,6 @@ class WebhookEngine {
             let eventHash = topics[0];
             let addressesToAdd: string[] = [];
             let from = log.transaction?.from?.address;
-            if (from) addressesToAdd.push(from);
 
             switch (eventHash) {
                 //Deposit
@@ -115,6 +117,10 @@ class WebhookEngine {
             }
 
             if (addressesToAdd.length > 0) {
+                //the "from" address is the one that initiated the transaction
+                //and should be added only if it was part of one of the relevant events
+                if (from) addressesToAdd.push(from);
+
                 //normalize addresses
                 let normalizedAddressesToAdd = _.map(
                     addressesToAdd,
@@ -143,10 +149,14 @@ class WebhookEngine {
                     );
 
                     if (this.uniqueAddresses.length > this.addAddressTreshold) {
-                        await fileUtilities.appendToTextFile(
-                            common.addressesFilePath,
-                            this.uniqueAddresses.join("\n") + "\n"
+                        let addressesListSql = this.uniqueAddresses.map(
+                            (address) => `('${address}', 'Ethereum mainnet')`
                         );
+                        let query = `INSERT INTO addresses (address, chain) VALUES ${addressesListSql.join(
+                            ","
+                        )}`;
+                        await sqlManager.execQuery(query);
+
                         this.uniqueAddresses = [];
                     }
                 }

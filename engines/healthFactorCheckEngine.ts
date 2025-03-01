@@ -3,9 +3,14 @@ import _ from "lodash";
 import encryption from "../common/encryption";
 import { CloudStorageManager } from "../common/cloudStorageManager";
 import fileUtilities from "../common/fileUtilities";
-const { ethers } = require("ethers");
+const { ethers, formatUnits } = require("ethers");
 
 class HealthFactorCheckEngine {
+    //#region TODO remove or change them when ready to go live
+    liquidationEnabled: boolean = false;
+    forceLiquidationWorkflow: boolean = true;
+    //#endregion
+
     requiredEnvironmentVariables: string[] = [
         "ENCRYPTIONPWD",
         "PRIVATEKEYENCRYPTED",
@@ -28,539 +33,250 @@ class HealthFactorCheckEngine {
 
     //#region healthFactor check loop
 
+    signer: any;
+    testContract: any;
     lendingPoolContract: any;
+    lendingPoolAddress: string = "";
 
     async initializeHealthFactorCheckLoop() {
-        common.checkRequiredEnvironmentVariables(
+        await common.checkRequiredEnvironmentVariables(
             this.requiredEnvironmentVariables
         );
 
-        //Load required environment variables
-        const _privateKey = process.env.PRIVATEKEYENCRYPTED; //Metamask
-        const _alchemyKey = process.env.ALCHEMYKEYENCRYPTED;
-        const _encryptionPwd = process.env.ENCRYPTIONPWD!;
+        const _privateKey = await common.getAppSetting("PRIVATEKEYENCRYPTED");
+        const _alchemyKey = await common.getAppSetting("ALCHEMYKEYENCRYPTED");
+        const alchemyKey = await encryption.decrypt(_alchemyKey || "");
         //load for required environment variables
 
         //Setup & variables definition
-        const ethers = require("ethers");
-        const alchemyUrl = `https://eth-mainnet.g.alchemy.com/v2/${_alchemyKey}`;
-        const privateKey = await encryption.decrypt(
-            _privateKey || "",
-            _encryptionPwd
+        const alchemyNetwork = common.isProd ? "mainnet" : "sepolia";
+        const alchemyUrl = `https://eth-${alchemyNetwork}.g.alchemy.com/v2/${alchemyKey}`;
+        const privateKey = await encryption.decrypt(_privateKey || "");
+        this.lendingPoolAddress = common.isProd
+            ? "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
+            : "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9";
+
+        const lendingPoolAbi = JSON.parse(
+            await fileUtilities.readFromTextFile(
+                "/home/data/lendingPoolAbi.json"
+            )
         );
-        const lendingPoolAddress = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2";
-        const lendingPoolAbi = [
-            {
-                constant: false,
-                inputs: [],
-                name: "renounceOwnership",
-                outputs: [],
-                payable: false,
-                stateMutability: "nonpayable",
-                type: "function",
-                signature: "0x715018a6",
-            },
-            {
-                constant: true,
-                inputs: [],
-                name: "owner",
-                outputs: [
-                    {
-                        name: "",
-                        type: "address",
-                    },
-                ],
-                payable: false,
-                stateMutability: "view",
-                type: "function",
-                signature: "0x8da5cb5b",
-            },
-            {
-                constant: true,
-                inputs: [],
-                name: "isOwner",
-                outputs: [
-                    {
-                        name: "",
-                        type: "bool",
-                    },
-                ],
-                payable: false,
-                stateMutability: "view",
-                type: "function",
-                signature: "0x8f32d59b",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "newOwner",
-                        type: "address",
-                    },
-                ],
-                name: "transferOwnership",
-                outputs: [],
-                payable: false,
-                stateMutability: "nonpayable",
-                type: "function",
-                signature: "0xf2fde38b",
-            },
-            {
-                inputs: [
-                    {
-                        name: "_addressesProvider",
-                        type: "address",
-                    },
-                ],
-                payable: false,
-                stateMutability: "nonpayable",
-                type: "constructor",
-                signature: "constructor",
-            },
-            {
-                anonymous: false,
-                inputs: [
-                    {
-                        indexed: false,
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_user",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                ],
-                name: "Deposit",
-                type: "event",
-                signature:
-                    "0x5548c837ab068cf56a2c2479df0882a4922fd203edb7517321831d95078c5f62",
-            },
-            {
-                anonymous: false,
-                inputs: [
-                    {
-                        indexed: false,
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_user",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                ],
-                name: "Withdraw",
-                type: "event",
-                signature:
-                    "0x9b1bfa7fa9ee420a16e124f794c35ac9f90472acc99140eb2f6447c714cad8eb",
-            },
-            {
-                anonymous: false,
-                inputs: [
-                    {
-                        indexed: false,
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_user",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                ],
-                name: "Borrow",
-                type: "event",
-                signature:
-                    "0x312a5e5e1079f5dda4e95dbbd0b908b291fd5b992ef22073643ab691572c5b52",
-            },
-            {
-                anonymous: false,
-                inputs: [
-                    {
-                        indexed: false,
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_user",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                ],
-                name: "Repay",
-                type: "event",
-                signature:
-                    "0x05f2eeda0e08e4b437f487c8d7d29b14537d15e3488170dc3de5dbdf8dac4684",
-            },
-            {
-                anonymous: false,
-                inputs: [
-                    {
-                        indexed: false,
-                        name: "_collateral",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_user",
-                        type: "address",
-                    },
-                    {
-                        indexed: false,
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                    {
-                        indexed: false,
-                        name: "_reserve",
-                        type: "address",
-                    },
-                ],
-                name: "CollateralCall",
-                type: "event",
-                signature:
-                    "0xfe2cb6d8c4484341201d1f21661e93f47e7c400bfb617613c9c56425d849c9b1",
-            },
-            {
-                anonymous: false,
-                inputs: [
-                    {
-                        indexed: true,
-                        name: "previousOwner",
-                        type: "address",
-                    },
-                    {
-                        indexed: true,
-                        name: "newOwner",
-                        type: "address",
-                    },
-                ],
-                name: "OwnershipTransferred",
-                type: "event",
-                signature:
-                    "0x8be0079c531659141344cd1fd0a4f28419497f9722a3daafe3b4186f6b6457e0",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                ],
-                name: "deposit",
-                outputs: [],
-                payable: true,
-                stateMutability: "payable",
-                type: "function",
-                signature: "0x47e7ef24",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                ],
-                name: "withdraw",
-                outputs: [],
-                payable: false,
-                stateMutability: "nonpayable",
-                type: "function",
-                signature: "0xf3fef3a3",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                    {
-                        name: "_interestRateMode",
-                        type: "uint256",
-                    },
-                ],
-                name: "borrow",
-                outputs: [],
-                payable: false,
-                stateMutability: "nonpayable",
-                type: "function",
-                signature: "0xc1bce0b7",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        name: "_amount",
-                        type: "uint256",
-                    },
-                    {
-                        name: "_onBehalfOf",
-                        type: "address",
-                    },
-                ],
-                name: "repay",
-                outputs: [],
-                payable: true,
-                stateMutability: "payable",
-                type: "function",
-                signature: "0x5ceae9c4",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                ],
-                name: "swapBorrowRateMode",
-                outputs: [],
-                payable: false,
-                stateMutability: "nonpayable",
-                type: "function",
-                signature: "0x48ca1300",
-            },
-            {
-                constant: false,
-                inputs: [
-                    {
-                        name: "_collateral",
-                        type: "address",
-                    },
-                    {
-                        name: "_user",
-                        type: "address",
-                    },
-                    {
-                        name: "_purchaseAmount",
-                        type: "uint256",
-                    },
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                ],
-                name: "collateralCall",
-                outputs: [],
-                payable: true,
-                stateMutability: "payable",
-                type: "function",
-                signature: "0x3c7093b5",
-            },
-            {
-                constant: true,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                ],
-                name: "getReserveData",
-                outputs: [
-                    {
-                        name: "totalLiquidity",
-                        type: "uint256",
-                    },
-                    {
-                        name: "availableLiquidity",
-                        type: "uint256",
-                    },
-                    {
-                        name: "totalBorrowsFixed",
-                        type: "uint256",
-                    },
-                    {
-                        name: "totalBorrowsVariable",
-                        type: "uint256",
-                    },
-                    {
-                        name: "liquidityRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "variableBorrowRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "fixedBorrowRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "averageFixedBorrowRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "utilizationRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "liquidityIndex",
-                        type: "uint256",
-                    },
-                    {
-                        name: "variableBorrowIndex",
-                        type: "uint256",
-                    },
-                ],
-                payable: false,
-                stateMutability: "view",
-                type: "function",
-                signature: "0x35ea6a75",
-            },
-            {
-                constant: true,
-                inputs: [
-                    {
-                        name: "_user",
-                        type: "address",
-                    },
-                ],
-                name: "getUserGlobalData",
-                outputs: [
-                    {
-                        name: "totalLiquidityETH",
-                        type: "uint256",
-                    },
-                    {
-                        name: "totalBorrowsETH",
-                        type: "uint256",
-                    },
-                    {
-                        name: "currentLiquidationRatio",
-                        type: "uint256",
-                    },
-                    {
-                        name: "ltv",
-                        type: "uint256",
-                    },
-                    {
-                        name: "isBelowLiquidationThreshold",
-                        type: "bool",
-                    },
-                ],
-                payable: false,
-                stateMutability: "view",
-                type: "function",
-                signature: "0xe1fa02ba",
-            },
-            {
-                constant: true,
-                inputs: [
-                    {
-                        name: "_reserve",
-                        type: "address",
-                    },
-                    {
-                        name: "_user",
-                        type: "address",
-                    },
-                ],
-                name: "getUserReserveData",
-                outputs: [
-                    {
-                        name: "currentLiquidityBalance",
-                        type: "uint256",
-                    },
-                    {
-                        name: "currentBorrowBalance",
-                        type: "uint256",
-                    },
-                    {
-                        name: "principalLiquidityBalance",
-                        type: "uint256",
-                    },
-                    {
-                        name: "principalBorrowBalance",
-                        type: "uint256",
-                    },
-                    {
-                        name: "borrowRateMode",
-                        type: "uint256",
-                    },
-                    {
-                        name: "borrowRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "liquidityRate",
-                        type: "uint256",
-                    },
-                    {
-                        name: "originationFee",
-                        type: "uint256",
-                    },
-                    {
-                        name: "liquidityIndex",
-                        type: "uint256",
-                    },
-                    {
-                        name: "variableBorrowIndex",
-                        type: "uint256",
-                    },
-                ],
-                payable: false,
-                stateMutability: "view",
-                type: "function",
-                signature: "0x28dd2d01",
-            },
-        ];
         //end setup and variables definition
 
         const provider = new ethers.JsonRpcProvider(alchemyUrl);
 
         // Create a signer from private key
-        const signer = new ethers.Wallet(privateKey, provider);
+        this.signer = new ethers.Wallet(privateKey, provider);
+
+        const contractAbi = [
+            "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
+            "function getUserEMode(address user) external view returns (uint256)",
+            "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
+            "function getReservesList() external view returns (address[] memory)",
+            "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
+            "function getUserConfiguration(address user) external view returns (uint256 configuration)",
+        ];
 
         // Create a contract instance for LendingPool
         this.lendingPoolContract = new ethers.Contract(
-            lendingPoolAddress,
-            lendingPoolAbi,
-            signer
+            this.lendingPoolAddress,
+            contractAbi, //lendingPoolAbi,
+            this.signer
         );
 
-        await fileUtilities.ensureFileExists(common.addressesFilePath);
+        //await fileUtilities.ensureFileExists(common.addressesFilePath);
+    }
 
-        common.log("HFCE: init complete");
+    balanceOfAbi = ["function balanceOf(address) view returns (uint256)"];
+
+    async getAddressesToCheckHealthFactor() {
+        const addressesText = await fileUtilities.readFromTextFile(
+            "./data/addresses_mainnet.txt"
+        );
+        let addresses = addressesText.split("\n");
+        if (addresses.length == 0) throw new Error("No addresses found");
+
+        return addresses;
+    }
+
+    reserves: any = {};
+
+    async test() {
+        // Retrieve the list of all reserve addresses
+        const reservesList = await this.lendingPoolContract.getReservesList();
+
+        //fetch data for each reserve beforehand
+        const promises = reservesList.map((reserve: any) =>
+            this.lendingPoolContract.getReserveData(reserve.address)
+        );
+        const results = await Promise.all(promises);
+        _.each(reservesList, (reserve: any, index: number) => {
+            this.reserves[reserve.address] = results[index];
+        });
+
+        //get addresses for which to check health factor
+        //presently loaded from txt file. Evtl TODO load from 3rd party monitoring tool?
+        let addresses = await this.getAddressesToCheckHealthFactor();
+
+        //addresses = [addresses[18]];
+
+        //check all addresses
+        for (let address of addresses) {
+            try {
+                let userAccountData =
+                    await this.lendingPoolContract.getUserAccountData(address);
+
+                const healthFactorStr = formatUnits(userAccountData[5], 18);
+                const healthFactor = parseFloat(healthFactorStr);
+                if (healthFactor <= 1 || this.forceLiquidationWorkflow) {
+                    common.log(
+                        `User ${address} has a health factor below threshold: ${healthFactor}`
+                    );
+
+                    //get the list of assets the user has (collateral and debt)
+                    let userAssets =
+                        await this.getUserAssetsFromConfigurationBinary(
+                            address,
+                            reservesList
+                        );
+
+                    //cannot liquidate a user who has no collateral or no debt
+                    if (
+                        userAssets.collateralAssets.length == 0 ||
+                        userAssets.debtAssets.length == 0
+                    )
+                        continue;
+
+                    //decide which asset pair to liquidate
+                    let assetsToLiquidate: any =
+                        await this.decideWhichAssetPairToLiquidate(
+                            address,
+                            userAssets
+                        );
+
+                    //Liquidation docs: https://aave.com/docs/developers/smart-contracts/pool#liquidationcall
+                    /*
+                    TODO?
+                    Liquidators must approve() the Pool contract to use debtToCover of the underlying ERC20 of the asset used for the liquidation.
+                    */
+
+                    // Liquidate the user's debt
+                    if (this.liquidationEnabled) {
+                        //TODO call smart contract flashloan + liquidation procedure
+                        /*
+                        await this.approveDebtToCover(
+                            assetsToLiquidate,
+                            userAccountData
+                        );
+
+                        common.log("liquidating address: " + address);
+                        await this.lendingPoolContract.liquidationCall(
+                            assetsToLiquidate.collateralAsset, //collateral asset
+                            assetsToLiquidate.debtAsset, //debt asset
+                            address, //user address (borrwer)
+                            -1, //liquidate max possible debt (50% of collateral)
+                            true //receive aTokens
+                        );
+                        */
+                    } else {
+                        common.log("liquidation disabled");
+                    }
+                }
+            } catch (error) {
+                console.error("Error:", error);
+            }
+        }
+    }
+
+    async approveDebtToCover(assets: any, userAccountData: any) {
+        let reserveData = this.reserves[assets.collateralAsset];
+        let aTokenAddress = reserveData.aTokenAddress;
+
+        const aTokenContract = new ethers.Contract(
+            aTokenAddress,
+            ["function approve(address spender, uint256 amount)"],
+            this.signer
+        );
+
+        // Approve the user's total debt
+        const tx = await aTokenContract.approve(
+            this.lendingPoolAddress,
+            userAccountData[1] //totalDebtBase TODO: need to convert this to collateral aToken equivalent?
+        );
+        await tx.wait();
+    }
+
+    /**
+     *   Example input: 1000000000000000000001001000000000110000
+     *   Explanation of userConfiguration
+     *   https://aave.com/docs/developers/smart-contracts/pool#view-methods-getuserconfiguration
+     */
+    async getUserAssetsFromConfigurationBinary(
+        address: string,
+        reservesList: string[]
+    ) {
+        let userConfiguration =
+            await this.lendingPoolContract.getUserConfiguration(address);
+        let userConfigurationBinary = common.intToBinary(userConfiguration);
+
+        let userAssets: any = {
+            collateralAssets: [],
+            debtAssets: [],
+        };
+
+        let i = userConfigurationBinary.length - 1;
+        for (let reserve of reservesList) {
+            if (userConfigurationBinary[i] == "1") {
+                userAssets.debtAssets.push(reserve);
+            }
+            if (i > 0 && userConfigurationBinary[i - 1] == "1") {
+                userAssets.collateralAssets.push(reserve);
+            }
+            i = i - 2;
+        }
+
+        return userAssets;
+    }
+
+    async decideWhichAssetPairToLiquidate(address: any, assets: any) {
+        //TODO how to decide which asset pair to liquidate?
+        /*
+        // Iterate through each reserve and get user data
+        for (const reserve of reservesList) {
+            const reserveData = await this.lendingPoolContract.getReserveData(
+                reserve
+            );
+
+            // Check user's balances for the collateral and debt tokens
+            const aTokenContract = new ethers.Contract(
+                reserveData.aTokenAddress,
+                this.balanceOfAbi,
+                this.signer
+            );
+            const stableDebtTokenContract = new ethers.Contract(
+                reserveData.stableDebtTokenAddress,
+                this.balanceOfAbi,
+                this.signer
+            );
+            const variableDebtTokenContract = new ethers.Contract(
+                reserveData.variableDebtTokenAddress,
+                this.balanceOfAbi,
+                this.signer
+            );
+
+            const aTokenBalance = await aTokenContract.balanceOf(address);
+            const stableDebtBalance = await stableDebtTokenContract.balanceOf(
+                address
+            );
+            const variableDebtBalance =
+                await variableDebtTokenContract.balanceOf(address);
+
+            return {
+                collateralAsset: "",
+                debtAsset: "",
+            };
+        }
+            */
     }
 
     async performHealthFactorCheckLoop() {

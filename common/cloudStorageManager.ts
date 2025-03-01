@@ -1,3 +1,4 @@
+import common from "./common";
 import encryption from "./encryption";
 
 const {
@@ -11,10 +12,10 @@ export class CloudStorageManager {
     private accountName: string = "liquidationsa";
 
     async initializeBlobClient(containerName: string, blobName: string) {
-        let accountKey = await encryption.decrypt(
-            process.env.CLOUDSTORAGEKEYENCRYPTED!,
-            process.env.ENCRYPTIONPWD!
+        const cloudStorageKeyEncrypted = await common.getAppSetting(
+            "CLOUDSTORAGEKEYENCRYPTED"
         );
+        const accountKey = await encryption.decrypt(cloudStorageKeyEncrypted);
 
         // Create the BlobServiceClient object
         const blobServiceClient = new BlobServiceClient(

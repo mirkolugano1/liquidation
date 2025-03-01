@@ -1,18 +1,46 @@
 import crypto from "crypto";
+import common from "./common";
+
+const { SecretClient } = require("@azure/keyvault-secrets");
+const { DefaultAzureCredential } = require("@azure/identity");
 
 class Encryption {
+    private static keyVaultUrl = "https://liquidation.vault.azure.net/";
+    private static encryptionPassword: string = "";
     private static instance: Encryption;
+    private static credential: any;
+    private static secretClient: any;
     private constructor() {}
 
     public static getInstance(): Encryption {
         if (!Encryption.instance) {
             Encryption.instance = new Encryption();
+            Encryption.credential = new DefaultAzureCredential();
+            Encryption.secretClient = new SecretClient(
+                Encryption.keyVaultUrl,
+                Encryption.credential
+            );
         }
         return Encryption.instance;
     }
 
-    async encrypt(stringToEncrypt: string, password: string) {
-        const key = crypto.createHash("sha256").update(password).digest();
+    async ensureEncryptionPassword() {
+        if (!Encryption.encryptionPassword) {
+            Encryption.encryptionPassword = await common.getAppSetting(
+                "ENCRYPTIONPWD"
+            );
+            if (!Encryption.encryptionPassword) {
+                throw new Error("Encryption password not found in Key Vault");
+            }
+        }
+    }
+
+    async encrypt(stringToEncrypt: string) {
+        await this.ensureEncryptionPassword();
+        const key = crypto
+            .createHash("sha256")
+            .update(Encryption.encryptionPassword)
+            .digest();
         const iv = crypto.randomBytes(16); // Initialization Vector for AES-256-CBC
         const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
         const encrypted = Buffer.concat([
@@ -23,11 +51,12 @@ class Encryption {
         return encrypted.toString("hex");
     }
 
-    async decrypt(
-        encryptedString: string,
-        password: string = process.env.ENCRYPTION_PWD!
-    ) {
-        const key = crypto.createHash("sha256").update(password).digest();
+    async decrypt(encryptedString: string) {
+        await this.ensureEncryptionPassword();
+        const key = crypto
+            .createHash("sha256")
+            .update(Encryption.encryptionPassword)
+            .digest();
 
         const iv = Buffer.from(encryptedString.slice(0, 32), "hex"); // Adjust slice length for 32-byte key
         const encryptedData = Buffer.from(encryptedString.slice(32), "hex");
@@ -37,6 +66,16 @@ class Encryption {
             decipher.final(),
         ]);
         return decrypted.toString("utf8");
+    }
+
+    async getSecretFromKeyVault(key: string) {
+        try {
+            const secret = await Encryption.secretClient.getSecret(key);
+            return secret?.value; // Return the secret value if needed
+        } catch (error) {
+            console.error("Error retrieving secret:", error);
+            return null; // Return null or handle the error appropriately
+        }
     }
 }
 

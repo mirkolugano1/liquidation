@@ -1,5 +1,6 @@
 import _ from "lodash";
 import fileUtilities from "./fileUtilities";
+import encryption from "./encryption";
 
 require("@azure/opentelemetry-instrumentation-azure-sdk");
 require("@azure/core-tracing");
@@ -12,17 +13,44 @@ class Common {
     private constructor() {
         this.isProd =
             process.env.LIQUIDATIONENVIRONMENT?.toLowerCase() == "prod";
+
+        this.isProd = true;
+        /*
         if (this.isProd) {
             const appInsights = require("applicationinsights");
 
             // Replace with your Application Insights Instrumentation Key
             appInsights
-                .setup(process.env.APPLICATIONINSIGHTS_CONNECTION_STRING)
+                .setup(process.env.APPLICATIONINSIGHTSINSTRUMENTATIONKEY)
                 .setAutoCollectExceptions(true)
                 .start();
 
             this.appInsights = appInsights.defaultClient;
         }
+        */
+    }
+
+    keyVaultEntries: string[] = [
+        "SQLPASSWORDENCRYPTED",
+        "ENCRYPTIONPWD",
+        "ALCHEMYKEYENCRYPTED",
+        "PRIVATEKEYENCRYPTED",
+        "CLOUDSTORAGEKEYENCRYPTED",
+    ];
+
+    public async getAppSetting(key: string) {
+        if (_.includes(this.keyVaultEntries, key)) {
+            return await encryption.getSecretFromKeyVault(key);
+        }
+
+        if (!process.env.hasOwnProperty(key)) {
+            throw new Error("Missing required environment variable " + key);
+        }
+        return process.env[key];
+    }
+
+    public intToBinary(integerValue: any) {
+        return integerValue.toString(2);
     }
 
     public static getInstance(): Common {
@@ -32,9 +60,11 @@ class Common {
         return Common.instance;
     }
 
-    checkRequiredEnvironmentVariables(requiredEnvironmentVariables: string[]) {
+    async checkRequiredEnvironmentVariables(
+        requiredEnvironmentVariables: string[]
+    ) {
         for (let key of requiredEnvironmentVariables) {
-            if (!process.env.hasOwnProperty(key) || !_.trim(process.env[key])) {
+            if (!(await this.getAppSetting(key))) {
                 throw new Error("Missing required environment variable " + key);
             }
         }
@@ -42,6 +72,7 @@ class Common {
 
     async log(str: string, severity: string = "Information") {
         console.log(str);
+        /*
         if (this.isProd) {
             let trackType: string;
             switch (severity) {
@@ -57,13 +88,13 @@ class Common {
                         "Common.log: Wrong severity type: " + severity
                     );
             }
-            const appInsightsSeverity =
-                this.appInsights.Contracts.SeverityLevel[severity];
+            const appInsightsSeverity = severity;
             this.appInsights.trackTrace({
                 message: str,
                 severity: appInsightsSeverity,
             });
         }
+            */
     }
 }
 
