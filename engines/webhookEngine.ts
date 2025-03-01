@@ -17,7 +17,7 @@ class WebhookEngine {
 
     addresses: string[] = [];
     uniqueAddresses: string[] = [];
-    addAddressTreshold = 0;
+    addAddressTreshold = 10;
 
     ifaceBorrow: any;
     borrowEventAbi: string[] = [
