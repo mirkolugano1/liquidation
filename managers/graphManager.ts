@@ -11,11 +11,7 @@ class GraphManager {
 
     async execQuery(query: string) {
         if (!this.apiKey) await this.initialize();
-        try {
-            return await request(this.endpoint, query);
-        } catch (error) {
-            console.error("Error fetching user reserves:", error);
-        }
+        return await request(this.endpoint, query);
     }
 
     public static getInstance(): GraphManager {

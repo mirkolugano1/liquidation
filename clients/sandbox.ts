@@ -34,7 +34,19 @@ async function main() {
     console.log(ur);
     */
     //await healthFactorCheckEngine.performHealthFactorCheckPeriodic();
-    console.log(process.argv);
+
+    let uniqueAddressesHF: any = {};
+    let uniqueAddresses = [
+        "0xacf3e66f755bafb3e9fab16907c666ae87f1561f",
+        "0x5ffcea48cc2b586c421cc5df6acbfea5b54fa49a",
+    ];
+
+    for (let address of uniqueAddresses) {
+        let hf = await healthFactorCheckEngine.getUserHealthFactor(address);
+        uniqueAddressesHF[address] = hf;
+    }
+
+    console.log(uniqueAddressesHF);
 }
 
 main()
@@ -42,4 +54,5 @@ main()
     .catch((error) => {
         console.error("Error:", error);
         process.exit(1);
-    });
+    })
+    .finally(() => process.exit(0));

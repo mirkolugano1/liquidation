@@ -150,14 +150,12 @@ class WebhookEngine {
                     );
 
                     if (this.uniqueAddresses.length > this.addAddressTreshold) {
-                        forEach(
-                            this.uniqueAddresses,
-                            async (ua) =>
-                                (this.uniqueAddressesHF[ua] =
-                                    await healthFactorCheckEngine.getUserHealthFactor(
-                                        ua
-                                    ))
-                        );
+                        for (const address of this.uniqueAddresses) {
+                            this.uniqueAddressesHF[address] =
+                                await healthFactorCheckEngine.getUserHealthFactor(
+                                    address
+                                );
+                        }
 
                         let addressesListSql = this.uniqueAddresses.map(
                             (address) =>

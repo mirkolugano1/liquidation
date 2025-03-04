@@ -41,10 +41,8 @@ class SqlManager {
             await sql.connect(SqlManager.config);
             const result = await sql.query(query);
             return result?.recordset;
-        } catch (err) {
-            console.error("SQL error:", err);
         } finally {
-            sql.close();
+            await sql.close();
         }
     }
 }

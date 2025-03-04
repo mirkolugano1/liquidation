@@ -13,13 +13,6 @@ class HealthFactorCheckEngine {
     forceLiquidationWorkflow: boolean = true;
     //#endregion
 
-    requiredEnvironmentVariables: string[] = [
-        "ENCRYPTIONPWD",
-        "PRIVATEKEYENCRYPTED",
-        "LIQUIDATIONENVIRONMENT",
-        "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    ];
-
     cloudStorageManager: CloudStorageManager = new CloudStorageManager();
     addresses: string[] = [];
 
@@ -43,52 +36,52 @@ class HealthFactorCheckEngine {
     async initializeHealthFactorEngine() {
         if (this.lendingPoolContract) return;
 
-        await common.checkRequiredEnvironmentVariables(
-            this.requiredEnvironmentVariables
-        );
+        try {
+            const _privateKey = await encryption.getSecretFromKeyVault(
+                "PRIVATEKEYENCRYPTED"
+            );
+            const _alchemyKey = await encryption.getSecretFromKeyVault(
+                "ALCHEMYKEYENCRYPTED"
+            );
+            const alchemyKey = await encryption.decrypt(_alchemyKey || "");
+            //load for required environment variables
 
-        const _privateKey = await encryption.getSecretFromKeyVault(
-            "PRIVATEKEYENCRYPTED"
-        );
-        const _alchemyKey = await encryption.getSecretFromKeyVault(
-            "ALCHEMYKEYENCRYPTED"
-        );
-        const alchemyKey = await encryption.decrypt(_alchemyKey || "");
-        //load for required environment variables
+            //Setup & variables definition
+            const alchemyNetwork = common.isProd ? "mainnet" : "sepolia";
+            const alchemyUrl = `https://eth-${alchemyNetwork}.g.alchemy.com/v2/${alchemyKey}`;
+            const privateKey = await encryption.decrypt(_privateKey || "");
+            this.lendingPoolAddress = common.isProd
+                ? "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
+                : "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9";
 
-        //Setup & variables definition
-        const alchemyNetwork = common.isProd ? "mainnet" : "sepolia";
-        const alchemyUrl = `https://eth-${alchemyNetwork}.g.alchemy.com/v2/${alchemyKey}`;
-        const privateKey = await encryption.decrypt(_privateKey || "");
-        this.lendingPoolAddress = common.isProd
-            ? "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
-            : "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9";
+            const lendingPoolAbi = JSON.parse(
+                await fileUtilities.readFromTextFile("json/lendingPoolAbi.json")
+            );
+            //end setup and variables definition
 
-        const lendingPoolAbi = JSON.parse(
-            await fileUtilities.readFromTextFile("json/lendingPoolAbi.json")
-        );
-        //end setup and variables definition
+            const provider = new ethers.JsonRpcProvider(alchemyUrl);
 
-        const provider = new ethers.JsonRpcProvider(alchemyUrl);
+            // Create a signer from private key
+            this.signer = new ethers.Wallet(privateKey, provider);
 
-        // Create a signer from private key
-        this.signer = new ethers.Wallet(privateKey, provider);
+            const contractAbi = [
+                "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
+                "function getUserEMode(address user) external view returns (uint256)",
+                "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
+                "function getReservesList() external view returns (address[] memory)",
+                "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
+                "function getUserConfiguration(address user) external view returns (uint256 configuration)",
+            ];
 
-        const contractAbi = [
-            "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
-            "function getUserEMode(address user) external view returns (uint256)",
-            "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
-            "function getReservesList() external view returns (address[] memory)",
-            "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
-            "function getUserConfiguration(address user) external view returns (uint256 configuration)",
-        ];
-
-        // Create a contract instance for LendingPool
-        this.lendingPoolContract = new ethers.Contract(
-            this.lendingPoolAddress,
-            contractAbi, //lendingPoolAbi,
-            this.signer
-        );
+            // Create a contract instance for LendingPool
+            this.lendingPoolContract = new ethers.Contract(
+                this.lendingPoolAddress,
+                contractAbi, //lendingPoolAbi,
+                this.signer
+            );
+        } catch (e) {
+            console.log(e);
+        }
     }
 
     balanceOfAbi = ["function balanceOf(address) view returns (uint256)"];
