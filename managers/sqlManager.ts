@@ -38,12 +38,13 @@ class SqlManager {
 
     async execQuery(query: string) {
         if (!SqlManager.config) await this.initialize();
+        let pool;
         try {
-            await sql.connect(SqlManager.config);
+            pool = await sql.connect(SqlManager.config);
             const result = await sql.query(query);
             return result?.recordset;
         } finally {
-            await sql.close();
+            if (pool) await pool.close();
         }
     }
 }

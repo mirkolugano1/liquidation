@@ -11,12 +11,12 @@ import dotenv from "dotenv";
 dotenv.config();
 
 async function main() {
-    /*
     const dbAddressesArr = await sqlManager.execQuery(
         "SELECT TOP 2 * FROM addresses"
     );
     const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
-
+    console.log(dbAddressesArr[0]);
+    /*
     let addresses: string[] = [];
 
     for (let i = 30; i < _addresses.length; i++) {
