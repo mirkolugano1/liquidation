@@ -1,7 +1,7 @@
 import common from "../common/common";
-import _ from "lodash";
-import fileUtilities from "../common/fileUtilities";
-import sqlManager from "../data/sqlManager";
+import _, { forEach } from "lodash";
+import sqlManager from "../managers/sqlManager";
+import healthFactorCheckEngine from "./healthFactorCheckEngine";
 const { ethers } = require("ethers");
 
 class WebhookEngine {
@@ -18,6 +18,7 @@ class WebhookEngine {
     addresses: string[] = [];
     uniqueAddresses: string[] = [];
     addAddressTreshold = 10;
+    uniqueAddressesHF: any = {};
 
     ifaceBorrow: any;
     borrowEventAbi: string[] = [
@@ -132,7 +133,7 @@ class WebhookEngine {
                     _.uniq(normalizedAddressesToAdd),
                     (normalizedAddress) => {
                         return (
-                            !normalizedAddress ||
+                            _.isEmpty(normalizedAddress) ||
                             _.includes(this.addresses, normalizedAddress) ||
                             _.includes(this.uniqueAddresses, normalizedAddress)
                         );
@@ -149,8 +150,18 @@ class WebhookEngine {
                     );
 
                     if (this.uniqueAddresses.length > this.addAddressTreshold) {
+                        forEach(
+                            this.uniqueAddresses,
+                            async (ua) =>
+                                (this.uniqueAddressesHF[ua] =
+                                    await healthFactorCheckEngine.getUserHealthFactor(
+                                        ua
+                                    ))
+                        );
+
                         let addressesListSql = this.uniqueAddresses.map(
-                            (address) => `('${address}', 'Ethereum mainnet')`
+                            (address) =>
+                                `('${address}', 'Ethereum V3 Core', ${this.uniqueAddressesHF[address]})`
                         );
                         let query = `INSERT INTO addresses (address, chain) VALUES ${addressesListSql.join(
                             ","

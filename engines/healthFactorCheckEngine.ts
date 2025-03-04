@@ -1,8 +1,10 @@
 import common from "../common/common";
-import _ from "lodash";
+import _, { forEach } from "lodash";
 import encryption from "../common/encryption";
-import { CloudStorageManager } from "../common/cloudStorageManager";
+import { CloudStorageManager } from "../managers/cloudStorageManager";
+import graphManager from "../managers/graphManager";
 import fileUtilities from "../common/fileUtilities";
+import sqlManager from "../managers/sqlManager";
 const { ethers, formatUnits } = require("ethers");
 
 class HealthFactorCheckEngine {
@@ -38,13 +40,19 @@ class HealthFactorCheckEngine {
     lendingPoolContract: any;
     lendingPoolAddress: string = "";
 
-    async initializeHealthFactorCheckLoop() {
+    async initializeHealthFactorEngine() {
+        if (this.lendingPoolContract) return;
+
         await common.checkRequiredEnvironmentVariables(
             this.requiredEnvironmentVariables
         );
 
-        const _privateKey = await common.getAppSetting("PRIVATEKEYENCRYPTED");
-        const _alchemyKey = await common.getAppSetting("ALCHEMYKEYENCRYPTED");
+        const _privateKey = await encryption.getSecretFromKeyVault(
+            "PRIVATEKEYENCRYPTED"
+        );
+        const _alchemyKey = await encryption.getSecretFromKeyVault(
+            "ALCHEMYKEYENCRYPTED"
+        );
         const alchemyKey = await encryption.decrypt(_alchemyKey || "");
         //load for required environment variables
 
@@ -57,9 +65,7 @@ class HealthFactorCheckEngine {
             : "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9";
 
         const lendingPoolAbi = JSON.parse(
-            await fileUtilities.readFromTextFile(
-                "/home/data/lendingPoolAbi.json"
-            )
+            await fileUtilities.readFromTextFile("json/lendingPoolAbi.json")
         );
         //end setup and variables definition
 
@@ -83,25 +89,52 @@ class HealthFactorCheckEngine {
             contractAbi, //lendingPoolAbi,
             this.signer
         );
-
-        //await fileUtilities.ensureFileExists(common.addressesFilePath);
     }
 
     balanceOfAbi = ["function balanceOf(address) view returns (uint256)"];
 
     async getAddressesToCheckHealthFactor() {
-        const addressesText = await fileUtilities.readFromTextFile(
-            "./data/addresses_mainnet.txt"
+        const dbAddressesArr = await sqlManager.execQuery(
+            "SELECT * FROM addresses"
         );
-        let addresses = addressesText.split("\n");
-        if (addresses.length == 0) throw new Error("No addresses found");
-
-        return addresses;
+        return dbAddressesArr.map((a: any) => a.address);
     }
 
     reserves: any = {};
 
+    userReservesQueryBase = `
+        {
+            userReserves(where: { user_in: ["{0}"] }) {
+                user {
+                    id
+                }
+                reserve {
+                    symbol
+                    decimals
+                    price {
+                        priceInEth
+                    }
+                    reserveLiquidationThreshold
+                }
+                currentATokenBalance
+                currentVariableDebt
+            }
+        }
+    `;
+
+    async fetchUsersReserves(userAddresses: string[]) {
+        const query = this.userReservesQueryBase.replace(
+            "{0}",
+            userAddresses.join('","')
+        );
+        return await graphManager.execQuery(query);
+    }
+
     async test() {
+        console.log("test successful");
+    }
+
+    async check() {
         // Retrieve the list of all reserve addresses
         const reservesList = await this.lendingPoolContract.getReservesList();
 
@@ -155,29 +188,9 @@ class HealthFactorCheckEngine {
                         );
 
                     //Liquidation docs: https://aave.com/docs/developers/smart-contracts/pool#liquidationcall
-                    /*
-                    TODO?
-                    Liquidators must approve() the Pool contract to use debtToCover of the underlying ERC20 of the asset used for the liquidation.
-                    */
-
                     // Liquidate the user's debt
                     if (this.liquidationEnabled) {
                         //TODO call smart contract flashloan + liquidation procedure
-                        /*
-                        await this.approveDebtToCover(
-                            assetsToLiquidate,
-                            userAccountData
-                        );
-
-                        common.log("liquidating address: " + address);
-                        await this.lendingPoolContract.liquidationCall(
-                            assetsToLiquidate.collateralAsset, //collateral asset
-                            assetsToLiquidate.debtAsset, //debt asset
-                            address, //user address (borrwer)
-                            -1, //liquidate max possible debt (50% of collateral)
-                            true //receive aTokens
-                        );
-                        */
                     } else {
                         common.log("liquidation disabled");
                     }
@@ -186,24 +199,6 @@ class HealthFactorCheckEngine {
                 console.error("Error:", error);
             }
         }
-    }
-
-    async approveDebtToCover(assets: any, userAccountData: any) {
-        let reserveData = this.reserves[assets.collateralAsset];
-        let aTokenAddress = reserveData.aTokenAddress;
-
-        const aTokenContract = new ethers.Contract(
-            aTokenAddress,
-            ["function approve(address spender, uint256 amount)"],
-            this.signer
-        );
-
-        // Approve the user's total debt
-        const tx = await aTokenContract.approve(
-            this.lendingPoolAddress,
-            userAccountData[1] //totalDebtBase TODO: need to convert this to collateral aToken equivalent?
-        );
-        await tx.wait();
     }
 
     /**
@@ -279,84 +274,35 @@ class HealthFactorCheckEngine {
             */
     }
 
-    async performHealthFactorCheckLoop() {
-        while (true) {
-            common.log("HFCE: start loop healthCheck factor check");
-            let addressesText = await fileUtilities.readFromTextFile(
-                common.addressesFilePath
-            );
-            this.addresses = addressesText?.split("\n") || [];
+    async getUserHealthFactor(address: string, decimals: number = 18) {
+        await this.initializeHealthFactorEngine();
+        // Get user account data
+        const userAccountData =
+            await this.lendingPoolContract.getUserAccountData(address);
 
-            for (const userAddress of this.addresses) {
-                // Get user account data
-                const userAccountData =
-                    await this.lendingPoolContract.getUserGlobalData(
-                        userAddress
-                    );
-
-                // Extract health factor
-                //const healthFactor = userAccountData[5];
-
-                common.log(
-                    "account: " +
-                        userAddress +
-                        ", data: " +
-                        JSON.stringify(userAccountData)
-                );
-                /*
-                // Fetch market prices (replace with actual price fetching logic)
-                const collateralAssetPrice = await this.fetchMarketPrice(
-                    "0xCollateralAsset"
-                );
-                const debtAssetPrice = await this.fetchMarketPrice(
-                    "0xDebtAsset"
-                );
-
-                // Calculate collateral value
-                const collateralValue =
-                    userAccountData[2].mul(collateralAssetPrice);
-                const debtValue = userAccountData[3].mul(debtAssetPrice);
-
-                if (healthFactor.lt(ethers.constants.One)) {
-                    // Prepare liquidation call
-                    const liquidateFunction =
-                        this.lendingPoolContract.functions.liquidationCall(
-                            userAddress,
-                            "0xCollateralAsset",
-                            "0xDebtAsset",
-                            ethers.constants.MaxUint256, // Liquidate entire debt
-                            true // Receive aTokens
-                        );
-
-                    // Estimate gas cost
-                    const gasEstimate = await liquidateFunction.estimateGas();
-
-                    // Send liquidation transaction
-                    const tx = await liquidateFunction.send({
-                        gasLimit: gasEstimate.add(1000), // Add some buffer
-                    });
-
-                    common.log(
-                        `Transaction Hash: ${tx.hash} for user: ${userAddress}`
-                    );
-                    common.log(`Waiting for transaction confirmation...`);
-
-                    // Wait for transaction confirmation
-                    const receipt = await tx.wait();
-
-                    common.log(
-                        `Transaction confirmed: ${receipt.transactionHash}`
-                    );                    
-                }
-                    */
-            }
+        if (userAccountData && userAccountData.length > 5) {
+            // Extract health factor
+            const healthFactorStr = formatUnits(userAccountData[5], decimals);
+            let healthFactor = parseFloat(healthFactorStr);
+            if (healthFactor > 99) healthFactor = 99;
+            return healthFactor;
         }
+
+        //if we come here, data was not found
+        return 99;
     }
 
-    async fetchMarketPrice(assetAddress: string) {
-        // Replace with your oracle service or API call
-        // For simplicity, return a fixed price
-        return ethers.utils.parseEther("200.00");
+    async performHealthFactorCheckPeriodic() {
+        const addresses = await sqlManager.execQuery(
+            "SELECT * FROM addresses WHERE healthfactor IS NULL OR healthfactor > 10"
+        );
+        for (const addressRecord of addresses) {
+            const userAddress = addressRecord.address;
+            const healthFactor = await this.getUserHealthFactor(userAddress);
+            await sqlManager.execQuery(
+                `UPDATE addresses SET healthfactor = ${healthFactor}  WHERE address = '${userAddress}';`
+            );
+        }
     }
 
     //#endregion healthFactor check loop

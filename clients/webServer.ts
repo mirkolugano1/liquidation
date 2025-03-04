@@ -1,4 +1,4 @@
-import { CloudStorageManager } from "../common/cloudStorageManager";
+import { CloudStorageManager } from "../managers/cloudStorageManager";
 import common from "../common/common";
 import webhookEngine from "../engines/webhookEngine";
 require("dotenv").config();

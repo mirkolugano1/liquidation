@@ -8,6 +8,7 @@
         "ethers": "^6.13.5",
         "express": "^4.21.2",
         "fs": "^0.0.1-security",
+        "graphql-request": "^7.1.2",
         "lodash": "^4.17.21",
         "mssql": "^11.0.1",
         "npx": "^10.2.2",

@@ -1,5 +1,5 @@
-import common from "./common";
-import encryption from "./encryption";
+import common from "../common/common";
+import encryption from "../common/encryption";
 
 const {
     BlobServiceClient,
