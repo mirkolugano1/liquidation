@@ -1,20 +1,9 @@
-import common from "../common/common";
-import _, { forEach } from "lodash";
+import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
 import healthFactorCheckEngine from "./healthFactorCheckEngine";
 const { ethers } = require("ethers");
 
 class WebhookEngine {
-    requiredEnvironmentVariables: string[] = [
-        "SQLSERVER",
-        "SQLUSER",
-        "SQLPASSWORDENCRYPTED",
-        "ENCRYPTIONPWD",
-        "ALCHEMYKEYENCRYPTED",
-        "LIQUIDATIONENVIRONMENT",
-        "APPLICATIONINSIGHTS_CONNECTION_STRING",
-    ];
-
     addresses: string[] = [];
     uniqueAddresses: string[] = [];
     addAddressTreshold = 10;
@@ -47,10 +36,6 @@ class WebhookEngine {
     }
 
     async initializeProcessAaveEvent() {
-        await common.checkRequiredEnvironmentVariables(
-            this.requiredEnvironmentVariables
-        );
-
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
