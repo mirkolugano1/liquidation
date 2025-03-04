@@ -163,7 +163,7 @@ class WebhookEngine {
                             (address) =>
                                 `('${address}', 'Ethereum V3 Core', ${this.uniqueAddressesHF[address]})`
                         );
-                        let query = `INSERT INTO addresses (address, chain) VALUES ${addressesListSql.join(
+                        let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
                             ","
                         )}`;
                         await sqlManager.execQuery(query);
