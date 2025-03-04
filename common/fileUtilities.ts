@@ -1,5 +1,5 @@
 import * as fs from "fs/promises";
-const path = require("path");
+import path from "path";
 
 class FileUtilities {
     private static instance: FileUtilities;

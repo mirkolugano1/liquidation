@@ -1,10 +1,10 @@
 import common from "../common/common";
 import encryption from "../common/encryption";
 
-const {
+import {
     BlobServiceClient,
     StorageSharedKeyCredential,
-} = require("@azure/storage-blob");
+} from "@azure/storage-blob";
 
 export class CloudStorageManager {
     public constructor() {}

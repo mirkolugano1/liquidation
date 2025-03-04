@@ -5,7 +5,7 @@ import { CloudStorageManager } from "../managers/cloudStorageManager";
 import graphManager from "../managers/graphManager";
 import fileUtilities from "../common/fileUtilities";
 import sqlManager from "../managers/sqlManager";
-const { ethers, formatUnits } = require("ethers");
+import { ethers, formatUnits } from "ethers";
 
 class HealthFactorCheckEngine {
     //#region TODO remove or change them when ready to go live
@@ -151,7 +151,7 @@ class HealthFactorCheckEngine {
                 const healthFactorStr = formatUnits(userAccountData[5], 18);
                 const healthFactor = parseFloat(healthFactorStr);
                 if (healthFactor <= 1 || this.forceLiquidationWorkflow) {
-                    common.log(
+                    console.log(
                         `User ${address} has a health factor below threshold: ${healthFactor}`
                     );
 
@@ -181,7 +181,7 @@ class HealthFactorCheckEngine {
                     if (this.liquidationEnabled) {
                         //TODO call smart contract flashloan + liquidation procedure
                     } else {
-                        common.log("liquidation disabled");
+                        console.log("liquidation disabled");
                     }
                 }
             } catch (error) {

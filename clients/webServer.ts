@@ -1,11 +1,10 @@
-import { CloudStorageManager } from "../managers/cloudStorageManager";
 import common from "../common/common";
 import webhookEngine from "../engines/webhookEngine";
-require("dotenv").config();
+import dotenv from "dotenv";
+import express from "express";
 
-const express = require("express");
+dotenv.config();
 const app = express();
-
 app.use(express.json());
 
 app.get("/", (req: any, res: any) => {

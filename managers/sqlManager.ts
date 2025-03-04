@@ -1,8 +1,9 @@
 import common from "../common/common";
 import encryption from "../common/encryption";
+import sql from "mssql";
 
-const sql = require("mssql");
-require("dotenv").config();
+import dotenv from "dotenv";
+dotenv.config();
 
 class SqlManager {
     private static instance: SqlManager;

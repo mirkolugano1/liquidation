@@ -1,8 +1,8 @@
 import crypto from "crypto";
 import common from "./common";
 
-const { SecretClient } = require("@azure/keyvault-secrets");
-const { DefaultAzureCredential } = require("@azure/identity");
+import { SecretClient } from "@azure/keyvault-secrets";
+import { DefaultAzureCredential } from "@azure/identity";
 
 class Encryption {
     private static keyVaultUrl = "https://liquidation.vault.azure.net/";

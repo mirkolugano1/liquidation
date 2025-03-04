@@ -1,4 +1,4 @@
-const { ethers } = require("ethers");
+import { ethers } from "ethers";
 
 class Keccak {
     private static instance: Keccak;

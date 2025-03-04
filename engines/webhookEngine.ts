@@ -1,7 +1,7 @@
 import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
 import healthFactorCheckEngine from "./healthFactorCheckEngine";
-const { ethers } = require("ethers");
+import { ethers } from "ethers";
 
 class WebhookEngine {
     addresses: string[] = [];

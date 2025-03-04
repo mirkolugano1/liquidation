@@ -1,5 +1,6 @@
 import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
-require("dotenv").config();
+import dotenv from "dotenv";
+dotenv.config();
 
 async function main() {
     const args = process.argv;

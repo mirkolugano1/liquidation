@@ -7,7 +7,8 @@ import keccak from "../common/keccak";
 import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 import webhookEngine from "../engines/webhookEngine";
 import _, { add, forEach } from "lodash";
-require("dotenv").config();
+import dotenv from "dotenv";
+dotenv.config();
 
 async function main() {
     /*

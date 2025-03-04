@@ -1,17 +1,18 @@
 import encryption from "../common/encryption";
 
-const { request } = require("graphql-request");
-require("dotenv").config();
+import dotenv from "dotenv";
+dotenv.config();
 
 class GraphManager {
     private static instance: GraphManager;
     endpoint =
         "https://gateway.thegraph.com/api/{0}/subgraphs/id/Cd2gEDVeqnjBn1hSeqFMitw8Q1iiyV9FYUZkLNRcL87g";
     apiKey: string = "";
+    request: any;
 
     async execQuery(query: string) {
         if (!this.apiKey) await this.initialize();
-        return await request(this.endpoint, query);
+        return await this.request(this.endpoint, query);
     }
 
     public static getInstance(): GraphManager {
@@ -22,6 +23,8 @@ class GraphManager {
     }
 
     async initialize() {
+        const { request } = await import("graphql-request");
+        this.request = request;
         const theGraphApiKeyEncrypted = await encryption.getSecretFromKeyVault(
             "THEGRAPHAPIKEYENCRYPTED"
         );
