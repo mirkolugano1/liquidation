@@ -77,6 +77,11 @@ class Encryption {
             return null; // Return null or handle the error appropriately
         }
     }
+
+    async getAndDecryptSecretFromKeyVault(key: string) {
+        const value = await this.getSecretFromKeyVault(key);
+        return await this.decrypt(value);
+    }
 }
 
 export default Encryption.getInstance();

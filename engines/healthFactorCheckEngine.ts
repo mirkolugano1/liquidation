@@ -28,56 +28,83 @@ class HealthFactorCheckEngine {
 
     //#region healthFactor check loop
 
-    signer: any;
-    testContract: any;
-    lendingPoolContract: any;
-    lendingPoolAddress: string = "";
+    lendingPoolContractsInfos: any[] = [
+        {
+            chain: "eth",
+            chainEnv: "mainnet",
+            lendingPoolAddress: "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
+        },
+        {
+            chain: "arb",
+            chainEnv: "mainnet",
+            lendingPoolAddress: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+        },
+    ];
+
+    lendingPoolContracts: any;
 
     async initializeHealthFactorEngine() {
-        if (this.lendingPoolContract) return;
+        if (this.lendingPoolContracts) return;
 
-        const _privateKey = await encryption.getSecretFromKeyVault(
+        const privateKey = await encryption.getAndDecryptSecretFromKeyVault(
             "PRIVATEKEYENCRYPTED"
         );
-        const _alchemyKey = await encryption.getSecretFromKeyVault(
+        const alchemyKey = await encryption.getAndDecryptSecretFromKeyVault(
             "ALCHEMYKEYENCRYPTED"
         );
-        const alchemyKey = await encryption.decrypt(_alchemyKey || "");
-        //load for required environment variables
 
-        //Setup & variables definition
-        const alchemyNetwork = common.isProd ? "mainnet" : "sepolia";
-        const alchemyUrl = `https://eth-${alchemyNetwork}.g.alchemy.com/v2/${alchemyKey}`;
-        const privateKey = await encryption.decrypt(_privateKey || "");
-        this.lendingPoolAddress = common.isProd
-            ? "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
-            : "0x7d2768de32b0b80b7a3454c06bdac94a69ddc7a9";
+        for (const o of this.lendingPoolContractsInfos) {
+            const key = `${o.chain}-${o.chainEnv}`;
+            this.lendingPoolContracts[key] = this.setLendingPoolContract(
+                privateKey,
+                alchemyKey,
+                o.lendingPoolAddress,
+                o.chain,
+                o.chainEnv //"sepolia"
+            );
+        }
+    }
 
-        const lendingPoolAbi = JSON.parse(
-            await fileUtilities.readFromTextFile("json/lendingPoolAbi.json")
-        );
-        //end setup and variables definition
+    lendingPoolContractAbi = [
+        "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
+        "function getUserEMode(address user) external view returns (uint256)",
+        "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
+        "function getReservesList() external view returns (address[] memory)",
+        "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
+        "function getUserConfiguration(address user) external view returns (uint256 configuration)",
+    ];
 
+    async setLendingPoolContract(
+        privateKey: string,
+        alchemyKey: string,
+        lendingPoolAddress: string,
+        alchemyChainAbbrev: string,
+        alchemyChainEnvironment: string = "mainnet"
+    ) {
+        const alchemyUrl = `https://${alchemyChainAbbrev}-${alchemyChainEnvironment}.g.alchemy.com/v2/${alchemyKey}`;
         const provider = new ethers.JsonRpcProvider(alchemyUrl);
+        const signer = new ethers.Wallet(privateKey, provider);
 
-        // Create a signer from private key
-        this.signer = new ethers.Wallet(privateKey, provider);
-
-        const contractAbi = [
-            "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
-            "function getUserEMode(address user) external view returns (uint256)",
-            "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
-            "function getReservesList() external view returns (address[] memory)",
-            "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
-            "function getUserConfiguration(address user) external view returns (uint256 configuration)",
-        ];
-
-        // Create a contract instance for LendingPool
-        this.lendingPoolContract = new ethers.Contract(
-            this.lendingPoolAddress,
-            contractAbi, //lendingPoolAbi,
-            this.signer
+        return new ethers.Contract(
+            lendingPoolAddress,
+            this.lendingPoolContractAbi,
+            signer
         );
+    }
+
+    getLendingPoolContract(chain: string, chainEnv: string = "mainnet") {
+        const key = `${chain}-${chainEnv}`;
+        return this.lendingPoolContracts[key];
+    }
+
+    async getHealthFactor(chain: string, address: string) {
+        await this.initializeHealthFactorEngine();
+        let userAccountData = await this.getLendingPoolContract(
+            chain
+        ).getUserAccountData(address);
+
+        const healthFactorStr = formatUnits(userAccountData[5], 18);
+        return parseFloat(healthFactorStr);
     }
 
     balanceOfAbi = ["function balanceOf(address) view returns (uint256)"];
@@ -91,38 +118,108 @@ class HealthFactorCheckEngine {
 
     reserves: any = {};
 
-    userReservesQueryBase = `
-        {
-            userReserves(where: { user_in: ["{0}"] }) {
-                user {
-                    id
-                }
-                reserve {
-                    symbol
-                    decimals
-                    price {
-                        priceInEth
-                    }
-                    reserveLiquidationThreshold
-                }
-                currentATokenBalance
-                currentVariableDebt
+    async fetchAllUsersReserves(userAddresses: string[]) {
+        const ADDRESSES_BATCH_SIZE = 300; // Number of addresses per batch 200
+        const RESERVES_BATCH_SIZE = 500; // Number of userReserves per query 500
+        let allUserReserves: any = [];
+
+        for (let i = 0; i < userAddresses.length; i += ADDRESSES_BATCH_SIZE) {
+            console.log("addresses batch start");
+            const addressBatch = userAddresses.slice(
+                i,
+                i + ADDRESSES_BATCH_SIZE
+            );
+            let skip = 0;
+            let hasMore = true;
+
+            while (hasMore) {
+                console.log("reserves batch start");
+                const variables = {
+                    addresses: addressBatch,
+                    first: RESERVES_BATCH_SIZE,
+                    skip: skip,
+                };
+                const response = await graphManager.execQuery(
+                    "userReserves",
+                    variables
+                );
+                const userReserves = response.userReserves;
+
+                allUserReserves = allUserReserves.concat(userReserves);
+                skip += RESERVES_BATCH_SIZE;
+                hasMore = userReserves.length === RESERVES_BATCH_SIZE;
             }
         }
-    `;
+        console.log(allUserReserves.length);
+        return allUserReserves;
+    }
+
+    calculateHealthFactor(userReserves: any[]) {
+        let totalCollateralInEth = 0n;
+        let totalDebtInEth = 0n;
+
+        for (const reserve of userReserves) {
+            const {
+                currentATokenBalance,
+                currentVariableDebt,
+                reserve: {
+                    decimals,
+                    price: { priceInEth },
+                    reserveLiquidationThreshold,
+                },
+            } = reserve;
+
+            const collateralAmount = BigInt(currentATokenBalance);
+            const debtAmount = BigInt(currentVariableDebt);
+            const price = BigInt(priceInEth);
+            const liquidationThreshold = BigInt(reserveLiquidationThreshold);
+
+            console.log(`Symbol: ${reserve.reserve.symbol}`);
+            console.log(`Collateral Amount: ${collateralAmount}`);
+            console.log(`Debt Amount: ${debtAmount}`);
+            console.log(`Price: ${price}`);
+            console.log(`Liquidation Threshold: ${liquidationThreshold}`);
+            console.log(`Decimals: ${decimals}`);
+
+            if (collateralAmount > 0n && price > 0n) {
+                const collateralValueInEth =
+                    (collateralAmount * price * liquidationThreshold) /
+                    (10000n * 10n ** BigInt(decimals));
+                console.log(`Collateral Value: ${collateralValueInEth}`);
+                totalCollateralInEth += collateralValueInEth;
+            }
+
+            if (debtAmount > 0n && price > 0n) {
+                const debtValueInEth =
+                    (debtAmount * price) / 10n ** BigInt(decimals);
+                console.log(`Debt Value: ${debtValueInEth}`);
+                totalDebtInEth += debtValueInEth;
+            }
+            console.log("---");
+        }
+
+        console.log(`Total Collateral: ${totalCollateralInEth}`);
+        console.log(`Total Debt: ${totalDebtInEth}`);
+
+        if (totalDebtInEth === 0n) {
+            return Infinity;
+        }
+
+        return Number(totalCollateralInEth) / Number(totalDebtInEth);
+    }
 
     async fetchUsersReserves(userAddresses: string[]) {
-        const query = this.userReservesQueryBase.replace(
-            "{0}",
-            userAddresses.join('","')
-        );
-        return await graphManager.execQuery(query);
+        return await graphManager.execQuery("userReserves", {
+            addresses: userAddresses,
+            first: 1000,
+            skip: 0,
+        });
     }
 
     async test() {
         console.log("test successful");
     }
-
+    /*
     async check() {
         // Retrieve the list of all reserve addresses
         const reservesList = await this.lendingPoolContract.getReservesList();
@@ -189,12 +286,13 @@ class HealthFactorCheckEngine {
             }
         }
     }
-
+*/
     /**
      *   Example input: 1000000000000000000001001000000000110000
      *   Explanation of userConfiguration
      *   https://aave.com/docs/developers/smart-contracts/pool#view-methods-getuserconfiguration
      */
+    /*
     async getUserAssetsFromConfigurationBinary(
         address: string,
         reservesList: string[]
@@ -221,7 +319,7 @@ class HealthFactorCheckEngine {
 
         return userAssets;
     }
-
+*/
     async decideWhichAssetPairToLiquidate(address: any, assets: any) {
         //TODO how to decide which asset pair to liquidate?
         /*
@@ -263,11 +361,18 @@ class HealthFactorCheckEngine {
             */
     }
 
-    async getUserHealthFactor(address: string, decimals: number = 18) {
+    async getUserHealthFactor(
+        chain: string,
+        chainEnv: string,
+        address: string,
+        decimals: number = 18
+    ) {
         await this.initializeHealthFactorEngine();
+        const key = `${chain}-${chainEnv}`;
         // Get user account data
-        const userAccountData =
-            await this.lendingPoolContract.getUserAccountData(address);
+        const userAccountData = await this.lendingPoolContracts[
+            key
+        ].getUserAccountData(address);
 
         if (userAccountData && userAccountData.length > 5) {
             // Extract health factor
@@ -281,15 +386,23 @@ class HealthFactorCheckEngine {
         return 99;
     }
 
-    async performHealthFactorCheckPeriodic() {
+    async performHealthFactorCheckPeriodic(
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
+        const key = `${chain}-${chainEnv}`;
         const addresses = await sqlManager.execQuery(
             "SELECT * FROM addresses WHERE healthfactor IS NULL OR healthfactor > 10"
         );
         for (const addressRecord of addresses) {
             const userAddress = addressRecord.address;
-            const healthFactor = await this.getUserHealthFactor(userAddress);
+            const healthFactor = await this.getUserHealthFactor(
+                chain,
+                chainEnv,
+                userAddress
+            );
             await sqlManager.execQuery(
-                `UPDATE addresses SET healthfactor = ${healthFactor}  WHERE address = '${userAddress}';`
+                `UPDATE addresses SET healthfactor = ${healthFactor}  WHERE address = '${userAddress}' AND chain = '${key}';`
             );
         }
     }

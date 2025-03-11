@@ -47,10 +47,12 @@ class WebhookEngine {
 
     async processAaveEvent(req: any, res: any) {
         let block = req.body.event?.data?.block;
-        await this.processBlock(block);
+        let chain = req.query.chain ?? "eth";
+        let chainEnv = req.query.chainEnv ?? "mainnet";
+        await this.processBlock(block, chain, chainEnv);
     }
 
-    async processBlock(block: any) {
+    async processBlock(block: any, chain: string, chainEnv: string) {
         for (let log of block.logs) {
             let topics = log.topics;
             let eventHash = topics[0];
@@ -138,13 +140,15 @@ class WebhookEngine {
                         for (const address of this.uniqueAddresses) {
                             this.uniqueAddressesHF[address] =
                                 await healthFactorCheckEngine.getUserHealthFactor(
+                                    chain,
+                                    chainEnv,
                                     address
                                 );
                         }
-
+                        const key = `${chain}-${chainEnv}`;
                         let addressesListSql = this.uniqueAddresses.map(
                             (address) =>
-                                `('${address}', 'Ethereum V3 Core', ${this.uniqueAddressesHF[address]})`
+                                `('${address}', ${key}, ${this.uniqueAddressesHF[address]})`
                         );
                         let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
                             ","

@@ -12,10 +12,29 @@ dotenv.config();
 
 async function main() {
     const dbAddressesArr = await sqlManager.execQuery(
-        "SELECT TOP 2 * FROM addresses"
+        "SELECT TOP 1 * FROM addresses where address IN ('0x00227dd82fae1220bdac630297753bb2cb4e8ddd')"
     );
     const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
-    console.log(dbAddressesArr[0]);
+    const userReserves = await healthFactorCheckEngine.fetchAllUsersReserves(
+        _addresses
+    );
+
+    //console.log(JSON.stringify(userReserves));
+
+    for (const address of _addresses) {
+        const addressUserReserves = _.filter(
+            userReserves,
+            (ur) => ur.user.id == address
+        );
+        const hfFromReserves =
+            healthFactorCheckEngine.calculateHealthFactor(addressUserReserves);
+        const hfFromChain = await healthFactorCheckEngine.getHealthFactor(
+            address
+        );
+
+        console.log(hfFromReserves, hfFromChain);
+    }
+
     /*
     let addresses: string[] = [];
 
