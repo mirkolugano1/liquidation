@@ -97,10 +97,11 @@ class HealthFactorCheckEngine {
         return this.lendingPoolContracts[key];
     }
 
-    async getHealthFactor(chain: string, address: string) {
+    async getHealthFactor(chain: string, chainEnv: string, address: string) {
         await this.initializeHealthFactorEngine();
         let userAccountData = await this.getLendingPoolContract(
-            chain
+            chain,
+            chainEnv
         ).getUserAccountData(address);
 
         const healthFactorStr = formatUnits(userAccountData[5], 18);
