@@ -12,7 +12,9 @@ async function main() {
             await healthFactorCheckEngine.test();
             break;
         case "performHealthFactorCheckPeriodic":
-            await healthFactorCheckEngine.performHealthFactorCheckPeriodic();
+            await healthFactorCheckEngine.performHealthFactorCheckPeriodic(
+                "eth"
+            );
             break;
     }
 }
