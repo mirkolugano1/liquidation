@@ -378,23 +378,20 @@ class HealthFactorCheckEngine {
         return 99;
     }
 
-    async performHealthFactorCheckPeriodic(
-        chain: string,
-        chainEnv: string = "mainnet"
-    ) {
-        const key = `${chain}-${chainEnv}`;
+    async performHealthFactorCheckPeriodic() {
         const addresses = await sqlManager.execQuery(
             "SELECT * FROM addresses WHERE healthfactor IS NULL OR healthfactor > 10"
         );
         for (const addressRecord of addresses) {
+            const chainParts = addressRecord.chain.split("-");
             const userAddress = addressRecord.address;
             const healthFactor = await this.getUserHealthFactor(
-                chain,
-                chainEnv,
+                chainParts[0],
+                chainParts[1],
                 userAddress
             );
             await sqlManager.execQuery(
-                `UPDATE addresses SET healthfactor = ${healthFactor}  WHERE address = '${userAddress}' AND chain = '${key}';`
+                `UPDATE addresses SET healthfactor = ${healthFactor}  WHERE address = '${userAddress}' AND chain = '${addressRecord.chain}';`
             );
         }
     }

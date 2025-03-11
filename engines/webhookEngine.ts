@@ -168,16 +168,23 @@ class WebhookEngine {
                                 );
                         }
 
+                        //only save addresses with healthfactor < 5
                         let addressesListSql = this.uniqueAddresses[key].map(
                             (address: string) =>
-                                `('${address}', ${key}, ${this.uniqueAddressesHF[key][address]})`
+                                this.uniqueAddressesHF[key][address] < 5
+                                    ? `('${address}', ${key}, ${this.uniqueAddressesHF[key][address]})`
+                                    : ""
                         );
-                        let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
-                            ","
-                        )}`;
-                        await sqlManager.execQuery(query);
+
+                        if (addressesListSql.length > 0) {
+                            let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
+                                ","
+                            )}`;
+                            await sqlManager.execQuery(query);
+                        }
 
                         this.uniqueAddresses[key] = [];
+                        this.uniqueAddressesHF[key] = [];
                     }
                 }
             }
