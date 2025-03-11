@@ -1,5 +1,6 @@
 import _ from "lodash";
 import encryption from "./encryption";
+import fileUtilities from "./fileUtilities";
 
 class Common {
     public addressesFilePath = "/home/data/addresses.txt";
@@ -34,6 +35,13 @@ class Common {
 
     public intToBinary(integerValue: any) {
         return integerValue.toString(2);
+    }
+
+    public async getLendingPoolContractsInfos() {
+        const contents = await fileUtilities.readFromTextFile(
+            "json/lendingPoolContractsInfos.json"
+        );
+        return JSON.parse(contents);
     }
 
     public static getInstance(): Common {

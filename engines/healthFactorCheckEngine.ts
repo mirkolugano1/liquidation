@@ -28,19 +28,6 @@ class HealthFactorCheckEngine {
 
     //#region healthFactor check loop
 
-    lendingPoolContractsInfos: any[] = [
-        {
-            chain: "eth",
-            chainEnv: "mainnet",
-            lendingPoolAddress: "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2",
-        },
-        {
-            chain: "arb",
-            chainEnv: "mainnet",
-            lendingPoolAddress: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
-        },
-    ];
-
     lendingPoolContracts: any;
 
     async initializeHealthFactorEngine() {
@@ -53,7 +40,10 @@ class HealthFactorCheckEngine {
             "ALCHEMYKEYENCRYPTED"
         );
 
-        for (const o of this.lendingPoolContractsInfos) {
+        const lendingPoolContractsInfos =
+            await common.getLendingPoolContractsInfos();
+
+        for (const o of lendingPoolContractsInfos) {
             const key = `${o.chain}-${o.chainEnv}`;
             this.lendingPoolContracts[key] = this.setLendingPoolContract(
                 privateKey,

@@ -4,8 +4,9 @@ import healthFactorCheckEngine from "./healthFactorCheckEngine";
 import { ethers } from "ethers";
 
 class WebhookEngine {
-    addresses: string[] = [];
-    uniqueAddresses: string[] = [];
+    addresses: any = {};
+    uniqueAddresses: any = {};
+
     addAddressTreshold = 10;
     uniqueAddressesHF: any = {};
 
@@ -39,10 +40,18 @@ class WebhookEngine {
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
-        this.addresses = _.map(
+        const initAddresses = _.map(
             await sqlManager.execQuery("SELECT * FROM addresses"),
             "address"
         );
+
+        for (const address of initAddresses) {
+            if (!this.addresses.hasOwnProperty(address.chain))
+                this.addresses[address.chain] = [];
+            this.addresses[address.chain].push(address.address);
+        }
+
+        this.addresses = initAddresses;
     }
 
     async processAaveEvent(req: any, res: any) {
@@ -128,34 +137,47 @@ class WebhookEngine {
                 );
 
                 if (uniqueAddresses.length > 0) {
-                    this.uniqueAddresses = _.uniq(
-                        _.union(this.uniqueAddresses, uniqueAddresses)
+                    const key = `${chain}-${chainEnv}`;
+                    if (!this.uniqueAddresses.hasOwnProperty(key))
+                        this.uniqueAddresses[key] = [];
+
+                    this.uniqueAddresses[key] = _.uniq(
+                        _.union(this.uniqueAddresses[key], uniqueAddresses)
                     );
 
-                    this.addresses = _.uniq(
-                        _.union(this.addresses, uniqueAddresses)
+                    if (!this.addresses.hasOwnProperty(key))
+                        this.addresses[key] = [];
+
+                    this.addresses[key] = _.uniq(
+                        _.union(this.addresses[key], uniqueAddresses)
                     );
 
-                    if (this.uniqueAddresses.length > this.addAddressTreshold) {
-                        for (const address of this.uniqueAddresses) {
-                            this.uniqueAddressesHF[address] =
+                    if (
+                        this.uniqueAddresses[key].length >
+                        this.addAddressTreshold
+                    ) {
+                        if (!this.uniqueAddressesHF.hasOwnProperty(key))
+                            this.uniqueAddressesHF[key] = {};
+
+                        for (const address of this.uniqueAddresses[key]) {
+                            this.uniqueAddressesHF[key][address] =
                                 await healthFactorCheckEngine.getUserHealthFactor(
                                     chain,
                                     chainEnv,
                                     address
                                 );
                         }
-                        const key = `${chain}-${chainEnv}`;
-                        let addressesListSql = this.uniqueAddresses.map(
-                            (address) =>
-                                `('${address}', ${key}, ${this.uniqueAddressesHF[address]})`
+
+                        let addressesListSql = this.uniqueAddresses[key].map(
+                            (address: string) =>
+                                `('${address}', ${key}, ${this.uniqueAddressesHF[key][address]})`
                         );
                         let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
                             ","
                         )}`;
                         await sqlManager.execQuery(query);
 
-                        this.uniqueAddresses = [];
+                        this.uniqueAddresses[key] = [];
                     }
                 }
             }
