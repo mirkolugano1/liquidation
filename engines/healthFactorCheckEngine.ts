@@ -32,6 +32,7 @@ class HealthFactorCheckEngine {
 
     async initializeHealthFactorEngine() {
         if (this.lendingPoolContracts) return;
+        this.lendingPoolContracts = {};
 
         const privateKey = await encryption.getAndDecryptSecretFromKeyVault(
             "PRIVATEKEYENCRYPTED"
@@ -64,7 +65,7 @@ class HealthFactorCheckEngine {
         "function getUserConfiguration(address user) external view returns (uint256 configuration)",
     ];
 
-    async setLendingPoolContract(
+    setLendingPoolContract(
         privateKey: string,
         alchemyKey: string,
         lendingPoolAddress: string,
@@ -89,10 +90,10 @@ class HealthFactorCheckEngine {
 
     async getHealthFactor(chain: string, chainEnv: string, address: string) {
         await this.initializeHealthFactorEngine();
-        let userAccountData = await this.getLendingPoolContract(
-            chain,
-            chainEnv
-        ).getUserAccountData(address);
+        let lendingPoolContract = this.getLendingPoolContract(chain, chainEnv);
+        const userAccountData = await lendingPoolContract.getUserAccountData(
+            address
+        );
 
         const healthFactorStr = formatUnits(userAccountData[5], 18);
         return parseFloat(healthFactorStr);

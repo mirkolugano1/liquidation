@@ -29,7 +29,7 @@ async function main() {
         const hfFromReserves =
             healthFactorCheckEngine.calculateHealthFactor(addressUserReserves);
         const hfFromChain = await healthFactorCheckEngine.getHealthFactor(
-            "eth",
+            "arb",
             "mainnet",
             address
         );
