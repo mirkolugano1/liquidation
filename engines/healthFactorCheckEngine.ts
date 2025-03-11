@@ -116,7 +116,6 @@ class HealthFactorCheckEngine {
         let allUserReserves: any = [];
 
         for (let i = 0; i < userAddresses.length; i += ADDRESSES_BATCH_SIZE) {
-            console.log("addresses batch start");
             const addressBatch = userAddresses.slice(
                 i,
                 i + ADDRESSES_BATCH_SIZE
@@ -125,7 +124,6 @@ class HealthFactorCheckEngine {
             let hasMore = true;
 
             while (hasMore) {
-                console.log("reserves batch start");
                 const variables = {
                     addresses: addressBatch,
                     first: RESERVES_BATCH_SIZE,
@@ -142,7 +140,6 @@ class HealthFactorCheckEngine {
                 hasMore = userReserves.length === RESERVES_BATCH_SIZE;
             }
         }
-        console.log(allUserReserves.length);
         return allUserReserves;
     }
 
@@ -166,32 +163,19 @@ class HealthFactorCheckEngine {
             const price = BigInt(priceInEth);
             const liquidationThreshold = BigInt(reserveLiquidationThreshold);
 
-            console.log(`Symbol: ${reserve.reserve.symbol}`);
-            console.log(`Collateral Amount: ${collateralAmount}`);
-            console.log(`Debt Amount: ${debtAmount}`);
-            console.log(`Price: ${price}`);
-            console.log(`Liquidation Threshold: ${liquidationThreshold}`);
-            console.log(`Decimals: ${decimals}`);
-
             if (collateralAmount > 0n && price > 0n) {
                 const collateralValueInEth =
                     (collateralAmount * price * liquidationThreshold) /
                     (10000n * 10n ** BigInt(decimals));
-                console.log(`Collateral Value: ${collateralValueInEth}`);
                 totalCollateralInEth += collateralValueInEth;
             }
 
             if (debtAmount > 0n && price > 0n) {
                 const debtValueInEth =
                     (debtAmount * price) / 10n ** BigInt(decimals);
-                console.log(`Debt Value: ${debtValueInEth}`);
                 totalDebtInEth += debtValueInEth;
             }
-            console.log("---");
         }
-
-        console.log(`Total Collateral: ${totalCollateralInEth}`);
-        console.log(`Total Debt: ${totalDebtInEth}`);
 
         if (totalDebtInEth === 0n) {
             return Infinity;

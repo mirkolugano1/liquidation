@@ -172,7 +172,7 @@ class WebhookEngine {
                         let addressesListSql = this.uniqueAddresses[key].map(
                             (address: string) =>
                                 this.uniqueAddressesHF[key][address] < 5
-                                    ? `('${address}', ${key}, ${this.uniqueAddressesHF[key][address]})`
+                                    ? `('${address}', '${key}', ${this.uniqueAddressesHF[key][address]})`
                                     : ""
                         );
 
