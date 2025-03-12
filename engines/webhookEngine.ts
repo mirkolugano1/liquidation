@@ -7,7 +7,7 @@ class WebhookEngine {
     addresses: any = {};
     uniqueAddresses: any = {};
 
-    addAddressTreshold = 10;
+    addAddressTreshold = 0;
     uniqueAddressesHF: any = {};
 
     ifaceBorrow: any;
