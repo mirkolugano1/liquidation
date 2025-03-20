@@ -6,6 +6,8 @@ import graphManager from "../managers/graphManager";
 import fileUtilities from "../common/fileUtilities";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
+import { ChainedTokenCredential } from "@azure/identity";
+import Big from "big.js";
 
 class HealthFactorCheckEngine {
     //#region TODO remove or change them when ready to go live
@@ -28,11 +30,12 @@ class HealthFactorCheckEngine {
 
     //#region healthFactor check loop
 
-    lendingPoolContracts: any;
+    aave: any;
+    aaveLendingPoolInterface: any;
 
     async initializeHealthFactorEngine() {
-        if (this.lendingPoolContracts) return;
-        this.lendingPoolContracts = {};
+        if (this.aave) return;
+        this.aave = {};
 
         const privateKey = await encryption.getAndDecryptSecretFromKeyVault(
             "PRIVATEKEYENCRYPTED"
@@ -41,22 +44,23 @@ class HealthFactorCheckEngine {
             "ALCHEMYKEYENCRYPTED"
         );
 
-        const lendingPoolContractsInfos =
-            await common.getLendingPoolContractsInfos();
+        const aaveChainsInfos = await common.getAaveChainsInfos();
 
-        for (const o of lendingPoolContractsInfos) {
-            const key = `${o.chain}-${o.chainEnv}`;
-            this.lendingPoolContracts[key] = this.setLendingPoolContract(
+        for (const aaveChainInfo of aaveChainsInfos) {
+            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
+            this.aave[key] = await this.setAaveChainInfo(
                 privateKey,
                 alchemyKey,
-                o.lendingPoolAddress,
-                o.chain,
-                o.chainEnv //"sepolia"
+                aaveChainInfo
             );
         }
+
+        this.aaveLendingPoolInterface = new ethers.Interface(
+            this.aaveLendingPoolContractAbi
+        );
     }
 
-    lendingPoolContractAbi = [
+    aaveLendingPoolContractAbi = [
         "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
         "function getUserEMode(address user) external view returns (uint256)",
         "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
@@ -65,41 +69,215 @@ class HealthFactorCheckEngine {
         "function getUserConfiguration(address user) external view returns (uint256 configuration)",
     ];
 
-    setLendingPoolContract(
+    aaveAddressesProviderContractAbi = [
+        "function getPriceOracle() external view returns (address)",
+    ];
+
+    // Aave Oracle ABI (just the function we need)
+    aavePriceOracleAbi = [
+        "function getSourceOfAsset(address asset) external view returns (address)",
+    ];
+
+    aaveReserveOracleAbi = [
+        "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+    ];
+
+    async getReservesOracleContracts(
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
+        return this.getAaveChainInfo(chain, chainEnv).reserveOraclesContracts;
+    }
+
+    async setAaveChainInfo(
         privateKey: string,
         alchemyKey: string,
-        lendingPoolAddress: string,
-        alchemyChainAbbrev: string,
-        alchemyChainEnvironment: string = "mainnet"
+        aaveChainInfo: any
     ) {
-        const alchemyUrl = `https://${alchemyChainAbbrev}-${alchemyChainEnvironment}.g.alchemy.com/v2/${alchemyKey}`;
+        const alchemyUrl = `https://${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}.g.alchemy.com/v2/${alchemyKey}`;
         const provider = new ethers.JsonRpcProvider(alchemyUrl);
         const signer = new ethers.Wallet(privateKey, provider);
 
-        return new ethers.Contract(
-            lendingPoolAddress,
-            this.lendingPoolContractAbi,
+        const aaveLendingPoolContract = new ethers.Contract(
+            aaveChainInfo.lendingPoolAddress,
+            this.aaveLendingPoolContractAbi,
             signer
         );
-    }
 
-    getLendingPoolContract(chain: string, chainEnv: string = "mainnet") {
-        const key = `${chain}-${chainEnv}`;
-        return this.lendingPoolContracts[key];
-    }
-
-    async getHealthFactor(chain: string, chainEnv: string, address: string) {
-        await this.initializeHealthFactorEngine();
-        let lendingPoolContract = this.getLendingPoolContract(chain, chainEnv);
-        const userAccountData = await lendingPoolContract.getUserAccountData(
-            address
+        const aaveAddressesProviderContract = new ethers.Contract(
+            aaveChainInfo.addressesProviderAddress,
+            this.aaveAddressesProviderContractAbi,
+            provider
         );
 
+        const aavePriceOracleAddress =
+            await aaveAddressesProviderContract.getPriceOracle();
+
+        const aavePriceOracleContract = new ethers.Contract(
+            aavePriceOracleAddress,
+            this.aavePriceOracleAbi,
+            provider
+        );
+
+        const aggregatorInterface = new ethers.Interface([
+            "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
+        ]);
+        const reserves = await aaveLendingPoolContract.getReservesList();
+        let reserveOracles: any = {};
+        let tokenContracts: any = {};
+        let tokenDecimals: any = {};
+        for (const reserve of reserves) {
+            const tokenAbi = [
+                "function decimals() external view returns (uint8)",
+            ];
+            const tokenContract = new ethers.Contract(
+                reserve,
+                tokenAbi,
+                provider
+            );
+            tokenContracts[reserve] = tokenContract;
+
+            const decimals = await tokenContract.decimals();
+            tokenDecimals[reserve] = decimals;
+
+            const oracleAddress =
+                await aavePriceOracleContract.getSourceOfAsset(reserve);
+            reserveOracles[reserve] = new ethers.Contract(
+                oracleAddress,
+                aggregatorInterface,
+                provider
+            );
+        }
+
+        return _.assign(aaveChainInfo, {
+            alchemyUrl: alchemyUrl,
+            provider: provider,
+            signer: signer,
+            aaveLendingPoolContract: aaveLendingPoolContract,
+            aaveAddressesProviderContract: aaveAddressesProviderContract,
+            aavePriceOracleContract: aavePriceOracleContract,
+            reserveOraclesContracts: reserveOracles,
+            tokenContracts: tokenContracts,
+            tokenDecimals: tokenDecimals,
+        });
+    }
+
+    getAaveChainInfo(chain: string, chainEnv: string = "mainnet") {
+        const key = `${chain}-${chainEnv}`;
+        return this.aave[key];
+    }
+
+    getHealthFactorFromUserAccountData(userAccountData: any) {
         const healthFactorStr = formatUnits(userAccountData[5], 18);
         return parseFloat(healthFactorStr);
     }
 
+    async periodicalAccountsHealthFactorAndConfigurationCheck() {
+        const aaveChainsInfos = await common.getAaveChainsInfos();
+        await this.initializeHealthFactorEngine();
+        for (const info of aaveChainsInfos) {
+            const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
+                info.chain,
+                info.chainEnv
+            ).aaveLendingPoolContract.target;
+            const dbAddressesArr = await sqlManager.execQuery(
+                `SELECT * FROM addresses where chain = '${info.chain}-${info.chainEnv}';`
+            );
+            const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+            let contractAddressArray = [];
+            for (let i = 0; i < _addresses.length; i++) {
+                contractAddressArray.push(aaveLendingPoolContractAddress);
+            }
+
+            const userAccountData = await this.batchEthCallForAddresses(
+                contractAddressArray,
+                _addresses,
+                this.aaveLendingPoolContractAbi,
+                "getUserAccountData",
+                info.chain,
+                info.chainEnv
+            );
+
+            const userConfiguration = await this.batchEthCallForAddresses(
+                contractAddressArray,
+                _addresses,
+                this.aaveLendingPoolContractAbi,
+                "getUserConfiguration",
+                info.chain,
+                info.chainEnv
+            );
+
+            let query = "";
+            for (let i = 0; i < _addresses.length; i++) {
+                const address = _addresses[i];
+                const healthFactor = this.getHealthFactorFromUserAccountData(
+                    userAccountData[i]
+                );
+                const userConfigurationBinary = common.intToBinary(
+                    parseInt(userConfiguration[i])
+                );
+
+                if (healthFactor > 5) {
+                    query += `DELETE FROM addresses WHERE address = '${address}' AND chain = '${info.chain}-${info.chainEnv}';`;
+                } else {
+                    query += `UPDATE addresses SET healthfactor = ${healthFactor}, userconfiguration = '${userConfigurationBinary}' WHERE address = '${address}' AND chain = '${info.chain}-${info.chainEnv}';`;
+                }
+            }
+
+            if (query) await sqlManager.execQuery(query);
+        }
+    }
+
+    async getHealthFactor(chain: string, chainEnv: string, address: string) {
+        await this.initializeHealthFactorEngine();
+        let aaveLendingPoolContract = this.getAaveChainInfo(
+            chain,
+            chainEnv
+        ).aaveLendingPoolContract;
+        const userAccountData =
+            await aaveLendingPoolContract.getUserAccountData(address);
+        return this.getHealthFactorFromUserAccountData(userAccountData);
+    }
+
     balanceOfAbi = ["function balanceOf(address) view returns (uint256)"];
+
+    async getReservesPrices(chain: string, chainEnv: string = "mainnet") {
+        await this.initializeHealthFactorEngine();
+        var _reserveOracleContracts: any =
+            await this.getReservesOracleContracts(chain, chainEnv);
+
+        //TEST: SIMULATE TOP 1 DUE TO CU LIMITS ON ALCHEMY
+        const rok = _.keys(_reserveOracleContracts);
+        const reserveOracleContracts = [_reserveOracleContracts[rok[1]]];
+
+        const reserveOracleContractsAddresses = _.map(
+            _.values(reserveOracleContracts),
+            (c: any) => c.target
+        );
+        const data = await this.batchEthCallForAddresses(
+            reserveOracleContractsAddresses,
+            null,
+            this.aaveReserveOracleAbi,
+            "latestRoundData",
+            "arb"
+        );
+
+        for (let i = 0; i < data.length; i++) {
+            const roundData = data[i];
+            const answer = new Big(roundData.answer);
+            const reserveAddress = _.keys(
+                this.getAaveChainInfo(chain, chainEnv).tokenContracts
+            )[i];
+            const decimals = this.getAaveChainInfo(chain, chainEnv)
+                .tokenDecimals[reserveAddress];
+
+            const divisor = new Big(10).pow(new Big(decimals).toNumber());
+            const price = answer.div(divisor).toNumber();
+
+            console.log(`Reserve: ${reserveAddress} - Price: ${price}`);
+        }
+        console.log(data);
+    }
 
     async getAddressesToCheckHealthFactor() {
         const dbAddressesArr = await sqlManager.execQuery(
@@ -109,6 +287,69 @@ class HealthFactorCheckEngine {
     }
 
     reserves: any = {};
+
+    async batchEthCallForAddresses(
+        contractsAddresses: string[],
+        methodParams: string[] | null,
+        contractAbi: any,
+        methodName: string,
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
+        await this.initializeHealthFactorEngine();
+
+        const contractInterface = new ethers.Interface(contractAbi);
+        const batchRequests = contractsAddresses.map(
+            (contractAddress, index) => ({
+                jsonrpc: "2.0",
+                method: "eth_call",
+                params: [
+                    {
+                        to: contractAddress,
+                        data: methodParams
+                            ? contractInterface.encodeFunctionData(methodName, [
+                                  methodParams[index],
+                              ])
+                            : contractInterface.encodeFunctionData(methodName),
+                    },
+                    "latest",
+                ],
+                id: index,
+            })
+        );
+
+        try {
+            const alchemyUrl = this.getAaveChainInfo(
+                chain,
+                chainEnv
+            ).alchemyUrl;
+            const response = await fetch(alchemyUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(batchRequests),
+            });
+
+            const results = await response.json();
+
+            // Decode the results
+            const decodedResults = results.map((result: any) => {
+                if (result.error) {
+                    return { error: result.error };
+                }
+                return contractInterface.decodeFunctionResult(
+                    methodName,
+                    result.result
+                );
+            });
+
+            return decodedResults;
+        } catch (error) {
+            console.error("Error batch calling " + methodName, error);
+            return null;
+        }
+    }
 
     async fetchAllUsersReserves(userAddresses: string[]) {
         const ADDRESSES_BATCH_SIZE = 300; // Number of addresses per batch 200
@@ -346,9 +587,10 @@ class HealthFactorCheckEngine {
         await this.initializeHealthFactorEngine();
         const key = `${chain}-${chainEnv}`;
         // Get user account data
-        const userAccountData = await this.lendingPoolContracts[
-            key
-        ].getUserAccountData(address);
+        const userAccountData = await this.getAaveChainInfo(
+            chain,
+            chainEnv
+        ).aaveLendingPoolContract.getUserAccountData(address);
 
         if (userAccountData && userAccountData.length > 5) {
             // Extract health factor

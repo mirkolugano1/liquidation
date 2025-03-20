@@ -54,6 +54,14 @@ class WebhookEngine {
         this.addresses = initAddresses;
     }
 
+    async processAavePriceOracleEvent(req: any, res: any) {
+        let block = req.body.event?.data?.block;
+        let chain = req.query.chain ?? "eth";
+        let chainEnv = req.query.chainEnv ?? "mainnet";
+        //this.processAavePriceOracleEventBlock(block, chain, chainEnv);
+        console.log(block);
+    }
+
     async processAaveEvent(req: any, res: any) {
         let block = req.body.event?.data?.block;
         let chain = req.query.chain ?? "eth";
@@ -176,10 +184,16 @@ class WebhookEngine {
                                     : ""
                         );
 
+                        addressesListSql = _.reject(
+                            addressesListSql,
+                            _.isEmpty
+                        );
+
                         if (addressesListSql.length > 0) {
                             let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
                                 ","
                             )}`;
+                            console.log(query);
                             await sqlManager.execQuery(query);
                         }
 

@@ -37,9 +37,9 @@ class Common {
         return integerValue.toString(2);
     }
 
-    public async getLendingPoolContractsInfos() {
+    public async getAaveChainsInfos() {
         const contents = await fileUtilities.readFromTextFile(
-            "json/lendingPoolContractsInfos.json"
+            "json/aaveChainsInfos.json"
         );
         return JSON.parse(contents);
     }

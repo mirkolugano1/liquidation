@@ -27,6 +27,10 @@ app.get("/var", async (req: any, res: any) => {
     res.send(webhookEngine.getVariable(key));
 });
 
+app.post("/aavePriceOracleEvent", async (req: any, res: any) => {
+    await webhookEngine.processAavePriceOracleEvent(req, res);
+});
+
 app.post("/aaveEvent", async (req: any, res: any) => {
     await webhookEngine.processAaveEvent(req, res);
 });
