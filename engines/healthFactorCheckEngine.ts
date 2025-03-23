@@ -23,6 +23,8 @@ class HealthFactorCheckEngine {
         return HealthFactorCheckEngine.instance;
     }
 
+    //#region Initialization
+
     async initializeHealthFactorEngine() {
         if (this.aave) return;
         this.aave = {};
@@ -44,44 +46,7 @@ class HealthFactorCheckEngine {
                 aaveChainInfo
             );
         }
-
-        this.aaveLendingPoolInterface = new ethers.Interface(
-            this.aaveLendingPoolContractAbi
-        );
     }
-
-    //#region Variables
-
-    aave: any;
-    aaveLendingPoolInterface: any;
-    balanceOfAbi = ["function balanceOf(address) view returns (uint256)"];
-    oldReservesPrices: any;
-
-    aaveLendingPoolContractAbi = [
-        "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
-        "function getUserEMode(address user) external view returns (uint256)",
-        "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
-        "function getReservesList() external view returns (address[] memory)",
-        "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
-        "function getUserConfiguration(address user) external view returns (uint256 configuration)",
-    ];
-
-    aaveAddressesProviderContractAbi = [
-        "function getPriceOracle() external view returns (address)",
-    ];
-
-    // Aave Oracle ABI (just the function we need)
-    aavePriceOracleAbi = [
-        "function getSourceOfAsset(address asset) external view returns (address)",
-        "function getAssetsPrices(address[] calldata assets) external view returns (uint256[] memory)",
-    ];
-
-    aaveReserveOracleAbi = [
-        "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
-        "function latestAnswer() external view returns (int256)",
-    ];
-
-    //#endregion Variables
 
     async setAaveChainInfo(
         privateKey: string,
@@ -113,36 +78,19 @@ class HealthFactorCheckEngine {
             provider
         );
 
-        const aggregatorInterface = new ethers.Interface([
-            "function latestRoundData() external view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)",
-        ]);
         const reserves = await aaveLendingPoolContract.getReservesList();
-        //let reserveOracles: any = {};
         let tokenContracts: any = {};
         let tokenDecimals: any = {};
         for (const reserve of reserves) {
-            const tokenAbi = [
-                "function decimals() external view returns (uint8)",
-            ];
             const tokenContract = new ethers.Contract(
                 reserve,
-                tokenAbi,
+                this.aaveTokenAbi,
                 provider
             );
             tokenContracts[reserve] = tokenContract;
 
             const decimals = await tokenContract.decimals();
             tokenDecimals[reserve] = decimals;
-
-            /*
-            const oracleAddress =
-                await aavePriceOracleContract.getSourceOfAsset(reserve);
-            reserveOracles[reserve] = new ethers.Contract(
-                oracleAddress,
-                aggregatorInterface,
-                provider
-            );
-            */
         }
 
         return _.assign(aaveChainInfo, {
@@ -152,12 +100,44 @@ class HealthFactorCheckEngine {
             aaveLendingPoolContract: aaveLendingPoolContract,
             aaveAddressesProviderContract: aaveAddressesProviderContract,
             aavePriceOracleContract: aavePriceOracleContract,
-            //reserveOraclesContracts: reserveOracles,
             tokenContracts: tokenContracts,
             tokenDecimals: tokenDecimals,
             reserves: Array.from(reserves),
         });
     }
+
+    //#endregion Initialization
+
+    //#region Variables
+
+    aave: any;
+    oldReservesPrices: any;
+
+    aaveLendingPoolContractAbi = [
+        "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
+        "function getUserEMode(address user) external view returns (uint256)",
+        "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
+        "function getReservesList() external view returns (address[] memory)",
+        "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
+        "function getUserConfiguration(address user) external view returns (uint256 configuration)",
+    ];
+
+    aaveAddressesProviderContractAbi = [
+        "function getPriceOracle() external view returns (address)",
+    ];
+
+    aavePriceOracleAbi = [
+        "function getAssetsPrices(address[] calldata assets) external view returns (uint256[] memory)",
+    ];
+
+    aaveTokenAbi = [
+        "function balanceOf(address) view returns (uint256)",
+        "function decimals() external view returns (uint8)",
+    ];
+
+    //#endregion Variables
+
+    //#region Helper methods
 
     getAaveChainInfo(chain: string, chainEnv: string = "mainnet") {
         const key = `${chain}-${chainEnv}`;
@@ -169,11 +149,22 @@ class HealthFactorCheckEngine {
         return parseFloat(healthFactorStr);
     }
 
+    //#endregion Helper methods
+
+    //#region healthFactor DB check loop
+
+    /**
+     * This method is used to periodically check the health factor and userConfiguration of the addresses that are stored in the DB,
+     * so that the data in the DB is always up to date, up to the interval of the cron job that calls this method.
+     * The method does NOT contains an infinite loop. It is meant to be scheduled by a cron job or similar.
+     *
+     * TODO: schedule this method to run every hour or so on azure
+     * TODO: check Compute Units utilization of method batchEthCallForAddresses if there are many addresses, evtl split call in smaller chunks
+     */
     async periodicalAccountsHealthFactorAndConfigurationCheck() {
         const aaveChainsInfos = await common.getAaveChainsInfos();
         await this.initializeHealthFactorEngine();
         for (const info of aaveChainsInfos) {
-            //mirko
             const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
                 info.chain,
                 info.chainEnv
@@ -226,7 +217,21 @@ class HealthFactorCheckEngine {
         }
     }
 
-    async getHealthFactor(chain: string, chainEnv: string, address: string) {
+    //#endregion healthFactor DB check loop
+
+    /**
+     * This method is used currently from webhookEngine.ts to get the health factor and user configuration for a given address
+     *
+     * @param address
+     * @param chain
+     * @param chainEnv
+     * @returns
+     */
+    async getUserHealthFactorAndConfiguration(
+        address: string,
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
         await this.initializeHealthFactorEngine();
         let aaveLendingPoolContract = this.getAaveChainInfo(
             chain,
@@ -234,16 +239,35 @@ class HealthFactorCheckEngine {
         ).aaveLendingPoolContract;
         const userAccountData =
             await aaveLendingPoolContract.getUserAccountData(address);
-        return this.getHealthFactorFromUserAccountData(userAccountData);
+        return {
+            healthFactor:
+                this.getHealthFactorFromUserAccountData(userAccountData),
+            userConfiguration:
+                await aaveLendingPoolContract.getUserConfiguration(address),
+        };
     }
 
+    /**
+     *  Check the health factor for the addresses that have the reserves whose prices have changed, either as collateral or as debt
+     *  and liquidate them if their health factor is below 1. The method contains an infinite loop that checks the reserves prices
+     *  every n seconds and if the prices have changed, it checks the health factor for the addresses that have the changed reserves
+     *
+     * //TODO check Compute Units utilization of method batchEthCallForAddresses if there are many addresses, evtl split call in smaller chunks
+     * //TODO implement logic to decide which asset pair to liquidate for a given user
+     * //TODO connect to smart contract for liquidation process
+     *
+     * @param chain
+     * @param chainEnv
+     */
     async checkReservesPrices(chain: string, chainEnv: string = "mainnet") {
+        //#region initialization
+
         await this.initializeHealthFactorEngine();
         const aaveChainInfo: any = this.getAaveChainInfo(chain, chainEnv);
-        const addressesDb = await sqlManager.execQuery(
-            `SELECT * FROM addresses where chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}' AND healthfactor < 2;`
-        );
         const reserves = aaveChainInfo.reserves;
+
+        //#endregion
+
         /*
             check price changes for each reserve
             changes must be relevant to the last price and according to this formula
@@ -260,185 +284,239 @@ class HealthFactorCheckEngine {
             High-Volatility	    0.001 to 0.01
         */
 
-        const prices =
-            await aaveChainInfo.aavePriceOracleContract.getAssetsPrices(
-                reserves
-            );
+        //#region infinite loop
 
-        let newReservesPrices: any = {};
-        for (let i = 0; i < reserves.length; i++) {
-            const reserveAddress = reserves[i];
-            const price = prices[i];
-            newReservesPrices[reserveAddress] = price;
-        }
-
-        let shouldPerformCheck = false;
-        if (!this.oldReservesPrices) this.oldReservesPrices = newReservesPrices;
-        else {
-            let reservesChangedCheck: any[] = [];
-            for (const reserveAddress of reserves) {
-                const oldPrice = this.oldReservesPrices[reserveAddress];
-                const newPrice = newReservesPrices[reserveAddress];
-                const decimals = aaveChainInfo.tokenDecimals[reserveAddress];
-                const normalizedChange = new Big(newPrice - oldPrice).div(
-                    new Big(10).pow(
-                        new Big(18).minus(new Big(decimals)).toNumber()
-                    )
+        while (true) {
+            //get the prices for the reserves of the lending protocol
+            const prices =
+                await aaveChainInfo.aavePriceOracleContract.getAssetsPrices(
+                    reserves
                 );
 
-                let check = "none";
-                if (normalizedChange.abs().gte(new Big(0.0005))) {
-                    console.log(
-                        `Price change for reserve ${reserveAddress} is ${normalizedChange.toNumber()}`
-                    );
-
-                    shouldPerformCheck = true;
-                    //add current reserve to the list of changed reserves
-                    check =
-                        normalizedChange.toNumber() < 0 ? "collateral" : "debt";
-
-                    //update the old price of the current reserve to the changed price, so that we base our next change detection
-                    //on this current price and not the old one
-                    this.oldReservesPrices[reserveAddress] = newPrice;
-                }
-
-                reservesChangedCheck.push({
-                    reserve: reserveAddress,
-                    check: check,
-                });
+            let newReservesPrices: any = {};
+            for (let i = 0; i < reserves.length; i++) {
+                const reserveAddress = reserves[i];
+                const price = prices[i];
+                newReservesPrices[reserveAddress] = price;
             }
 
-            //filter the addresses from the DB that have the changed reserves either as collateral or as debt
-            if (shouldPerformCheck) {
-                const addressesDb = await sqlManager.execQuery(
-                    `SELECT * FROM addresses where chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}' AND healthfactor < 2;`
-                );
-                let userAssets: any = [];
-                let addressesToCheck: any = [];
-                for (const addressRecord of addressesDb) {
-                    const userConfiguration = addressRecord.userconfiguration;
+            //by default we should not perform the check. If price changes are found, we do check
+            let shouldPerformCheck = false;
 
-                    let i = userConfiguration.length - 1;
-                    for (let reserveChangedCheck of reservesChangedCheck) {
-                        if (reserveChangedCheck.check != "none") {
-                            if (
-                                userConfiguration[i] == "1" &&
-                                reserveChangedCheck.check == "debt"
-                            ) {
-                                addressesToCheck.push(
-                                    reserveChangedCheck.reserve
-                                );
+            //if it is the first time we check the prices, we store the current prices as old prices
+            if (!this.oldReservesPrices)
+                this.oldReservesPrices = newReservesPrices;
+            else {
+                //check if the prices have changed for the reserves
+                let reservesChangedCheck: any[] = [];
+                for (const reserveAddress of reserves) {
+                    const oldPrice = this.oldReservesPrices[reserveAddress];
+                    const newPrice = newReservesPrices[reserveAddress];
+                    const decimals =
+                        aaveChainInfo.tokenDecimals[reserveAddress];
+                    const normalizedChange = new Big(newPrice - oldPrice).div(
+                        new Big(10).pow(
+                            new Big(18).minus(new Big(decimals)).toNumber()
+                        )
+                    );
 
+                    let check = "none";
+
+                    //if the normalized change is greater than the given treshold, we should perform the check
+                    if (normalizedChange.abs().gte(new Big(0.0005))) {
+                        console.log(
+                            `Price change for reserve ${reserveAddress} is ${normalizedChange.toNumber()}`
+                        );
+
+                        //if we come here, it means there is at least 1 changed reserve. We should perform the check
+                        //later on all accounts that have the changed reserves either as collateral or as debt
+                        //depending if price has gone up or down
+                        shouldPerformCheck = true;
+
+                        //add current reserve to the list of changed reserves and check if it should be checked as collateral or a debt
+                        check =
+                            normalizedChange.toNumber() < 0
+                                ? "collateral"
+                                : "debt";
+
+                        //update the old price of the current reserve to the changed price, so that we base our next change detection
+                        //on this current price and not the old one
+                        this.oldReservesPrices[reserveAddress] = newPrice;
+                    }
+
+                    //add the reserve to the list of changed reserves. If no price change for this reserve has happened, the check will be "none"
+                    reservesChangedCheck.push({
+                        reserve: reserveAddress,
+                        check: check,
+                    });
+                }
+
+                //filter the addresses from the DB that have the changed reserves either as collateral or as debt
+                if (shouldPerformCheck) {
+                    //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
+                    const addressesDb = await sqlManager.execQuery(
+                        `SELECT * FROM addresses where chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}' AND healthfactor < 2;`
+                    );
+
+                    //define object (map) of user assets that have the changed reserves either as collateral or as debt
+                    //userAssets: {address: {collateral: [reserves], debt: [reserves]}}
+                    let userAssets: any = {};
+
+                    //loop through loaded addresses from DB
+                    for (const addressRecord of addressesDb) {
+                        //get user configuration in string format e.g. 100010001100 (it's stored in DB as a string)
+                        const userConfiguration =
+                            addressRecord.userconfiguration;
+
+                        let i = userConfiguration.length - 1;
+
+                        //loop through reserves
+                        for (let reserveChangedCheck of reservesChangedCheck) {
+                            //if reserve price has not changed, we skip it
+                            if (reserveChangedCheck.check != "none") {
                                 if (
-                                    !userAssets.hasOwnProperty(
-                                        addressRecord.address
+                                    userConfiguration[i] == "1" &&
+                                    reserveChangedCheck.check == "debt"
+                                ) {
+                                    //#region check object null property
+
+                                    if (
+                                        !userAssets.hasOwnProperty(
+                                            addressRecord.address
+                                        )
                                     )
-                                )
-                                    userAssets[addressRecord.address] = {};
-                                if (
-                                    !userAssets[
-                                        addressRecord.address
-                                    ].hasOwnProperty("debt")
-                                )
-                                    userAssets[addressRecord.address].debt = [];
-                                userAssets[addressRecord.address].debt.push(
-                                    reserveChangedCheck.reserve
-                                );
-                            } else if (
-                                i > 0 &&
-                                userConfiguration[i - 1] == "1" &&
-                                reserveChangedCheck.check == "collateral"
-                            ) {
-                                addressesToCheck.push(
-                                    reserveChangedCheck.reserve
-                                );
-
-                                if (
-                                    !userAssets.hasOwnProperty(
-                                        addressRecord.address
+                                        userAssets[addressRecord.address] = {};
+                                    if (
+                                        !userAssets[
+                                            addressRecord.address
+                                        ].hasOwnProperty("debt")
                                     )
-                                )
-                                    userAssets[addressRecord.address] = {};
-                                if (
-                                    !userAssets[
-                                        addressRecord.address
-                                    ].hasOwnProperty("collateral")
-                                )
+                                        userAssets[addressRecord.address].debt =
+                                            [];
+
+                                    //#endregion
+
+                                    userAssets[addressRecord.address].debt.push(
+                                        reserveChangedCheck.reserve
+                                    );
+                                } else if (
+                                    i > 0 &&
+                                    userConfiguration[i - 1] == "1" &&
+                                    reserveChangedCheck.check == "collateral"
+                                ) {
+                                    //#region check object null property
+
+                                    if (
+                                        !userAssets.hasOwnProperty(
+                                            addressRecord.address
+                                        )
+                                    )
+                                        userAssets[addressRecord.address] = {};
+                                    if (
+                                        !userAssets[
+                                            addressRecord.address
+                                        ].hasOwnProperty("collateral")
+                                    )
+                                        userAssets[
+                                            addressRecord.address
+                                        ].collateral = [];
+
+                                    //#endregion
+
                                     userAssets[
                                         addressRecord.address
-                                    ].collateral = [];
-                                userAssets[
-                                    addressRecord.address
-                                ].collateral.push(reserveChangedCheck.reserve);
+                                    ].collateral.push(
+                                        reserveChangedCheck.reserve
+                                    );
+                                }
                             }
+                            i = i - 2;
                         }
-                        i = i - 2;
                     }
-                }
 
-                if (addressesToCheck.length > 0) {
+                    //get list of addresses for which to check health factor from the userAssets object
+                    const addressesToCheck = Object.keys(userAssets);
+
                     //check the health factor for the addresses that have the changed reserves either as collateral or as debt
-                    //mirko
-                    const aaveLendingPoolContractAddress =
-                        await this.getAaveChainInfo(
-                            aaveChainInfo.chain,
-                            aaveChainInfo.chainEnv
-                        ).aaveLendingPoolContract.target;
+                    if (addressesToCheck.length > 0) {
+                        //#region setup array of contract addresses to call with same address multiple times
 
-                    let contractAddressArray = [];
-                    for (let i = 0; i < addressesToCheck.length; i++) {
-                        contractAddressArray.push(
-                            aaveLendingPoolContractAddress
-                        );
-                    }
+                        const aaveLendingPoolContractAddress =
+                            await this.getAaveChainInfo(
+                                aaveChainInfo.chain,
+                                aaveChainInfo.chainEnv
+                            ).aaveLendingPoolContract.target;
 
-                    const userAccountData = await this.batchEthCallForAddresses(
-                        contractAddressArray,
-                        addressesToCheck,
-                        this.aaveLendingPoolContractAbi,
-                        "getUserAccountData",
-                        aaveChainInfo.chain,
-                        aaveChainInfo.chainEnv
-                    );
+                        let contractAddressArray = [];
+                        for (let i = 0; i < addressesToCheck.length; i++) {
+                            contractAddressArray.push(
+                                aaveLendingPoolContractAddress
+                            );
+                        }
 
-                    let addressesToLiquidate: any[] = [];
+                        //#endregion
 
-                    for (let i = 0; i < addressesToCheck.length; i++) {
-                        const address = addressesToCheck[i];
-                        const healthFactor =
-                            this.getHealthFactorFromUserAccountData(
-                                userAccountData[i]
+                        //batch call the health factor for the addresses
+                        const userAccountData =
+                            await this.batchEthCallForAddresses(
+                                contractAddressArray,
+                                addressesToCheck,
+                                this.aaveLendingPoolContractAbi,
+                                "getUserAccountData",
+                                aaveChainInfo.chain,
+                                aaveChainInfo.chainEnv
                             );
 
-                        if (healthFactor < 1) {
-                            console.log(
-                                "User " +
-                                    address +
-                                    " has health factor below 1: HF = " +
-                                    healthFactor
-                            );
+                        let addressesToLiquidate: any[] = [];
 
-                            const assetsToLiquidate: string[] =
-                                await this.decideWhichAssetPairToLiquidate(
-                                    address,
-                                    userAssets[address]
+                        //iterate through the results and check the health factor of corresponding address
+                        for (let i = 0; i < addressesToCheck.length; i++) {
+                            //get address and health factor
+                            const address = addressesToCheck[i];
+                            const healthFactor =
+                                this.getHealthFactorFromUserAccountData(
+                                    userAccountData[i]
                                 );
 
-                            addressesToLiquidate.push({
-                                address: address,
-                                assets: assetsToLiquidate, //TODO get addresses pair to liquidate
-                            });
+                            //if health factor is below 1, we add the address to the list of addresses to liquidate
+                            if (healthFactor < 1) {
+                                console.log(
+                                    "User " +
+                                        address +
+                                        " has health factor below 1: HF = " +
+                                        healthFactor
+                                );
+
+                                //decide which asset pair to liquidate for the user based on the userAssets collateral and debt properties
+                                const assetsToLiquidate: string[] =
+                                    await this.decideWhichAssetPairToLiquidate(
+                                        address,
+                                        userAssets[address]
+                                    );
+
+                                //add the address to the list of addresses to liquidate
+                                addressesToLiquidate.push({
+                                    address: address,
+                                    assets: assetsToLiquidate,
+                                });
+                            }
                         }
-                    }
 
-                    if (addressesToLiquidate.length > 0) {
-                        //TODO MIRKO liquidate the addresses
-
-                        console.log(addressesToLiquidate);
+                        //Trigger liquidation
+                        if (addressesToLiquidate.length > 0) {
+                            //TODO MIRKO liquidate the addresses
+                            console.log("Found Addresses to liquidate:");
+                            console.log(addressesToLiquidate);
+                        }
                     }
                 }
             }
+
+            //wait 3 seconds before checking again
+            await common.sleep(3000);
         }
+
+        //#endregion infinite loop
     }
 
     /**
@@ -550,17 +628,17 @@ class HealthFactorCheckEngine {
             // Check user's balances for the collateral and debt tokens
             const aTokenContract = new ethers.Contract(
                 reserveData.aTokenAddress,
-                this.balanceOfAbi,
+                this.aaveTokenBalanceOfAbi,
                 this.signer
             );
             const stableDebtTokenContract = new ethers.Contract(
                 reserveData.stableDebtTokenAddress,
-                this.balanceOfAbi,
+                this.aaveTokenBalanceOfAbi,
                 this.signer
             );
             const variableDebtTokenContract = new ethers.Contract(
                 reserveData.variableDebtTokenAddress,
-                this.balanceOfAbi,
+                this.aaveTokenBalanceOfAbi,
                 this.signer
             );
 
