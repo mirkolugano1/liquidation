@@ -44,6 +44,10 @@ class Common {
         return JSON.parse(contents);
     }
 
+    public async sleep(ms: number) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
     public static getInstance(): Common {
         if (!Common.instance) {
             Common.instance = new Common();

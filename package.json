@@ -13,6 +13,7 @@
         "express": "^4.21.2",
         "fs": "^0.0.1-security",
         "graphql-request": "^7.1.2",
+        "jest": "^29.7.0",
         "lodash": "^4.17.21",
         "mssql": "^11.0.1",
         "npx": "^10.2.2",
@@ -24,7 +25,8 @@
         "build": "tsc",
         "sandbox": "npx ts-node --transpileOnly clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly clients/webServer.ts",
-        "webJob": "npx ts-node --transpileOnly clients/webJob.ts"
+        "webJob": "npx ts-node --transpileOnly clients/webJob.ts",
+        "test": "node --test --require ts-node/register tests/*.test.ts"
     },
     "dependencies": {
         "@types/lodash": "^4.17.15"

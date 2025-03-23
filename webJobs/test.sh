@@ -4,7 +4,7 @@
 cd /home/site/wwwroot
 
 # Run the script defined in package.json with the provided parameter
-npm run webJob test
+npm run webJob testJob
 
 # Check the exit status of the last command
 if [ $? -eq 0 ]; then

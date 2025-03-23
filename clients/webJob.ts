@@ -7,14 +7,11 @@ async function main() {
     if (args.length < 3)
         throw new Error("Must define function to be executed.");
     const job = args[2];
-    switch (job) {
-        case "test":
-            await healthFactorCheckEngine.test();
-            break;
-        case "performHealthFactorCheckPeriodic":
-            await healthFactorCheckEngine.performHealthFactorCheckPeriodic();
-            break;
-    }
+
+    if (healthFactorCheckEngine.hasOwnProperty(job) == false)
+        throw new Error("Invalid function to be executed.");
+
+    await (healthFactorCheckEngine as any)[job]();
 }
 
 main().catch((error) => {

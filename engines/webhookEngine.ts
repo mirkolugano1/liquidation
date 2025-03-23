@@ -4,11 +4,15 @@ import healthFactorCheckEngine from "./healthFactorCheckEngine";
 import { ethers } from "ethers";
 
 class WebhookEngine {
+    //#region variables
+
+    //these are in the form of {chain: [address1, address2, ...]}
     addresses: any = {};
     uniqueAddresses: any = {};
+    uniqueAddressesHF: any = {};
 
     addAddressTreshold = 0;
-    uniqueAddressesHF: any = {};
+    isInitialized: boolean = false;
 
     ifaceBorrow: any;
     borrowEventAbi: string[] = [
@@ -19,6 +23,8 @@ class WebhookEngine {
     depositEventAbi: string[] = [
         "event Deposit(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referral)",
     ];
+
+    //#endregion variables
 
     private static instance: WebhookEngine;
     private constructor() {}
@@ -37,6 +43,9 @@ class WebhookEngine {
     }
 
     async initializeProcessAaveEvent() {
+        if (this.isInitialized) return;
+        this.isInitialized = true;
+
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
 
@@ -54,22 +63,19 @@ class WebhookEngine {
         this.addresses = initAddresses;
     }
 
-    async processAavePriceOracleEvent(req: any, res: any) {
-        let block = req.body.event?.data?.block;
-        let chain = req.query.chain ?? "eth";
-        let chainEnv = req.query.chainEnv ?? "mainnet";
-        //this.processAavePriceOracleEventBlock(block, chain, chainEnv);
-        console.log(block);
-    }
-
     async processAaveEvent(req: any, res: any) {
         let block = req.body.event?.data?.block;
-        let chain = req.query.chain ?? "eth";
-        let chainEnv = req.query.chainEnv ?? "mainnet";
+        let chain = req.query.chain;
+        if (!chain) throw new Error("Missing required parameter: chain");
+        let chainEnv = req.query.chainEnv;
         await this.processBlock(block, chain, chainEnv);
     }
 
-    async processBlock(block: any, chain: string, chainEnv: string) {
+    async processBlock(
+        block: any,
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
         for (let log of block.logs) {
             let topics = log.topics;
             let eventHash = topics[0];
@@ -169,7 +175,7 @@ class WebhookEngine {
 
                         for (const address of this.uniqueAddresses[key]) {
                             this.uniqueAddressesHF[key][address] =
-                                await healthFactorCheckEngine.getUserHealthFactor(
+                                await healthFactorCheckEngine.getUserHealthFactorAndConfiguration(
                                     chain,
                                     chainEnv,
                                     address
@@ -179,8 +185,13 @@ class WebhookEngine {
                         //only save addresses with healthfactor < 5
                         let addressesListSql = this.uniqueAddresses[key].map(
                             (address: string) =>
-                                this.uniqueAddressesHF[key][address] < 5
-                                    ? `('${address}', '${key}', ${this.uniqueAddressesHF[key][address]})`
+                                this.uniqueAddressesHF[key][address]
+                                    .healthFactor < 5
+                                    ? `('${address}', '${key}', ${
+                                          (this.uniqueAddressesHF[key][address]
+                                              .healthFactor,
+                                          `${this.uniqueAddressesHF[key][address].userConfiguration}`)
+                                      })`
                                     : ""
                         );
 
@@ -190,7 +201,7 @@ class WebhookEngine {
                         );
 
                         if (addressesListSql.length > 0) {
-                            let query = `INSERT INTO addresses (address, chain, healthfactor) VALUES ${addressesListSql.join(
+                            let query = `INSERT INTO addresses (address, chain, healthfactor, userconfiguration) VALUES ${addressesListSql.join(
                                 ","
                             )}`;
                             console.log(query);

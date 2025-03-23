@@ -1,10 +1,8 @@
 import common from "../common/common";
-import _, { forEach } from "lodash";
+import _ from "lodash";
 import encryption from "../common/encryption";
-import fileUtilities from "../common/fileUtilities";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
-import { ChainedTokenCredential } from "@azure/identity";
 import Big from "big.js";
 
 class HealthFactorCheckEngine {
@@ -601,7 +599,7 @@ class HealthFactorCheckEngine {
         }
     }
 
-    async test() {
+    async testJob() {
         console.log("test successful");
     }
 

@@ -1,0 +1,30 @@
+name: Delete Old Workflow Runs And Deployments
+
+on:
+    schedule:
+        - cron: "0 0 * * *" # Runs daily at midnight UTC, change as needed
+
+jobs:
+    delete_runs:
+        runs-on: ubuntu-latest
+        permissions:
+            actions: write # Needed for deleting runs
+        steps:
+            - name: Delete workflow runs
+              uses: actions/delete-workflow-runs@v3
+              with:
+                  keep_minimum_runs: 0 # Keep no runs
+                  older_than: 1 # Delete runs older than 1 day
+
+    delete_deployments:
+        runs-on: ubuntu-latest
+        permissions:
+            deployments: write # Needed for deleting deployments
+        steps:
+            - name: Delete old deployments
+              run: |
+                  gh api repos/${{ github.repository }}/deployments \
+                  --jq '.[].id' | xargs -I {} gh api -X DELETE \
+                  repos/${{ github.repository }}/deployments/{}
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
