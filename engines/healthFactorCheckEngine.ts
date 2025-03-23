@@ -237,11 +237,18 @@ class HealthFactorCheckEngine {
         ).aaveLendingPoolContract;
         const userAccountData =
             await aaveLendingPoolContract.getUserAccountData(address);
+
+        const healthFactor =
+            this.getHealthFactorFromUserAccountData(userAccountData);
+        const userConfiguration =
+            await aaveLendingPoolContract.getUserConfiguration(address);
+
+        const userConfigurationBinary = common.intToBinary(
+            parseInt(userConfiguration)
+        );
         return {
-            healthFactor:
-                this.getHealthFactorFromUserAccountData(userAccountData),
-            userConfiguration:
-                await aaveLendingPoolContract.getUserConfiguration(address),
+            healthFactor: healthFactor,
+            userConfiguration: userConfigurationBinary,
         };
     }
 
