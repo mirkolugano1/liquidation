@@ -5,11 +5,18 @@
     "version": "0.2.0",
     "configurations": [
         {
+            "command": "npm run test",
+            "name": "Debug",
+            "request": "launch",
+            "type": "node-terminal"
+        },
+
+        {
             "type": "node",
             "request": "launch",
             "name": "Launch Program",
             "skipFiles": ["<node_internals>/**"],
-            "program": "${workspaceFolder}\\clients\\webServer.ts",
+            "program": "${workspaceFolder}\\clients\\sandbox.ts",
             "outFiles": ["${workspaceFolder}/**/*.js"]
         }
     ]

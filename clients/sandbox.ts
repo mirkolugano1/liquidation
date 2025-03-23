@@ -3,7 +3,6 @@ import common from "../common/common";
 import sqlManager from "../managers/sqlManager";
 import encryption from "../common/encryption";
 import fileUtilities from "../common/fileUtilities";
-import keccak from "../common/keccak";
 import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 import webhookEngine from "../engines/webhookEngine";
 import _, { add, forEach } from "lodash";
@@ -12,8 +11,10 @@ import { ethers } from "ethers";
 dotenv.config();
 
 async function main() {
-    await healthFactorCheckEngine.getReservesPrices("arb");
+    console.log("aa");
+    //await healthFactorCheckEngine.checkReservesPrices("arb");
     //await healthFactorCheckEngine.periodicalAccountsHealthFactorAndConfigurationCheck();
+    process.exit(0);
 }
 
 main()
