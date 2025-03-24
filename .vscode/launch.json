@@ -6,7 +6,7 @@
     "configurations": [
         {
             "command": "npm run test",
-            "name": "Debug",
+            "name": "Debug Tests",
             "request": "launch",
             "type": "node-terminal"
         },

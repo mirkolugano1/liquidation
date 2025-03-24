@@ -1,4 +1,4 @@
-import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
+import healthFactorCheckEngine from "../engines/healthFactorCheckEngine.js";
 import dotenv from "dotenv";
 dotenv.config();
 
@@ -14,7 +14,5 @@ async function main() {
     await (healthFactorCheckEngine as any)[job]();
 }
 
-main().catch((error) => {
-    console.log("Error: " + error);
-    process.exit(1);
-});
+await main();
+process.exit(0);

@@ -1,17 +1,12 @@
 import _ from "lodash";
 import encryption from "./encryption";
-import fileUtilities from "./fileUtilities";
 
 class Common {
-    public addressesFilePath = "/home/data/addresses.txt";
-    public appInsights: any = null;
-    public isProd: boolean = false;
+    public isProd: boolean;
     private static instance: Common;
     private constructor() {
         this.isProd =
             process.env.LIQUIDATIONENVIRONMENT?.toLowerCase() == "prod";
-
-        this.isProd = true;
     }
 
     keyVaultEntries: string[] = [
@@ -35,13 +30,6 @@ class Common {
 
     public intToBinary(integerValue: any) {
         return integerValue.toString(2);
-    }
-
-    public async getAaveChainsInfos() {
-        const contents = await fileUtilities.readFromTextFile(
-            "json/aaveChainsInfos.json"
-        );
-        return JSON.parse(contents);
     }
 
     public async sleep(ms: number) {

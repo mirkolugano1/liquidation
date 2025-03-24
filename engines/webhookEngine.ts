@@ -38,11 +38,43 @@ class WebhookEngine {
 
     //#region Alchemy Webhook
 
-    getVariable(key: string) {
-        return JSON.stringify((this as any)[key]);
+    manageVariable(req: any) {
+        const key = req.query.key;
+        if (!key) throw new Error("Missing required parameter: key");
+
+        let method = req.query.method;
+        if (!method) method = "get";
+        let isHFEngineVar = false;
+        let canSetVar = false;
+        switch (key) {
+            case "checkReservesPricesIntervalInSeconds":
+                canSetVar = true;
+                isHFEngineVar = true;
+                break;
+        }
+
+        const varIsFound = isHFEngineVar
+            ? healthFactorCheckEngine.hasOwnProperty(key)
+            : this.hasOwnProperty(key);
+        if (!varIsFound) throw new Error("Variable not found");
+
+        if (method === "set") {
+            if (canSetVar) {
+                if (isHFEngineVar)
+                    (healthFactorCheckEngine as any)[key] = req.query.value;
+                else (this as any)[key] = req.query.value;
+                return `Variable ${key} set to ${req.query.value}`;
+            } else {
+                throw new Error("Forbidden: Variable cannot be set");
+            }
+        } else {
+            return isHFEngineVar
+                ? (healthFactorCheckEngine as any)[key]
+                : JSON.stringify((this as any)[key]);
+        }
     }
 
-    async initializeProcessAaveEvent() {
+    async initializeWebhookEngine() {
         if (this.isInitialized) return;
         this.isInitialized = true;
 
@@ -204,7 +236,6 @@ class WebhookEngine {
                             let query = `INSERT INTO addresses (address, chain, healthfactor, userconfiguration) VALUES ${addressesListSql.join(
                                 ","
                             )}`;
-                            console.log(query);
                             await sqlManager.execQuery(query);
                         }
 

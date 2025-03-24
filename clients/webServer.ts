@@ -1,4 +1,3 @@
-import common from "../common/common";
 import webhookEngine from "../engines/webhookEngine";
 import dotenv from "dotenv";
 import express from "express";
@@ -16,15 +15,7 @@ app.get("/healthcheck", (req: any, res: any) => {
 });
 
 app.get("/var", async (req: any, res: any) => {
-    const env = await common.getAppSetting("LIQUIDATIONENVIRONMENT");
-
-    if (env == "prod") {
-        res.send("Forbidden");
-        return;
-    }
-
-    const key = req.query.key;
-    res.send(webhookEngine.getVariable(key));
+    res.send(webhookEngine.manageVariable(req));
 });
 
 app.post("/aaveEvent", async (req: any, res: any) => {
@@ -32,7 +23,7 @@ app.post("/aaveEvent", async (req: any, res: any) => {
 });
 
 app.listen(8080, "0.0.0.0", async () => {
-    console.log("Web server is up. Initializing process...");
-    await webhookEngine.initializeProcessAaveEvent();
+    console.log("Web server is up. Initializing webhookEngine...");
+    await webhookEngine.initializeWebhookEngine();
     console.log("Initialization complete.");
 });

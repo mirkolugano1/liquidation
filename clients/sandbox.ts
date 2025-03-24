@@ -1,26 +1,15 @@
-import { CloudStorageManager } from "../managers/cloudStorageManager";
-import common from "../common/common";
-import sqlManager from "../managers/sqlManager";
-import encryption from "../common/encryption";
-import fileUtilities from "../common/fileUtilities";
-import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
-import webhookEngine from "../engines/webhookEngine";
-import _, { add, forEach } from "lodash";
+import _ from "lodash";
 import dotenv from "dotenv";
-import { ethers } from "ethers";
 dotenv.config();
 
+process.on("unhandledRejection", (reason, promise) => {
+    process.exit(1);
+});
+
 async function main() {
-    console.log("aa");
-    //await healthFactorCheckEngine.checkReservesPrices("arb");
-    //await healthFactorCheckEngine.periodicalAccountsHealthFactorAndConfigurationCheck();
-    process.exit(0);
+    //await healthFactorCheckEngine.doTest();
+    throw new Error("Not implemented");
 }
 
-main()
-    .then(() => process.exit(0))
-    .catch((error) => {
-        console.error("Error:", error);
-        process.exit(1);
-    })
-    .finally(() => process.exit(0));
+await main();
+process.exit(0);
