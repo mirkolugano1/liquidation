@@ -1,3 +1,11 @@
+
+**************************
+*************************
+this is not in use. Long polling of price changes is implemented due to data from oracles not being get at all
+and potentially having delays in the data
+***************************
+***********************
+
 Arbitrum Mainnet
 
 Arb_PriceOracleEvents_Dev

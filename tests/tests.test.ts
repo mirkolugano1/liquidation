@@ -1,10 +1,9 @@
-import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
-import webhookEngine from "../engines/webhookEngine";
-import sqlManager from "../managers/sqlManager";
+import healthFactorCheckEngine from "../src/engines/healthFactorCheckEngine";
+import webhookEngine from "../src/engines/webhookEngine";
+import sqlManager from "../src/managers/sqlManager";
 import * as assert from "node:assert/strict";
 import { before, test } from "node:test";
-import common from "../common/common";
-import logger from "../common/logger";
+import logger from "../src/shared/logger";
 
 function assertStringIsNotNullOrEmpty(value: any) {
     if (typeof value !== "string") value = value?.toString();

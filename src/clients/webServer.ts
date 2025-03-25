@@ -1,13 +1,21 @@
 import webhookEngine from "../engines/webhookEngine";
 import dotenv from "dotenv";
 import express from "express";
+import logger from "../shared/logger";
 
 dotenv.config();
+logger.initialize("webServer");
+logger.setOutputTypeHTML();
+
 const app = express();
 app.use(express.json());
 
 app.get("/", (req: any, res: any) => {
     res.send("Web server is up.");
+});
+
+app.get("/logs", async (req: any, res: any) => {
+    res.send(await logger.viewLogs(req.query.logLevel));
 });
 
 app.get("/healthcheck", (req: any, res: any) => {

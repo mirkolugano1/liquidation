@@ -10,14 +10,11 @@
             "request": "launch",
             "type": "node-terminal"
         },
-
         {
-            "type": "node",
+            "command": "npm run webJob -- testJob11",
+            "name": "Debug WebJob",
             "request": "launch",
-            "name": "Launch Program",
-            "skipFiles": ["<node_internals>/**"],
-            "program": "${workspaceFolder}\\clients\\sandbox.ts",
-            "outFiles": ["${workspaceFolder}/**/*.js"]
+            "type": "node-terminal"
         }
     ]
 }

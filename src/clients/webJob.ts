@@ -1,6 +1,9 @@
-import healthFactorCheckEngine from "../engines/healthFactorCheckEngine.js";
+import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 import dotenv from "dotenv";
+import logger from "../shared/logger";
 dotenv.config();
+
+logger.initialize("webJob");
 
 async function main() {
     const args = process.argv;
@@ -8,11 +11,10 @@ async function main() {
         throw new Error("Must define function to be executed.");
     const job = args[2];
 
-    if (healthFactorCheckEngine.hasOwnProperty(job) == false)
+    if (!(healthFactorCheckEngine as any)[job])
         throw new Error("Invalid function to be executed.");
 
     await (healthFactorCheckEngine as any)[job]();
 }
 
-await main();
-process.exit(0);
+main();

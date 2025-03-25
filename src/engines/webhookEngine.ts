@@ -2,6 +2,7 @@ import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
 import healthFactorCheckEngine from "./healthFactorCheckEngine";
 import { ethers } from "ethers";
+import logger from "../shared/logger";
 
 class WebhookEngine {
     //#region variables
@@ -97,8 +98,7 @@ class WebhookEngine {
 
     async processAaveEvent(req: any, res: any) {
         let block = req.body.event?.data?.block;
-        let chain = req.query.chain;
-        if (!chain) throw new Error("Missing required parameter: chain");
+        let chain = req.query.chain ?? "eth";
         let chainEnv = req.query.chainEnv;
         await this.processBlock(block, chain, chainEnv);
     }
@@ -237,6 +237,12 @@ class WebhookEngine {
                                 ","
                             )}`;
                             await sqlManager.execQuery(query);
+
+                            await logger.log(
+                                "Addresses added to the database: " +
+                                    JSON.stringify(addressesListSql),
+                                "webhookEngineProcessBlock"
+                            );
                         }
 
                         this.uniqueAddresses[key] = [];

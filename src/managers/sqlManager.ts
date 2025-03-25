@@ -1,5 +1,5 @@
-import common from "../common/common";
-import encryption from "../common/encryption";
+import common from "../shared/common";
+import encryption from "../shared/encryption";
 import sql from "mssql";
 
 import dotenv from "dotenv";

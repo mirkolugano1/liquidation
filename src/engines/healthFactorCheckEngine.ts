@@ -1,10 +1,11 @@
-import common from "../common/common.js";
+import common from "../shared/common";
 import _ from "lodash";
-import encryption from "../common/encryption.js";
-import sqlManager from "../managers/sqlManager.js";
+import encryption from "../shared/encryption";
+import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
-import fileUtilities from "../common/fileUtilities.js";
+import fileUtilities from "../managers/fileManager";
+import logger from "../shared/logger";
 
 class HealthFactorCheckEngine {
     private static instance: HealthFactorCheckEngine;
@@ -107,7 +108,6 @@ class HealthFactorCheckEngine {
     aaveChainsInfos: any[] = [];
     aave: any;
     oldReservesPrices: any;
-    checkReservesPricesIntervalInSeconds: number = 60;
 
     aaveLendingPoolContractAbi = [
         "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
@@ -156,15 +156,47 @@ class HealthFactorCheckEngine {
 
     //#region healthFactor DB check loop
 
+    checkReservesPricesIntervalId: any;
+    checkReservesPricesIntervalInSeconds = 60 * 5; // 5 minutes, for the moment...
+
+    async startCheckReservesPrices() {
+        await this.initializeHealthFactorEngine();
+        const chainInfos = await this.getAaveChainsInfosFromJson();
+        for (const chainInfo of chainInfos) {
+            await this.checkReservesPrices(chainInfo.chain, chainInfo.chainEnv); // Initial call
+            this.checkReservesPricesIntervalId = setInterval(
+                async () =>
+                    await this.checkReservesPrices(
+                        chainInfo.chain,
+                        chainInfo.chainEnv
+                    ),
+                this.checkReservesPricesIntervalInSeconds * 1000
+            );
+        }
+
+        // Graceful shutdown
+        process.on("SIGTERM", this.stopCheckReservesPrices.bind(this));
+        process.on("SIGINT", this.stopCheckReservesPrices.bind(this));
+    }
+
+    stopCheckReservesPrices() {
+        if (this.checkReservesPricesIntervalId) {
+            clearInterval(this.checkReservesPricesIntervalId);
+        }
+        process.exit(0);
+    }
+
     /**
      * This method is used to periodically check the health factor and userConfiguration of the addresses that are stored in the DB,
      * so that the data in the DB is always up to date, up to the interval of the cron job that calls this method.
      * The method does NOT contains an infinite loop. It is meant to be scheduled by a cron job or similar.
-     *
-     * TODO: schedule this method to run every hour or so on azure
-     * TODO: check Compute Units utilization of method batchEthCallForAddresses if there are many addresses, evtl split call in smaller chunks
      */
     async periodicalAccountsHealthFactorAndConfigurationCheck() {
+        await logger.log(
+            "Start periodicalAccountsHealthFactorAndConfigurationCheck",
+            "webJobExecution"
+        );
+
         await this.initializeHealthFactorEngine();
         for (const info of this.aaveChainsInfos) {
             const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
@@ -204,9 +236,26 @@ class HealthFactorCheckEngine {
                 const healthFactor = this.getHealthFactorFromUserAccountData(
                     userAccountData[i]
                 );
-                const userConfigurationBinary = common.intToBinary(
-                    parseInt(userConfiguration[i])
-                );
+                let userConfigurationInt = parseInt(userConfiguration[i]);
+
+                if (Number.isNaN(userConfigurationInt)) {
+                    await logger.log(
+                        `address ${address} on chain ${info.chain}-${info.chainEnv}`,
+                        "userConfigurarionIsNaN"
+                    );
+
+                    const userInfo =
+                        await this.getUserHealthFactorAndConfiguration(
+                            address,
+                            info.chain,
+                            info.chainEnv
+                        );
+
+                    userConfigurationInt = parseInt(userInfo.userConfiguration);
+                }
+
+                const userConfigurationBinary =
+                    common.intToBinary(userConfigurationInt);
 
                 if (healthFactor > 5) {
                     query += `DELETE FROM addresses WHERE address = '${address}' AND chain = '${info.chain}-${info.chainEnv}';`;
@@ -217,6 +266,11 @@ class HealthFactorCheckEngine {
 
             if (query) await sqlManager.execQuery(query);
         }
+
+        await logger.log(
+            "End periodicalAccountsHealthFactorAndConfigurationCheck",
+            "webJobExecution"
+        );
     }
 
     //#endregion healthFactor DB check loop
@@ -269,11 +323,17 @@ class HealthFactorCheckEngine {
      * @param chainEnv
      */
     async checkReservesPrices(chain: string, chainEnv: string = "mainnet") {
+        await logger.log("Start checkReservesPrices", "webJobExecution");
+
         //#region initialization
 
         await this.initializeHealthFactorEngine();
         const aaveChainInfo: any = this.getAaveChainInfo(chain, chainEnv);
         const reserves = aaveChainInfo.reserves;
+        const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
+            aaveChainInfo.chain,
+            aaveChainInfo.chainEnv
+        ).aaveLendingPoolContract.target;
 
         //#endregion
 
@@ -296,6 +356,7 @@ class HealthFactorCheckEngine {
         //#region infinite loop
 
         //get the prices for the reserves of the lending protocol
+        console.log("Getting reserves prices");
         const prices =
             await aaveChainInfo.aavePriceOracleContract.getAssetsPrices(
                 reserves
@@ -312,8 +373,11 @@ class HealthFactorCheckEngine {
         let shouldPerformCheck = false;
 
         //if it is the first time we check the prices, we store the current prices as old prices
-        if (!this.oldReservesPrices) this.oldReservesPrices = newReservesPrices;
-        else {
+        if (!this.oldReservesPrices) {
+            console.log("No oldReservePrices available");
+            this.oldReservesPrices = newReservesPrices;
+        } else {
+            console.log("OldReservePrices present, checking prices changes");
             //check if the prices have changed for the reserves
             let reservesChangedCheck: any[] = [];
             for (const reserveAddress of reserves) {
@@ -331,7 +395,7 @@ class HealthFactorCheckEngine {
                 //if the normalized change is greater than the given treshold, we should perform the check
                 if (normalizedChange.abs().gte(new Big(0.0005))) {
                     console.log(
-                        `Price change for reserve ${reserveAddress} is ${normalizedChange.toNumber()}`
+                        `Price change for reserve ${reserveAddress} is ${normalizedChange.toNumber()}. Old price: ${oldPrice}, new price: ${newPrice}`
                     );
 
                     //if we come here, it means there is at least 1 changed reserve. We should perform the check
@@ -360,6 +424,11 @@ class HealthFactorCheckEngine {
                 //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
                 const addressesDb = await sqlManager.execQuery(
                     `SELECT * FROM addresses where chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}' AND healthfactor < 2;`
+                );
+
+                console.log(
+                    "Checking addresses. Loaded addresses with health factor < 2: " +
+                        _.map(addressesDb, (o) => o.address)
                 );
 
                 //define object (map) of user assets that have the changed reserves either as collateral or as debt
@@ -441,11 +510,10 @@ class HealthFactorCheckEngine {
                 if (addressesToCheck.length > 0) {
                     //#region setup array of contract addresses to call with same address multiple times
 
-                    const aaveLendingPoolContractAddress =
-                        await this.getAaveChainInfo(
-                            aaveChainInfo.chain,
-                            aaveChainInfo.chainEnv
-                        ).aaveLendingPoolContract.target;
+                    console.log(
+                        "addresses that have the changed reserves either as collateral or as debt",
+                        addressesToCheck
+                    );
 
                     let contractAddressArray = [];
                     for (let i = 0; i < addressesToCheck.length; i++) {
@@ -479,13 +547,6 @@ class HealthFactorCheckEngine {
 
                         //if health factor is below 1, we add the address to the list of addresses to liquidate
                         if (healthFactor < 1) {
-                            console.log(
-                                "User " +
-                                    address +
-                                    " has health factor below 1: HF = " +
-                                    healthFactor
-                            );
-
                             //decide which asset pair to liquidate for the user based on the userAssets collateral and debt properties
                             const assetsToLiquidate: string[] =
                                 await this.decideWhichAssetPairToLiquidate(
@@ -504,22 +565,23 @@ class HealthFactorCheckEngine {
                     //Trigger liquidation
                     if (addressesToLiquidate.length > 0) {
                         //TODO MIRKO liquidate the addresses
-                        console.log("Found Addresses to liquidate:");
-                        console.log(addressesToLiquidate);
+                        await logger.log(
+                            "Addresses to liquidate: " +
+                                JSON.stringify(addressesToLiquidate),
+                            "liquidate"
+                        );
+                    } else {
+                        console.log(
+                            `No addresses to liquidate, out of ${addressesToLiquidate.length} addresses`
+                        );
                     }
                 }
+            } else {
+                console.log("No price changes detected");
             }
         }
 
-        //schedule next check, only if interval is > 0
-        if (this.checkReservesPricesIntervalInSeconds > 0) {
-            //wait 3 seconds before checking again
-            setTimeout(
-                () => this.checkReservesPrices(chain, chainEnv),
-                this.checkReservesPricesIntervalInSeconds * 1000
-            );
-        }
-        //#endregion infinite loop
+        await logger.log("End checkReservesPrices", "webJobExecution");
     }
 
     /**
@@ -604,6 +666,8 @@ class HealthFactorCheckEngine {
         }
     }
 
+    //#region test
+
     async doTest() {
         //test
 
@@ -634,8 +698,12 @@ class HealthFactorCheckEngine {
     }
 
     async testJob() {
-        console.log("test successful");
+        await logger.log("Start testJob", "webJobExecution");
+        await common.sleep(5000);
+        await logger.log("End testJob", "webJobExecution");
     }
+
+    //#endregion test
 
     /**
      * TODO Decide which asset pair to liquidate for a given user

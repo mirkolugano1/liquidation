@@ -8,6 +8,6 @@ npm run webJob testJob
 
 # Check the exit status of the last command
 if [ $? -eq 0 ]; then
-  echo "WebJob completed successfully."
+  echo "testJob completed successfully."
 else
-  echo "WebJob failed with exit code $?."
+  echo "testJob failed with exit code $?."

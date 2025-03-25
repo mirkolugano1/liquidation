@@ -1,15 +1,15 @@
 import * as fs from "fs/promises";
 import path from "path";
 
-class FileUtilities {
-    private static instance: FileUtilities;
+class FileManager {
+    private static instance: FileManager;
     private constructor() {}
 
-    public static getInstance(): FileUtilities {
-        if (!FileUtilities.instance) {
-            FileUtilities.instance = new FileUtilities();
+    public static getInstance(): FileManager {
+        if (!FileManager.instance) {
+            FileManager.instance = new FileManager();
         }
-        return FileUtilities.instance;
+        return FileManager.instance;
     }
 
     async fileExists(filePath: string) {
@@ -55,4 +55,4 @@ class FileUtilities {
     }
 }
 
-export default FileUtilities.getInstance();
+export default FileManager.getInstance();
