@@ -8,7 +8,7 @@ dotenv.config();
 logger.initialize("sandbox", false);
 
 async function main() {
-    //await logger.viewErrors();
+    await logger.viewErrors();
     //await healthFactorCheckEngine.startCheckReservesPrices();
 }
 
