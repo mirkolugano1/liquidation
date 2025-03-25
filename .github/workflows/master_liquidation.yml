@@ -29,6 +29,12 @@ jobs:
               with:
                   creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+            - name: Set environment variables
+              run: |
+                  echo "LIQUIDATIONENVIRONMENT=${{ vars.LIQUIDATIONENVIRONMENT }}" >> $GITHUB_ENV
+                  echo "SQLSERVER=${{ vars.SQLSERVER }}" >> $GITHUB_ENV
+                  echo "SQLUSER=${{ vars.SQLUSER }}" >> $GITHUB_ENV
+
             - name: npm install, build, and test
               run: |
                   npm install
