@@ -27,9 +27,7 @@ jobs:
             - name: Login to Azure (for tests)
               uses: azure/login@v2
               with:
-                  client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_350461B0685841BFAB02D0A7230C756C }}
-                  tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_1631843041E04D6AAB545F269F686549 }}
-                  subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F2A3381AC15645CE9F5370D317E167D7 }}
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
 
             - name: npm install, build, and test
               run: |
@@ -68,10 +66,7 @@ jobs:
             - name: Login to Azure
               uses: azure/login@v2
               with:
-                  client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_350461B0685841BFAB02D0A7230C756C }}
-                  tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_1631843041E04D6AAB545F269F686549 }}
-                  subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_F2A3381AC15645CE9F5370D317E167D7 }}
-                  allow-no-subscriptions: true
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
 
             # Add a delay before deployment
             - name: Delay before deployment
