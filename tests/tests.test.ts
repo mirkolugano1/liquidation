@@ -4,6 +4,7 @@ import sqlManager from "../src/managers/sqlManager";
 import * as assert from "node:assert/strict";
 import { before, test } from "node:test";
 import logger from "../src/shared/logger";
+import dotenv from "dotenv";
 
 function assertStringIsNotNullOrEmpty(value: any) {
     if (typeof value !== "string") value = value?.toString();
@@ -13,6 +14,7 @@ function assertStringIsNotNullOrEmpty(value: any) {
 
 //code that runs once before all tests.
 before(async () => {
+    dotenv.config();
     await webhookEngine.initializeWebhookEngine();
     await healthFactorCheckEngine.initializeHealthFactorEngine();
 });
