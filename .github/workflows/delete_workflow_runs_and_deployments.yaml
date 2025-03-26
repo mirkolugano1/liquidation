@@ -10,11 +10,17 @@ jobs:
         permissions:
             actions: write # Needed for deleting runs
         steps:
+            - name: Install GitHub CLI
+              run: sudo apt-get install gh -y
+
             - name: Delete workflow runs
-              uses: actions/delete-workflow-runs@v3
-              with:
-                  keep_minimum_runs: 0 # Keep no runs
-                  older_than: 1 # Delete runs older than 1 day
+              run: |
+                  gh run list --limit 100 --json databaseId,createdAt \
+                  --jq '.[] | select(.createdAt < (now - 86400 | todate)) | .databaseId' \
+                  | xargs -I {} gh run delete {}
+
+              env:
+                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     delete_deployments:
         runs-on: ubuntu-latest
@@ -24,7 +30,7 @@ jobs:
             - name: Delete old deployments
               run: |
                   gh api repos/${{ github.repository }}/deployments \
-                  --jq '.[].id' | xargs -I {} gh api -X DELETE \
-                  repos/${{ github.repository }}/deployments/{}
+                  --jq '.[] | select(.status != "active") | .id' \
+                  | xargs -I {} gh api -X DELETE repos/${{ github.repository }}/deployments/{}
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

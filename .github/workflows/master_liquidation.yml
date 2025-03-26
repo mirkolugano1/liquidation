@@ -35,6 +35,12 @@ jobs:
                   echo "SQLSERVER=${{ vars.SQLSERVER }}" >> $GITHUB_ENV
                   echo "SQLUSER=${{ vars.SQLUSER }}" >> $GITHUB_ENV
 
+            - name: Print environment variables for debugging
+              run: |
+                  echo "LIQUIDATIONENVIRONMENT: ${{ env.LIQUIDATIONENVIRONMENT }}"
+                  echo "SQLSERVER: ${{ env.SQLSERVER }}"
+                  echo "SQLUSER: ${{ env.SQLUSER }}"
+
             - name: npm install, build, and test
               run: |
                   npm install
