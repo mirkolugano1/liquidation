@@ -15,6 +15,12 @@ function assertStringIsNotNullOrEmpty(value: any) {
 //code that runs once before all tests.
 before(async () => {
     dotenv.config();
+
+    //setting the environment variables
+    process.env.SQLSERVER = "liquidation.database.windows.net";
+    process.env.SQLUSER = "mirko";
+    process.env.LIQUIDATIONENVIRONMENT = "prod";
+
     await webhookEngine.initializeWebhookEngine();
     await healthFactorCheckEngine.initializeHealthFactorEngine();
 });

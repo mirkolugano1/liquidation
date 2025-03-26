@@ -7,3 +7,4 @@ cmd /c "git pull"
 cmd /c "git merge develop"
 cmd /c "git push"
 cmd /c "git checkout develop" 
+cd batch_scripts
