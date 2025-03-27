@@ -95,7 +95,7 @@ jobs:
                     fi
                     
                     echo "Attempting deployment to Azure App Service..."
-                    if az webapp deployment source config-zip --resource-group YOUR_RESOURCE_GROUP_NAME --name liquidation --src $(pwd)/deployment.zip; then
+                    if az webapp deployment source config-zip --resource-group liquidation_group --name liquidation --src $(pwd)/deployment.zip; then
                       DEPLOYMENT_SUCCESS=true
                       echo "Deployment successful!"
                       # Set output variable for the url step
