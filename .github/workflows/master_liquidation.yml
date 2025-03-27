@@ -34,12 +34,6 @@ jobs:
 
             - name: Copy static JSON files to dist directory
               run: |
-                  # Create directory structure if needed
-                  mkdir -p dist/json
-
-                  # Copy all JSON files to dist directory
-                  cp -r json/* dist/json/
-
                   # Show the final structure
                   echo "Final deployment package structure:"
                   find dist -type f | sort

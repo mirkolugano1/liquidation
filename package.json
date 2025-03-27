@@ -9,6 +9,7 @@
         "@types/express": "^5.0.0",
         "@types/mssql": "^9.1.7",
         "big.js": "^6.2.2",
+        "copyfiles": "^2.4.1",
         "dotenv": "^16.4.7",
         "ethers": "^6.13.5",
         "express": "^4.21.2",
@@ -23,7 +24,9 @@
     },
     "scripts": {
         "build": "tsc",
-        "start": "node src/clients/webServer.js",
+        "copy-config": "copyfiles package.json package-lock.json *.env dist/",
+        "build:full": "npm run build && npm run copy-config",
+        "start": "node clients/webServer.js",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly src/clients/webServer.ts",
         "webJob": "npx ts-node --transpileOnly src/clients/webJob.ts",

@@ -7,6 +7,8 @@
         "esModuleInterop": true, // Improve compatibility with ES modules
         "forceConsistentCasingInFileNames": true, // Enforce consistent casing
         "skipLibCheck": true, // Skip type checking for external libraries
-        "outDir": "./dist"
-    }
+        "outDir": "./dist",
+        "rootDir": "./src"
+    },
+    "include": ["src/**/*"]
 }

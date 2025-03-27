@@ -136,10 +136,16 @@ class HealthFactorCheckEngine {
     //#region Helper methods
 
     async getAaveChainsInfosFromJson() {
-        const contents = await fileUtilities.readFromTextFile(
-            "json/aaveChainsInfos.json"
-        );
-        return JSON.parse(contents);
+        return [
+            {
+                chain: "arb",
+                chainEnv: "mainnet",
+                lendingPoolAddress:
+                    "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+                addressesProviderAddress:
+                    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
+            },
+        ];
     }
 
     getAaveChainInfo(chain: string, chainEnv: string = "mainnet") {
