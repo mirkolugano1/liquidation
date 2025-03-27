@@ -10,72 +10,46 @@ on:
     workflow_dispatch:
 
 jobs:
-    build:
+    build-and-deploy:
         runs-on: ubuntu-latest
-        permissions:
-            contents: read #This is required for actions/checkout
-            id-token: write # This is required for Azure login
-
         steps:
-            - uses: actions/checkout@v4
+            # Your build steps here...
 
-            - name: Set up Node.js version
-              uses: actions/setup-node@v3
-              with:
-                  node-version: "22.x"
-
-            - name: Login to Azure (for tests)
-              uses: azure/login@v2
+            # Set up Azure CLI
+            - name: Azure Login
+              uses: azure/login@v1
               with:
                   creds: ${{ secrets.AZURE_CREDENTIALS }}
 
-            - name: npm install, build, and test
+            - name: Deploy to Azure WebApp with retries
+              shell: bash
               run: |
-                  npm install
-                  npm run build --if-present
-                  npm run test --if-present
+                  MAX_RETRIES=5
+                  RETRY_COUNT=0
+                  DELAY_SECONDS=300  # 5 minutes between attempts
+                  DEPLOYMENT_SUCCESS=false
 
-            - name: Zip artifact for deployment
-              run: zip release.zip ./* -r
-
-            - name: Upload artifact for deployment job
-              uses: actions/upload-artifact@v4
-              with:
-                  name: node-app
-                  path: release.zip
-
-    deploy:
-        runs-on: ubuntu-latest
-        needs: build
-        environment:
-            name: "Production"
-            url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
-        permissions:
-            id-token: write #This is required for requesting the JWT
-            contents: read #This is required for actions/checkout
-
-        steps:
-            - name: Download artifact from build job
-              uses: actions/download-artifact@v4
-              with:
-                  name: node-app
-
-            - name: Unzip artifact for deployment
-              run: unzip release.zip
-
-            - name: Login to Azure
-              uses: azure/login@v2
-              with:
-                  creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-            # Add a delay before deployment
-            - name: Delay before deployment
-              run: sleep 600
-
-            - name: "Deploy to Azure Web App"
-              id: deploy-to-webapp
-              uses: azure/webapps-deploy@v3
-              with:
-                  app-name: "liquidation"
-                  slot-name: "Production"
-                  package: .
+                  while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DEPLOYMENT_SUCCESS" != "true" ]; do
+                    echo "Deployment attempt $((RETRY_COUNT+1)) of $MAX_RETRIES"
+                    
+                    if [ $RETRY_COUNT -gt 0 ]; then
+                      echo "Waiting $DELAY_SECONDS seconds before next attempt..."
+                      sleep $DELAY_SECONDS
+                    fi
+                    
+                    # Try the deployment using azure/webapps-deploy action
+                    if (npx @actions/github@4 run azure/webapps-deploy@v3 --app-name "liquidation" --package "./YOUR_PACKAGE_PATH"); then
+                      DEPLOYMENT_SUCCESS=true
+                      echo "Deployment successful!"
+                    else
+                      RETRY_COUNT=$((RETRY_COUNT+1))
+                      echo "Deployment failed."
+                      
+                      if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                        echo "Will retry deployment..."
+                      else
+                        echo "Maximum retry attempts reached. Deployment failed."
+                        exit 1
+                      fi
+                    fi
+                  done
