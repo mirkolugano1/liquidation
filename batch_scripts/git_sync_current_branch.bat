@@ -1,5 +1,10 @@
 @echo off
 
+if "%~1"=="" (
+    echo ERROR: No commit message provided.
+    exit /b 1
+)
+
 REM Run git commands
 cd ..
 git add .
