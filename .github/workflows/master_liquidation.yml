@@ -29,18 +29,8 @@ jobs:
             - name: npm install, build, and test
               run: |
                   npm install
-                  npm run build --if-present
+                  npm run build:full --if-present
                   npm run test --if-present
-
-            - name: Copy static JSON files to dist directory
-              run: |
-                  # Show the final structure
-                  echo "Final deployment package structure:"
-                  find dist -type f | sort
-
-                  # Show package size
-                  echo "Deployment package size:"
-                  du -sh dist
 
             # Option 1: Upload just the dist directory
             - name: Upload artifact for deployment job
