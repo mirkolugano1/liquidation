@@ -32,13 +32,6 @@ jobs:
                   npm run build --if-present
                   npm run test --if-present
 
-              # Clean wwwroot directory first
-            - name: Azure CLI - Clean wwwroot
-              uses: azure/CLI@v1
-              with:
-                  inlineScript: |
-                      az webapp ssh --resource-group liquidation_group --name liquidation --command "find /home/site/wwwroot -mindepth 1 -delete"
-
             - name: Copy static JSON files to dist directory
               run: |
                   # Create directory structure if needed
