@@ -5,6 +5,7 @@ import * as assert from "node:assert/strict";
 import { before, test } from "node:test";
 import logger from "../src/shared/logger";
 import dotenv from "dotenv";
+import encryption from "../src/shared/encryption";
 
 function assertStringIsNotNullOrEmpty(value: any) {
     if (typeof value !== "string") value = value?.toString();
@@ -15,14 +16,25 @@ function assertStringIsNotNullOrEmpty(value: any) {
 //code that runs once before all tests.
 before(async () => {
     dotenv.config();
+    logger.initialize("test");
 
     //setting the environment variables
-    process.env.SQLSERVER = "liquidation.database.windows.net";
-    process.env.SQLUSER = "mirko";
+    //these are the ones that are in the .env file, which are not very sensitive
     process.env.LIQUIDATIONENVIRONMENT = "prod";
 
     await webhookEngine.initializeWebhookEngine();
     await healthFactorCheckEngine.initializeHealthFactorEngine();
+});
+
+test("encryption_testEncryptDecrypt", { only: false }, async () => {
+    const text = Math.random().toString();
+    const encrypted1 = await encryption.encryptWithKey(text);
+    const decrypted1 = await encryption.decryptWithKey(encrypted1);
+    assert.strictEqual(text, decrypted1);
+
+    const encrypted2 = await encryption.encrypt(text);
+    const decrypted2 = await encryption.decrypt(encrypted2);
+    assert.strictEqual(text, decrypted2);
 });
 
 test("we_manageVariable", { only: false }, async () => {

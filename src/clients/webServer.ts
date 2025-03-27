@@ -15,7 +15,8 @@ app.get("/", (req: any, res: any) => {
 });
 
 app.get("/logs", async (req: any, res: any) => {
-    res.send(await logger.viewLogs(req.query.logLevel));
+    const logLevel = req.query?.logLevel;
+    res.send(await logger.viewLogs(logLevel));
 });
 
 app.get("/healthcheck", (req: any, res: any) => {

@@ -1,6 +1,8 @@
 {
     "devDependencies": {
         "@azure/identity": "^4.7.0",
+        "@azure/keyvault-certificates": "^4.9.0",
+        "@azure/keyvault-keys": "^4.9.0",
         "@azure/keyvault-secrets": "^4.9.0",
         "@azure/storage-blob": "^12.26.0",
         "@types/big.js": "^6.2.2",

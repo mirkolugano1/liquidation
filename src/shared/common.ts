@@ -10,6 +10,7 @@ class Common {
     }
 
     keyVaultEntries: string[] = [
+        "SQLUSERENCRYPTED",
         "SQLPASSWORDENCRYPTED",
         "ENCRYPTIONPWD",
         "ALCHEMYKEYENCRYPTED",

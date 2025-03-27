@@ -54,6 +54,11 @@ class Logger {
         this.outputType = "HTML";
     }
 
+    async deleteOldLogs() {
+        const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -3, GETDATE())`;
+        await sqlManager.execQuery(query);
+    }
+
     async getLogLevels() {
         const query = `SELECT DISTINCT loglevel FROM dbo.logs`;
         const data = await sqlManager.execQuery(query);

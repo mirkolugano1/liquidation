@@ -3,43 +3,79 @@ import common from "./common";
 
 import { SecretClient } from "@azure/keyvault-secrets";
 import { DefaultAzureCredential } from "@azure/identity";
+import { CryptographyClient } from "@azure/keyvault-keys";
 
 class Encryption {
-    private static keyVaultUrl = "https://liquidation.vault.azure.net/";
-    private static encryptionPassword: string = "";
     private static instance: Encryption;
-    private static credential: any;
-    private static secretClient: any;
-    private constructor() {}
+
+    private encryptionPassword: string = "";
+    private secretClient: any;
+    private cryptoClient: any;
+
+    private constructor() {
+        const keyVaultUrl = "https://liquidation.vault.azure.net/";
+        const credential = new DefaultAzureCredential();
+        this.secretClient = new SecretClient(keyVaultUrl, credential);
+        this.cryptoClient = new CryptographyClient(
+            `${keyVaultUrl}keys/liquidationkey`,
+            credential
+        );
+    }
 
     public static getInstance(): Encryption {
         if (!Encryption.instance) {
             Encryption.instance = new Encryption();
-            Encryption.credential = new DefaultAzureCredential();
-            Encryption.secretClient = new SecretClient(
-                Encryption.keyVaultUrl,
-                Encryption.credential
-            );
         }
         return Encryption.instance;
     }
 
     async ensureEncryptionPassword() {
-        if (!Encryption.encryptionPassword) {
-            Encryption.encryptionPassword = await common.getAppSetting(
+        if (!this.encryptionPassword) {
+            const encryptionPasswordEncrypted = await common.getAppSetting(
                 "ENCRYPTIONPWD"
             );
-            if (!Encryption.encryptionPassword) {
+            if (!encryptionPasswordEncrypted) {
                 throw new Error("Encryption password not found in Key Vault");
             }
+            this.encryptionPassword = await this.decryptWithKey(
+                encryptionPasswordEncrypted
+            );
         }
+    }
+
+    async decryptWithKey(encryptedBase64: string): Promise<string> {
+        // Convert base64 string back to Uint8Array
+        const ciphertext = Buffer.from(encryptedBase64, "base64");
+
+        // Decrypt the data
+        const decryptResult = await this.cryptoClient.decrypt(
+            "RSA-OAEP",
+            ciphertext
+        );
+
+        // Convert result back to string
+        return Buffer.from(decryptResult.result).toString("utf-8");
+    }
+
+    async encryptWithKey(plainText: string) {
+        // Convert string to Uint8Array
+        const plaintextBuffer = Buffer.from(plainText, "utf-8");
+
+        // Encrypt the data
+        // First parameter is the algorithm, second is the data as Uint8Array
+        const encryptResult = await this.cryptoClient.encrypt(
+            "RSA-OAEP", // or EncryptionAlgorithm.RsaOaep256
+            plaintextBuffer
+        );
+
+        return Buffer.from(encryptResult.result).toString("base64");
     }
 
     async encrypt(stringToEncrypt: string) {
         await this.ensureEncryptionPassword();
         const key = crypto
             .createHash("sha256")
-            .update(Encryption.encryptionPassword)
+            .update(this.encryptionPassword)
             .digest();
         const iv = crypto.randomBytes(16); // Initialization Vector for AES-256-CBC
         const cipher = crypto.createCipheriv("aes-256-cbc", key, iv);
@@ -55,7 +91,7 @@ class Encryption {
         await this.ensureEncryptionPassword();
         const key = crypto
             .createHash("sha256")
-            .update(Encryption.encryptionPassword)
+            .update(this.encryptionPassword)
             .digest();
 
         const iv = Buffer.from(encryptedString.slice(0, 32), "hex"); // Adjust slice length for 32-byte key
@@ -70,7 +106,7 @@ class Encryption {
 
     async getSecretFromKeyVault(key: string) {
         try {
-            const secret = await Encryption.secretClient.getSecret(key);
+            const secret = await this.secretClient.getSecret(key);
             return secret?.value; // Return the secret value if needed
         } catch (error) {
             console.error("Error retrieving secret:", error);

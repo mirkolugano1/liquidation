@@ -11,10 +11,18 @@ async function main() {
         throw new Error("Must define function to be executed.");
     const job = args[2];
 
-    if (!(healthFactorCheckEngine as any)[job])
-        throw new Error("Invalid function to be executed.");
+    switch (job) {
+        case "startCheckReservesPrices":
+            await healthFactorCheckEngine.startCheckReservesPrices();
+            break;
 
-    await (healthFactorCheckEngine as any)[job]();
+        case "deleteOldLogs":
+            await logger.deleteOldLogs();
+            break;
+
+        default:
+            throw new Error("Invalid function to be executed.");
+    }
 }
 
 main();

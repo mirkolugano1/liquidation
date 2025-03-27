@@ -7,8 +7,9 @@ dotenv.config();
 
 class SqlManager {
     private static instance: SqlManager;
-    private static databaseName: string = "liquidation";
-    private static config: any;
+    private databaseName: string = "liquidation";
+    private sqlServerName: string = "liquidation.database.windows.net";
+    private config: any;
 
     public static getInstance(): SqlManager {
         if (!SqlManager.instance) {
@@ -24,11 +25,14 @@ class SqlManager {
         const decryptedSqlPassword = await encryption.decrypt(
             encryptedSqlPassword
         );
-        SqlManager.config = {
-            user: await common.getAppSetting("SQLUSER"),
+        const encryptedSqlUser = await common.getAppSetting("SQLUSERENCRYPTED");
+        const decryptedSqlUser = await encryption.decrypt(encryptedSqlUser);
+
+        this.config = {
+            user: decryptedSqlUser,
             password: decryptedSqlPassword,
-            server: await common.getAppSetting("SQLSERVER"),
-            database: SqlManager.databaseName,
+            server: this.sqlServerName,
+            database: this.databaseName,
             options: {
                 encrypt: true,
                 trustServerCertificate: false,
@@ -37,10 +41,10 @@ class SqlManager {
     }
 
     async execQuery(query: string, parameters: Record<string, any> = {}) {
-        if (!SqlManager.config) await this.initialize();
+        if (!this.config) await this.initialize();
         let pool;
         try {
-            pool = await sql.connect(SqlManager.config);
+            pool = await sql.connect(this.config);
 
             const request = pool.request();
 

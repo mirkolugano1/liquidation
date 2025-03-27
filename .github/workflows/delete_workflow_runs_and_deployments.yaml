@@ -29,8 +29,17 @@ jobs:
         steps:
             - name: Delete old deployments
               run: |
-                  gh api repos/${{ github.repository }}/deployments \
-                  --jq '.[] | select(.status != "active") | .id' \
-                  | xargs -I {} gh api -X DELETE repos/${{ github.repository }}/deployments/{}
+                  DEPLOYMENTS=$(gh api repos/mirkolugano1/liquidation/deployments --jq '.[] | {id: .id, statuses_url: .statuses_url}')
+                    echo "$DEPLOYMENTS" | jq -c '.[]' | while read -r deployment; do
+                        id=$(echo "$deployment" | jq -r '.id')
+                        statuses_url=$(echo "$deployment" | jq -r '.statuses_url')
+                        is_active=$(gh api "$statuses_url" --jq 'map(select(.state == "in_progress" or .state == "queued")) | length > 0')
+                        if [ "$is_active" = "false" ]; then
+                            echo "Deleting deployment $id"
+                            gh api -X DELETE "repos/mirkolugano1/liquidation/deployments/$id"
+                        else
+                            echo "Skipping active deployment $id"
+                        fi
+                    done
               env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
