@@ -2,9 +2,9 @@
 
 REM Run git commands
 cd ..
-cmd /c "git checkout master"
-cmd /c "git pull"
-cmd /c "git merge develop"
-cmd /c "git push"
-cmd /c "git checkout develop" 
+git checkout master
+git pull
+git merge develop -m "Merged develop into master"
+git push
+git checkout develop
 cd batch_scripts
