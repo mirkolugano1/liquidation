@@ -97,6 +97,8 @@ class WebhookEngine {
     }
 
     async processAaveEvent(req: any, res: any) {
+        await this.initializeWebhookEngine();
+
         let block = req.body.event?.data?.block;
         let chain = req.query.chain ?? "eth";
         let chainEnv = req.query.chainEnv;

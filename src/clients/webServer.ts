@@ -7,6 +7,7 @@ dotenv.config();
 logger.initialize("webServer");
 logger.setOutputTypeHTML();
 
+const port = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 const app = express();
 app.use(express.json());
 
@@ -19,8 +20,8 @@ app.get("/logs", async (req: any, res: any) => {
     res.send(await logger.viewLogs(logLevel));
 });
 
-app.get("/healthcheck", (req: any, res: any) => {
-    res.send("Ok");
+app.get("/health", (req, res) => {
+    res.status(200).send("Healthy");
 });
 
 app.get("/var", async (req: any, res: any) => {
@@ -31,8 +32,6 @@ app.post("/aaveEvent", async (req: any, res: any) => {
     await webhookEngine.processAaveEvent(req, res);
 });
 
-app.listen(8081, "0.0.0.0", async () => {
-    console.log("Web server is up. Initializing webhookEngine...");
-    await webhookEngine.initializeWebhookEngine();
-    console.log("Initialization complete.");
+app.listen(port, "0.0.0.0", () => {
+    console.log("Web server is up.");
 });
