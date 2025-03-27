@@ -24,7 +24,7 @@
     "scripts": {
         "build": "tsc",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
-        "webServer": "npx ts-node --transpileOnly src/clients/webServer.ts",
+        "start": "npx ts-node --transpileOnly src/clients/webServer.ts",
         "webJob": "npx ts-node --transpileOnly src/clients/webJob.ts",
         "test": "node --test --require ts-node/register tests/*.test.ts",
         "testOnly": "node --test --test-only --require ts-node/register tests/*.test.ts"

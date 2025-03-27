@@ -32,6 +32,8 @@ app.post("/aaveEvent", async (req: any, res: any) => {
     await webhookEngine.processAaveEvent(req, res);
 });
 
-app.listen(port, "0.0.0.0", () => {
-    console.log("Web server is up.");
+app.listen(port, "0.0.0.0", async () => {
+    console.log("Web server is up. Initializing webhook engine...");
+    await webhookEngine.initializeWebhookEngine();
+    console.log("Webhook Engine Initialized.");
 });
