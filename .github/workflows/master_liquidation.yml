@@ -1,6 +1,3 @@
-# Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
-# More GitHub Actions for Azure: https://github.com/Azure/actions
-
 name: Build and deploy Node.js app to Azure Web App - liquidation
 
 on:
@@ -10,23 +7,83 @@ on:
     workflow_dispatch:
 
 jobs:
-    build-and-deploy:
+    build:
         runs-on: ubuntu-latest
-        steps:
-            # Your build steps here...
+        permissions:
+            contents: read
+            id-token: write
 
-            # Set up Azure CLI
-            - name: Azure Login
-              uses: azure/login@v1
+        steps:
+            - uses: actions/checkout@v4
+
+            - name: Set up Node.js version
+              uses: actions/setup-node@v3
+              with:
+                  node-version: "22.x"
+
+            - name: Login to Azure (for tests)
+              uses: azure/login@v2
               with:
                   creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+            - name: npm install, build, and test
+              run: |
+                  npm install
+                  npm run build --if-present
+                  npm run test --if-present
+
+            - name: Copy static JSON files to dist directory
+              run: |
+                  # Create directory structure if needed
+                  mkdir -p dist/json
+
+                  # Copy all JSON files to dist directory
+                  cp -r json/* dist/json/
+
+                  # Show the final structure
+                  echo "Final deployment package structure:"
+                  find dist -type f | sort
+
+                  # Show package size
+                  echo "Deployment package size:"
+                  du -sh dist
+
+            # Option 1: Upload just the dist directory
+            - name: Upload artifact for deployment job
+              uses: actions/upload-artifact@v4
+              with:
+                  name: node-app
+                  path: dist
+
+    deploy:
+        runs-on: ubuntu-latest
+        needs: build
+        environment:
+            name: "Production"
+            url: ${{ steps.deploy-to-webapp.outputs.webapp-url }}
+        permissions:
+            id-token: write
+            contents: read
+
+        steps:
+            - name: Download artifact from build job
+              uses: actions/download-artifact@v4
+              with:
+                  name: node-app
+
+            - name: Login to Azure
+              uses: azure/login@v2
+              with:
+                  creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+            # Add deployment with retry logic instead of a simple delay
             - name: Deploy to Azure WebApp with retries
+              id: deploy-to-webapp
               shell: bash
               run: |
                   MAX_RETRIES=5
                   RETRY_COUNT=0
-                  DELAY_SECONDS=300  # 5 minutes between attempts
+                  DELAY_SECONDS=300
                   DEPLOYMENT_SUCCESS=false
 
                   while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$DEPLOYMENT_SUCCESS" != "true" ]; do
@@ -37,13 +94,15 @@ jobs:
                       sleep $DELAY_SECONDS
                     fi
                     
-                    # Try the deployment using azure/webapps-deploy action
-                    if (npx @actions/github@4 run azure/webapps-deploy@v3 --app-name "liquidation" --package "./YOUR_PACKAGE_PATH"); then
+                    echo "Attempting deployment to Azure App Service..."
+                    if az webapp deployment source config-zip --resource-group YOUR_RESOURCE_GROUP_NAME --name liquidation --src $(pwd)/deployment.zip; then
                       DEPLOYMENT_SUCCESS=true
                       echo "Deployment successful!"
+                      # Set output variable for the url step
+                      echo "webapp-url=https://liquidation.azurewebsites.net" >> $GITHUB_OUTPUT
                     else
                       RETRY_COUNT=$((RETRY_COUNT+1))
-                      echo "Deployment failed."
+                      echo "Deployment failed. Error code: $?"
                       
                       if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
                         echo "Will retry deployment..."
