@@ -23,9 +23,9 @@
     },
     "scripts": {
         "build": "tsc",
-        "copy-config": "copyfiles package.json package-lock.json dist/ shell_scripts/",
+        "copy-config": "copyfiles package.json package-lock.json dist/ && copyfiles shell_scripts/* dist/",
         "build:full": "npm run build && npm run copy-config",
-        "start": "node clients/webServer.js",
+        "start": "npm install && node clients/webServer.js",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly src/clients/webServer.ts",
         "webJob": "npx ts-node --transpileOnly src/clients/webJob.ts",
