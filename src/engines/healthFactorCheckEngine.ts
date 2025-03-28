@@ -40,6 +40,9 @@ class HealthFactorCheckEngine {
                 aaveChainInfo
             );
         }
+
+        console.log("Inited variables:");
+        console.log(this.aaveChainsInfos);
     }
 
     async setAaveChainInfo(
