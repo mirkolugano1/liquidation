@@ -19,7 +19,7 @@ class HealthFactorCheckEngine {
 
     //#region Initialization
 
-    async initializeHealthFactorEngine() {
+    async initialize() {
         if (this.aave) return;
         this.aave = {};
 
@@ -165,7 +165,7 @@ class HealthFactorCheckEngine {
     checkReservesPricesIntervalInSeconds = 60 * 5; // 5 minutes, for the moment...
 
     async startCheckReservesPrices() {
-        await this.initializeHealthFactorEngine();
+        await this.initialize();
         const chainInfos = await this.getAaveChainsInfosFromJson();
         for (const chainInfo of chainInfos) {
             await this.checkReservesPrices(chainInfo.chain, chainInfo.chainEnv); // Initial call
@@ -202,7 +202,7 @@ class HealthFactorCheckEngine {
             "webJobExecution"
         );
 
-        await this.initializeHealthFactorEngine();
+        await this.initialize();
         for (const info of this.aaveChainsInfos) {
             const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
                 info.chain,
@@ -293,7 +293,7 @@ class HealthFactorCheckEngine {
         chain: string,
         chainEnv: string = "mainnet"
     ) {
-        await this.initializeHealthFactorEngine();
+        await this.initialize();
         let aaveLendingPoolContract = this.getAaveChainInfo(
             chain,
             chainEnv
@@ -332,7 +332,7 @@ class HealthFactorCheckEngine {
 
         //#region initialization
 
-        await this.initializeHealthFactorEngine();
+        await this.initialize();
         const aaveChainInfo: any = this.getAaveChainInfo(chain, chainEnv);
         const reserves = aaveChainInfo.reserves;
         const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
@@ -611,7 +611,7 @@ class HealthFactorCheckEngine {
         chain: string,
         chainEnv: string = "mainnet"
     ) {
-        await this.initializeHealthFactorEngine();
+        await this.initialize();
 
         if (methodParams && contractsAddresses.length != methodParams.length)
             throw new Error(
@@ -676,7 +676,7 @@ class HealthFactorCheckEngine {
     async doTest() {
         //test
 
-        await this.initializeHealthFactorEngine();
+        await this.initialize();
 
         const aaveLendingPoolContractAddress =
             this.getAaveChainInfo("arb").aaveLendingPoolContract.target;

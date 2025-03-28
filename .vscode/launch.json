@@ -11,8 +11,14 @@
             "type": "node-terminal"
         },
         {
-            "command": "npm run webJob -- testJob11",
+            "command": "npm run webJob -- testJob",
             "name": "Debug WebJob",
+            "request": "launch",
+            "type": "node-terminal"
+        },
+        {
+            "command": "npm run webServer",
+            "name": "Debug WebServer",
             "request": "launch",
             "type": "node-terminal"
         }

@@ -2,6 +2,7 @@ import webhookEngine from "../engines/webhookEngine";
 import dotenv from "dotenv";
 import express from "express";
 import logger from "../shared/logger";
+import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -33,7 +34,8 @@ app.post("/aaveEvent", async (req: any, res: any) => {
 });
 
 app.listen(port, "0.0.0.0", async () => {
-    console.log("Web server is up. Initializing webhook engine...");
-    await webhookEngine.initializeWebhookEngine();
-    console.log("Webhook Engine Initialized.");
+    console.log("Web server is up. Initializing engines...");
+    await webhookEngine.initialize();
+    await healthFactorCheckEngine.initialize();
+    console.log("Engines Initialized.");
 });
