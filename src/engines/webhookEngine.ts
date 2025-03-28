@@ -54,11 +54,6 @@ class WebhookEngine {
                 break;
         }
 
-        const varIsFound = isHFEngineVar
-            ? healthFactorCheckEngine.hasOwnProperty(key)
-            : this.hasOwnProperty(key);
-        if (!varIsFound) throw new Error("Variable not found");
-
         if (method === "set") {
             if (canSetVar) {
                 if (isHFEngineVar)
@@ -208,9 +203,9 @@ class WebhookEngine {
                         for (const address of this.uniqueAddresses[key]) {
                             this.uniqueAddressesHF[key][address] =
                                 await healthFactorCheckEngine.getUserHealthFactorAndConfiguration(
+                                    address,
                                     chain,
-                                    chainEnv,
-                                    address
+                                    chainEnv
                                 );
                         }
 

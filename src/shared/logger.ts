@@ -91,7 +91,7 @@ class Logger {
         _.each(data, (log) => {
             log.timestamp = log.timestamp.toISOString();
         });
-        this.viewDataAsTable(data);
+        return this.viewDataAsTable(data);
     }
 
     viewDataAsConsoleTable(headers: any[], rows: any[][]) {
