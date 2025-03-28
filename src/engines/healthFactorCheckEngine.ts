@@ -4,7 +4,6 @@ import encryption from "../shared/encryption";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
-import fileUtilities from "../managers/fileManager";
 import logger from "../shared/logger";
 
 class HealthFactorCheckEngine {

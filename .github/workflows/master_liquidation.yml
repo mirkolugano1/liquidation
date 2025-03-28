@@ -70,3 +70,8 @@ jobs:
               shell: bash
               run: |
                   az webapp deploy --resource-group liquidation_group --name liquidation --src-path "./deployment.zip" --type zip
+
+            - name: Run npm install on Azure WebApp
+              shell: bash
+              run: |
+                  az webapp ssh --resource-group liquidation_group --name liquidation --command "cd /home/site/wwwroot && npm install"
