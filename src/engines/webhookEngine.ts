@@ -216,8 +216,8 @@ class WebhookEngine {
                             ) AS source (address, chain, healthFactor, userConfiguration)
                             ON (target.address = source.address AND target.chain = source.chain)
                             WHEN NOT MATCHED BY TARGET THEN
-                                INSERT (address, chain)
-                                VALUES (source.address, source.chain);
+                                INSERT (address, chain, healthFactor, userConfiguration)
+                                VALUES (source.address, source.chain, source.healthFactor, source.userConfiguration);
                         `;
 
                         await sqlManager.execQuery(query);
