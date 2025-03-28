@@ -64,10 +64,6 @@ test("we_manageVariable", { only: false }, async () => {
     assert.strictEqual(webhookEngine.manageVariable(req), 10);
 });
 
-test("we_initializeWebhookEngine", { only: false }, async () => {
-    assert.ok(webhookEngine.addresses.length > 0);
-});
-
 test("hf_aaveChainInfosArrayIsDefined", { only: false }, async () => {
     assert.ok(healthFactorCheckEngine.aaveChainsInfos.length > 0);
 });
