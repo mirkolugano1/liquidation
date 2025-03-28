@@ -9,10 +9,7 @@ class WebhookEngine {
 
     //these are in the form of {chain: [address1, address2, ...]}
     addresses: any = {};
-    uniqueAddresses: any = {};
     uniqueAddressesHF: any = {};
-
-    addAddressTreshold = 0;
     isInitialized: boolean = false;
 
     ifaceBorrow: any;
@@ -72,7 +69,6 @@ class WebhookEngine {
 
     async initialize() {
         if (this.isInitialized) return;
-        this.isInitialized = true;
 
         this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
         this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
@@ -88,10 +84,11 @@ class WebhookEngine {
             this.addresses[address.chain].push(address.address);
         }
 
-        this.addresses = initAddresses;
+        this.isInitialized = true;
     }
 
     async processAaveEvent(req: any, res: any) {
+        if (!this.isInitialized) return;
         let block = req.body.event?.data?.block;
         let chain = req.query.chain ?? "eth";
         let chainEnv = req.query.chainEnv;
@@ -103,6 +100,7 @@ class WebhookEngine {
         chain: string,
         chainEnv: string = "mainnet"
     ) {
+        const key = `${chain}-${chainEnv}`;
         for (let log of block.logs) {
             let topics = log.topics;
             let eventHash = topics[0];
@@ -171,21 +169,12 @@ class WebhookEngine {
                     (normalizedAddress) => {
                         return (
                             _.isEmpty(normalizedAddress) ||
-                            _.includes(this.addresses, normalizedAddress) ||
-                            _.includes(this.uniqueAddresses, normalizedAddress)
+                            _.includes(this.addresses[key], normalizedAddress)
                         );
                     }
                 );
 
                 if (uniqueAddresses.length > 0) {
-                    const key = `${chain}-${chainEnv}`;
-                    if (!this.uniqueAddresses.hasOwnProperty(key))
-                        this.uniqueAddresses[key] = [];
-
-                    this.uniqueAddresses[key] = _.uniq(
-                        _.union(this.uniqueAddresses[key], uniqueAddresses)
-                    );
-
                     if (!this.addresses.hasOwnProperty(key))
                         this.addresses[key] = [];
 
@@ -193,55 +182,52 @@ class WebhookEngine {
                         _.union(this.addresses[key], uniqueAddresses)
                     );
 
-                    if (
-                        this.uniqueAddresses[key].length >
-                        this.addAddressTreshold
-                    ) {
-                        if (!this.uniqueAddressesHF.hasOwnProperty(key))
-                            this.uniqueAddressesHF[key] = {};
-
-                        for (const address of this.uniqueAddresses[key]) {
-                            this.uniqueAddressesHF[key][address] =
-                                await healthFactorCheckEngine.getUserHealthFactorAndConfiguration(
-                                    address,
-                                    chain,
-                                    chainEnv
-                                );
-                        }
-
-                        //only save addresses with healthfactor < 5
-                        let addressesListSql = this.uniqueAddresses[key].map(
-                            (address: string) =>
-                                this.uniqueAddressesHF[key][address]
-                                    .healthFactor < 5
-                                    ? `('${address}', '${key}', ${
-                                          (this.uniqueAddressesHF[key][address]
-                                              .healthFactor,
-                                          `${this.uniqueAddressesHF[key][address].userConfiguration}`)
-                                      })`
-                                    : ""
+                    let uniqueAddressesInfo: any = {};
+                    const results =
+                        await healthFactorCheckEngine.getHealthFactorAndConfigurationForAddresses(
+                            uniqueAddresses,
+                            chain,
+                            chainEnv
                         );
 
-                        addressesListSql = _.reject(
-                            addressesListSql,
-                            _.isEmpty
+                    for (const result of results) {
+                        uniqueAddressesInfo[result.address] = {
+                            healthFactor: result.healthFactor,
+                            userConfiguration: result.userConfiguration,
+                        };
+                    }
+
+                    //only save addresses with healthfactor < 5 and userConfiguration != 0
+                    let addressesListSql = uniqueAddresses.map(
+                        (address: string) =>
+                            uniqueAddressesInfo[address].healthFactor < 5 &&
+                            uniqueAddressesInfo[address].userConfiguration !=
+                                "0"
+                                ? `('${address}', '${key}', ${uniqueAddressesInfo[address].healthFactor}, '${uniqueAddressesInfo[address].userConfiguration}')`
+                                : ""
+                    );
+
+                    addressesListSql = _.reject(addressesListSql, _.isEmpty);
+
+                    if (addressesListSql.length > 0) {
+                        let query = `
+                            MERGE INTO addresses AS target
+                            USING (VALUES 
+                                ${addressesListSql.join(",")}
+                            ) AS source (address, chain, healthFactor, userConfiguration)
+                            ON (target.address = source.address AND target.chain = source.chain)
+                            WHEN NOT MATCHED BY TARGET THEN
+                                INSERT (address, chain)
+                                VALUES (source.address, source.chain);
+                        `;
+
+                        await sqlManager.execQuery(query);
+
+                        await logger.log(
+                            "Addresses added to the database: " +
+                                JSON.stringify(addressesListSql),
+                            "webhookEngineProcessBlock"
                         );
-
-                        if (addressesListSql.length > 0) {
-                            let query = `INSERT INTO addresses (address, chain, healthfactor, userconfiguration) VALUES ${addressesListSql.join(
-                                ","
-                            )}`;
-                            await sqlManager.execQuery(query);
-
-                            await logger.log(
-                                "Addresses added to the database: " +
-                                    JSON.stringify(addressesListSql),
-                                "webhookEngineProcessBlock"
-                            );
-                        }
-
-                        this.uniqueAddresses[key] = [];
-                        this.uniqueAddressesHF[key] = [];
                     }
                 }
             }

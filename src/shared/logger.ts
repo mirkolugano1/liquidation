@@ -4,6 +4,7 @@ import { table } from "table";
 
 class Logger {
     private clientAppName: string = "";
+    private loggingType: string = "table";
     private outputType: string = "console";
     private isInitialized: boolean = false;
     private static instance: Logger;
@@ -22,8 +23,6 @@ class Logger {
                 error: error.message,
                 stack: error.stack,
             });
-
-            process.exit(1);
         });
 
         // Unhandled Promise Rejection Handler
@@ -40,10 +39,16 @@ class Logger {
                             ? reason.stack
                             : "No stack trace available",
                 });
-
-                process.exit(1);
             }
         );
+    }
+
+    useTableLogging() {
+        this.loggingType = "table";
+    }
+
+    useApplicationInsightsLogging() {
+        this.loggingType = "applicationInsights";
     }
 
     setOutputTypeConsole() {
@@ -100,21 +105,25 @@ class Logger {
     }
 
     viewDataAsTable(data: any[]) {
+        const isOutputTypeConsole = this.outputType === "console";
         const headers = Object.keys(data[0]);
         const headersUpper = _.map(headers, (header) => header?.toUpperCase());
         const rows = data.map((obj) =>
             headers.map(
-                (header) => obj[header]?.toString().substring(0, 50) || ""
+                (header) =>
+                    (isOutputTypeConsole
+                        ? obj[header]?.toString().substring(0, 50)
+                        : obj[header]?.toString()) || ""
             )
         );
 
-        return this.outputType === "console"
+        return isOutputTypeConsole
             ? this.viewDataAsConsoleTable(headersUpper, rows)
             : this.viewDataAsHTMLTable(headersUpper, rows);
     }
 
     viewDataAsHTMLTable(headers: string[], rows: any[][]): string {
-        let table = '<table border="1"><thead><tr>';
+        let table = '<table border="1" style="padding: 5px;"><thead><tr>';
         headers.forEach((header) => {
             table += `<th>${header}</th>`;
         });
@@ -141,7 +150,6 @@ class Logger {
             log = JSON.stringify(log);
         }
         const date = new Date();
-        const query = `INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname) VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)`;
         const parameters = {
             timestamp: date,
             log: log,
@@ -152,7 +160,12 @@ class Logger {
 
         console.log("Logger", parameters);
 
-        await sqlManager.execQuery(query, parameters);
+        if (this.loggingType === "applicationInsights") {
+            //todo log to application insights
+        } else {
+            const query = `INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname) VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)`;
+            await sqlManager.execQuery(query, parameters);
+        }
     }
 
     public static getInstance(): Logger {

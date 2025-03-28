@@ -191,6 +191,78 @@ class HealthFactorCheckEngine {
         process.exit(0);
     }
 
+    async getHealthFactorAndConfigurationForAddresses(
+        _addresses: string[],
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
+        if (!_addresses || _addresses.length == 0) return [];
+
+        let results: any[] = [];
+
+        const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
+            chain,
+            chainEnv
+        ).aaveLendingPoolContract.target;
+
+        let contractAddressArray = [];
+        for (let i = 0; i < _addresses.length; i++) {
+            contractAddressArray.push(aaveLendingPoolContractAddress);
+        }
+
+        const userAccountData = await this.batchEthCallForAddresses(
+            contractAddressArray,
+            _addresses,
+            this.aaveLendingPoolContractAbi,
+            "getUserAccountData",
+            chain,
+            chainEnv
+        );
+
+        const userConfiguration = await this.batchEthCallForAddresses(
+            contractAddressArray,
+            _addresses,
+            this.aaveLendingPoolContractAbi,
+            "getUserConfiguration",
+            chain,
+            chainEnv
+        );
+
+        for (let i = 0; i < _addresses.length; i++) {
+            const address = _addresses[i];
+            const healthFactor = this.getHealthFactorFromUserAccountData(
+                userAccountData[i]
+            );
+            let userConfigurationInt = parseInt(userConfiguration[i]);
+
+            if (Number.isNaN(userConfigurationInt)) {
+                await logger.log(
+                    `address ${address} on chain ${chain}-${chainEnv}`,
+                    "userConfigurarionIsNaN"
+                );
+
+                const userInfo = await this.getUserHealthFactorAndConfiguration(
+                    address,
+                    chain,
+                    chainEnv
+                );
+
+                userConfigurationInt = parseInt(userInfo.userConfiguration);
+            }
+
+            const userConfigurationBinary =
+                common.intToBinary(userConfigurationInt);
+
+            results.push({
+                address: address,
+                healthFactor: healthFactor,
+                userConfiguration: userConfigurationBinary,
+            });
+        }
+
+        return results;
+    }
+
     /**
      * This method is used to periodically check the health factor and userConfiguration of the addresses that are stored in the DB,
      * so that the data in the DB is always up to date, up to the interval of the cron job that calls this method.
@@ -204,64 +276,22 @@ class HealthFactorCheckEngine {
 
         await this.initialize();
         for (const info of this.aaveChainsInfos) {
-            const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
-                info.chain,
-                info.chainEnv
-            ).aaveLendingPoolContract.target;
             const dbAddressesArr = await sqlManager.execQuery(
                 `SELECT * FROM addresses where chain = '${info.chain}-${info.chainEnv}';`
             );
             const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
-            let contractAddressArray = [];
-            for (let i = 0; i < _addresses.length; i++) {
-                contractAddressArray.push(aaveLendingPoolContractAddress);
-            }
-
-            const userAccountData = await this.batchEthCallForAddresses(
-                contractAddressArray,
-                _addresses,
-                this.aaveLendingPoolContractAbi,
-                "getUserAccountData",
-                info.chain,
-                info.chainEnv
-            );
-
-            const userConfiguration = await this.batchEthCallForAddresses(
-                contractAddressArray,
-                _addresses,
-                this.aaveLendingPoolContractAbi,
-                "getUserConfiguration",
-                info.chain,
-                info.chainEnv
-            );
+            const results =
+                await this.getHealthFactorAndConfigurationForAddresses(
+                    _addresses,
+                    info.chain,
+                    info.chainEnv
+                );
 
             let query = "";
-            for (let i = 0; i < _addresses.length; i++) {
-                const address = _addresses[i];
-                const healthFactor = this.getHealthFactorFromUserAccountData(
-                    userAccountData[i]
-                );
-                let userConfigurationInt = parseInt(userConfiguration[i]);
-
-                if (Number.isNaN(userConfigurationInt)) {
-                    await logger.log(
-                        `address ${address} on chain ${info.chain}-${info.chainEnv}`,
-                        "userConfigurarionIsNaN"
-                    );
-
-                    const userInfo =
-                        await this.getUserHealthFactorAndConfiguration(
-                            address,
-                            info.chain,
-                            info.chainEnv
-                        );
-
-                    userConfigurationInt = parseInt(userInfo.userConfiguration);
-                }
-
-                const userConfigurationBinary =
-                    common.intToBinary(userConfigurationInt);
-
+            for (let i = 0; i < results.length; i++) {
+                const address = results[i].address;
+                const healthFactor = results[i].healthFactor;
+                const userConfigurationBinary = results[i].userConfiguration;
                 if (healthFactor > 5) {
                     query += `DELETE FROM addresses WHERE address = '${address}' AND chain = '${info.chain}-${info.chainEnv}';`;
                 } else {

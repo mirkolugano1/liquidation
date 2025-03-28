@@ -37,5 +37,5 @@ app.listen(port, "0.0.0.0", async () => {
     console.log("Web server is up. Initializing engines...");
     await webhookEngine.initialize();
     await healthFactorCheckEngine.initialize();
-    console.log("Engines Initialized.");
+    console.log("Engines Initialized. Ready to receive requests...");
 });
