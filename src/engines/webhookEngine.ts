@@ -9,7 +9,6 @@ class WebhookEngine {
 
     //these are in the form of {chain: [address1, address2, ...]}
     addresses: any = {};
-    uniqueAddressesHF: any = {};
     isInitialized: boolean = false;
 
     ifaceBorrow: any;
@@ -225,7 +224,9 @@ class WebhookEngine {
 
                         await logger.log(
                             "Addresses added to the database: " +
-                                JSON.stringify(addressesListSql),
+                                JSON.stringify(addressesListSql) +
+                                ", query: " +
+                                query,
                             "webhookEngineProcessBlock"
                         );
                     }

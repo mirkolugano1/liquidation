@@ -18,7 +18,8 @@ app.get("/", (req: any, res: any) => {
 
 app.get("/logs", async (req: any, res: any) => {
     const logLevel = req.query?.logLevel;
-    res.send(await logger.viewLogs(logLevel));
+    const env = req.query?.env;
+    res.send(await logger.viewLogs(logLevel, env));
 });
 
 app.get("/health", (req, res) => {

@@ -149,7 +149,13 @@ class HealthFactorCheckEngine {
 
     getAaveChainInfo(chain: string, chainEnv: string = "mainnet") {
         const key = `${chain}-${chainEnv}`;
-        return this.aave[key];
+        let obj = this.aave[key];
+        if (!obj) {
+            throw new Error(
+                `Aave chain info not found for chain ${chain} and env ${chainEnv}`
+            );
+        }
+        return obj;
     }
 
     getHealthFactorFromUserAccountData(userAccountData: any) {
@@ -188,7 +194,6 @@ class HealthFactorCheckEngine {
         if (this.checkReservesPricesIntervalId) {
             clearInterval(this.checkReservesPricesIntervalId);
         }
-        process.exit(0);
     }
 
     async getHealthFactorAndConfigurationForAddresses(
