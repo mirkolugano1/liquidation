@@ -22,8 +22,8 @@ before(async () => {
     //these are the ones that are in the .env file, which are not very sensitive
     process.env.LIQUIDATIONENVIRONMENT = "prod";
 
-    await webhookEngine.initializeWebhookEngine();
-    await healthFactorCheckEngine.initializeHealthFactorEngine();
+    await webhookEngine.initialize();
+    await healthFactorCheckEngine.initialize();
 });
 
 test("encryption_testEncryptDecrypt", { only: false }, async () => {
