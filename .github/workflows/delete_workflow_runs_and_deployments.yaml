@@ -27,19 +27,30 @@ jobs:
         permissions:
             deployments: write # Needed for deleting deployments
         steps:
+            - name: Install GitHub CLI
+              run: sudo apt-get install gh -y
+
+            - name: Get all deployments
+              id: get_deployments
+              run: |
+                  gh api repos/mirkolugano1/liquidation/deployments --jq '.[].id' > deployments.txt
+
+            - name: Get last deployment
+              id: get_last_deployment
+              run: |
+                  LAST_DEPLOYMENT_ID=$(gh api repos/mirkolugano1/liquidation/deployments --jq '.[0].id')
+                  echo "LAST_DEPLOYMENT_ID=$LAST_DEPLOYMENT_ID" >> $GITHUB_ENV
+
             - name: Delete old deployments
               run: |
-                  DEPLOYMENTS=$(gh api repos/mirkolugano1/liquidation/deployments --jq '.[] | {id: .id, statuses_url: .statuses_url}')
-                    echo "$DEPLOYMENTS" | jq -c '.[]' | while read -r deployment; do
-                        id=$(echo "$deployment" | jq -r '.id')
-                        statuses_url=$(echo "$deployment" | jq -r '.statuses_url')
-                        is_active=$(gh api "$statuses_url" --jq 'map(select(.state == "in_progress" or .state == "queued")) | length > 0')
-                        if [ "$is_active" = "false" ]; then
-                            echo "Deleting deployment $id"
-                            gh api -X DELETE "repos/mirkolugano1/liquidation/deployments/$id"
-                        else
-                            echo "Skipping active deployment $id"
-                        fi
-                    done
-              env:
+                  cat deployments.txt | while read -r deployment_id; do
+                      if [ "$deployment_id" != "$LAST_DEPLOYMENT_ID" ]; then
+                      echo "Deleting deployment $deployment_id"
+                      gh api -X DELETE "repos/mirkolugano1/liquidation/deployments/$deployment_id"
+                      else
+                      echo "Skipping last deployment $deployment_id"
+                      fi
+                  done
+                  env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  LAST_DEPLOYMENT_ID: ${{ env.LAST_DEPLOYMENT_ID }}
