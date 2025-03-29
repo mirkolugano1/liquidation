@@ -12,7 +12,7 @@ class WebhookEngine {
     isInitialized: boolean = false;
     batchAddressesListSql: any = {};
     batchAddressesList: any = {};
-    batchAddressesTreshold: number = 10;
+    batchAddressesTreshold: number = 25;
 
     ifaceBorrow: any;
     borrowEventAbi: string[] = [
@@ -251,7 +251,7 @@ class WebhookEngine {
                         );
 
                         if (
-                            this.batchAddressesListSql[key].length >
+                            this.batchAddressesListSql[key].length >=
                             this.batchAddressesTreshold
                         ) {
                             let query = `
