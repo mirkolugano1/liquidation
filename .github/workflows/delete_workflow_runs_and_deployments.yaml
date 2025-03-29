@@ -42,15 +42,15 @@ jobs:
                   echo "LAST_DEPLOYMENT_ID=$LAST_DEPLOYMENT_ID" >> $GITHUB_ENV
 
             - name: Delete old deployments
-              run: |
-                  cat deployments.txt | while read -r deployment_id; do
-                      if [ "$deployment_id" != "$LAST_DEPLOYMENT_ID" ]; then
-                      echo "Deleting deployment $deployment_id"
-                      gh api -X DELETE "repos/mirkolugano1/liquidation/deployments/$deployment_id"
-                      else
-                      echo "Skipping last deployment $deployment_id"
-                      fi
-                  done
-                  env:
+              env:
                   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
                   LAST_DEPLOYMENT_ID: ${{ env.LAST_DEPLOYMENT_ID }}
+              run: |
+                  cat deployments.txt | while read -r deployment_id; do
+                  if [ "$deployment_id" != "$LAST_DEPLOYMENT_ID" ]; then
+                      echo "Deleting deployment $deployment_id"
+                      gh api -X DELETE "repos/mirkolugano1/liquidation/deployments/$deployment_id"
+                  else
+                      echo "Skipping last deployment $deployment_id"
+                  fi
+                  done

@@ -145,7 +145,11 @@ class Logger {
         await this.log(log, "error");
     }
 
-    async log(log: any, logLevel: string = "info") {
+    async log(
+        log: any,
+        logLevel: string = "info",
+        loggingType: string = "table"
+    ) {
         if (typeof log !== "string") {
             log = JSON.stringify(log);
         }
@@ -160,7 +164,10 @@ class Logger {
 
         console.log("Logger", parameters);
 
-        if (this.loggingType === "applicationInsights") {
+        if (
+            loggingType == "applicationInsights" ||
+            this.loggingType === "applicationInsights"
+        ) {
             //todo log to application insights
         } else {
             const query = `INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname) VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)`;
