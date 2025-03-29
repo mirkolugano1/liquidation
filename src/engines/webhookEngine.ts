@@ -224,9 +224,7 @@ class WebhookEngine {
 
                         await logger.log(
                             "Addresses added to the database: " +
-                                JSON.stringify(addressesListSql) +
-                                ", query: " +
-                                query,
+                                JSON.stringify(addressesListSql),
                             "webhookEngineProcessBlock"
                         );
                     }
