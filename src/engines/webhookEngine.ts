@@ -267,18 +267,18 @@ class WebhookEngine {
 
                             await sqlManager.execQuery(query);
 
+                            await logger.log(
+                                "Addresses added to the database: " +
+                                    JSON.stringify(
+                                        this.batchAddressesList[key]
+                                    ),
+                                "webhookEngineProcessBlock"
+                            );
+
                             this.batchAddressesListSql[key] = [];
                             this.batchAddressesList[key] = [];
                             this.addresses[key] = _.uniq(
                                 _.union(this.addresses[key], uniqueAddresses)
-                            );
-
-                            await logger.log(
-                                "Addresses added to the database: " +
-                                    JSON.stringify(
-                                        this.batchAddressesListSql[key]
-                                    ),
-                                "webhookEngineProcessBlock"
                             );
                         }
                     }

@@ -3,15 +3,18 @@ import dotenv from "dotenv";
 import logger from "../shared/logger";
 dotenv.config();
 
-logger.initialize("webJob");
-
 async function main() {
     const args = process.argv;
     if (args.length < 3)
         throw new Error("Must define function to be executed.");
     const job = args[2];
 
+    logger.initialize("webJob:" + job);
     switch (job) {
+        case "testJob":
+            await healthFactorCheckEngine.testJob();
+            break;
+
         case "startCheckReservesPrices":
             await healthFactorCheckEngine.startCheckReservesPrices();
             break;

@@ -739,7 +739,7 @@ class HealthFactorCheckEngine {
 
     async testJob() {
         await logger.log("Start testJob", "webJobExecution");
-        await common.sleep(5000);
+        await common.sleep(1000);
         await logger.log("End testJob", "webJobExecution");
     }
 

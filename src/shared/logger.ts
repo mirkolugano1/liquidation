@@ -101,6 +101,7 @@ class Logger {
     async deleteOldLogs() {
         const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETDATE())`;
         await sqlManager.execQuery(query);
+        this.logEvent("Old logs deleted successfully.");
     }
 
     async getLogLevels() {
@@ -199,13 +200,13 @@ class Logger {
         const date = new Date();
         const aiParameters = {
             log: log,
-            logLevel: logLevel,
             env: process.env.LIQUIDATIONENVIRONMENT,
             clientAppName: this.clientAppName,
         };
 
         let dbParameters: any = Object.assign(
             {
+                logLevel: logLevel,
                 timestamp: date.toISOString(),
             },
             aiParameters
