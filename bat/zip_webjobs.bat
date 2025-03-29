@@ -1,1 +1,1 @@
-"C:\Program Files\7-Zip\7z.exe" a -tzip "../zip/webjobs.zip" "../webjobs/*"
+"C:\Program Files\7-Zip\7z.exe" a -tzip "../zip/webjobs.zip" "../webjobs/*" 
