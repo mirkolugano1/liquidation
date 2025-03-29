@@ -101,7 +101,7 @@ test("hf_initializeHealthFactorEngine", { only: false }, async () => {
     );
 });
 
-test("logger_logsCorrectly", { only: true }, async () => {
+test("logger_logsCorrectly", { only: false }, async () => {
     const text = Math.random().toString();
     logger.useTableLogging();
     await logger.log(text, "test");

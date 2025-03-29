@@ -197,31 +197,37 @@ class Logger {
             log = JSON.stringify(log);
         }
         const date = new Date();
-        const parameters = {
-            timestamp: date,
+        const aiParameters = {
             log: log,
             logLevel: logLevel,
             env: process.env.LIQUIDATIONENVIRONMENT,
             clientAppName: this.clientAppName,
         };
 
-        console.log("Logger", parameters);
+        let dbParameters: any = Object.assign(
+            {
+                timestamp: date.toISOString(),
+            },
+            aiParameters
+        );
+
+        console.log("Logger", dbParameters);
 
         if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
             if (logType === LogType.Event) {
                 this.applicationInsightsClient.trackEvent({
                     name: logLevel,
-                    properties: parameters,
+                    properties: aiParameters,
                 });
             } else {
                 this.applicationInsightsClient.trackTrace({
                     message: logLevel,
-                    properties: parameters,
+                    properties: aiParameters,
                 });
             }
         } else {
             const query = `INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname) VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)`;
-            await sqlManager.execQuery(query, parameters);
+            await sqlManager.execQuery(query, dbParameters);
         }
     }
 

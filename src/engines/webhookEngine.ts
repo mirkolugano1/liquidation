@@ -10,6 +10,9 @@ class WebhookEngine {
     //these are in the form of {chain: [address1, address2, ...]}
     addresses: any = {};
     isInitialized: boolean = false;
+    batchAddressesListSql: any = {};
+    batchAddressesList: any = {};
+    batchAddressesTreshold: number = 10;
 
     ifaceBorrow: any;
     borrowEventAbi: string[] = [
@@ -41,28 +44,31 @@ class WebhookEngine {
 
         let method = req.query.method;
         if (!method) method = "get";
-        let isHFEngineVar = false;
-        let canSetVar = false;
-        switch (key) {
-            case "checkReservesPricesIntervalInSeconds":
-                canSetVar = true;
-                isHFEngineVar = true;
-                break;
-        }
-
         if (method === "set") {
-            if (canSetVar) {
-                if (isHFEngineVar)
-                    (healthFactorCheckEngine as any)[key] = req.query.value;
-                else (this as any)[key] = req.query.value;
-                return `Variable ${key} set to ${req.query.value}`;
-            } else {
-                throw new Error("Forbidden: Variable cannot be set");
+            let value: any = req.query.value;
+            if (!value) throw new Error("Missing required parameter: value");
+            switch (key) {
+                case "batchAddressesTreshold":
+                    value = parseInt(req.query.value);
+                    this.batchAddressesTreshold = value;
+                    break;
+                case "checkReservesPricesIntervalInSeconds":
+                    value = parseInt(req.query.value);
+                    healthFactorCheckEngine.checkReservesPricesIntervalInSeconds =
+                        value;
+                    break;
+                default:
+                    return "Key not allowed to be changed";
             }
+            return `Variable ${key} set to ${req.query.value}`;
         } else {
-            return isHFEngineVar
-                ? (healthFactorCheckEngine as any)[key]
-                : JSON.stringify((this as any)[key]);
+            if ((this as any).hasOwnProperty(key)) {
+                return (this as any)[key];
+            } else if ((healthFactorCheckEngine as any).hasOwnProperty(key)) {
+                return (healthFactorCheckEngine as any)[key];
+            } else {
+                return "Key not found";
+            }
         }
     }
 
@@ -162,25 +168,36 @@ class WebhookEngine {
                     (address) => this.normalizeAddress(address)
                 );
 
-                //Remove duplicates and empty addresses
+                //initialize the batchAddressesListSql array for this chain
+                //if it doesn't exist yet
+                if (!this.batchAddressesListSql.hasOwnProperty(key)) {
+                    this.batchAddressesListSql[key] = [];
+                }
+                if (!this.batchAddressesList.hasOwnProperty(key)) {
+                    this.batchAddressesList[key] = [];
+                }
+
+                //Remove empty addresses or addresses already present in the DB or in the
+                //current batch of addresses to be saved
                 const uniqueAddresses: string[] = _.reject(
                     _.uniq(normalizedAddressesToAdd),
                     (normalizedAddress) => {
                         return (
                             _.isEmpty(normalizedAddress) ||
-                            _.includes(this.addresses[key], normalizedAddress)
+                            _.includes(
+                                this.addresses[key],
+                                normalizedAddress
+                            ) ||
+                            _.includes(
+                                this.batchAddressesList[key],
+                                normalizedAddress
+                            )
                         );
                     }
                 );
 
+                //if there are any unique addresses to add, get their health factor and user configuration
                 if (uniqueAddresses.length > 0) {
-                    if (!this.addresses.hasOwnProperty(key))
-                        this.addresses[key] = [];
-
-                    this.addresses[key] = _.uniq(
-                        _.union(this.addresses[key], uniqueAddresses)
-                    );
-
                     let uniqueAddressesInfo: any = {};
                     const results =
                         await healthFactorCheckEngine.getHealthFactorAndConfigurationForAddresses(
@@ -196,23 +213,51 @@ class WebhookEngine {
                         };
                     }
 
-                    //only save addresses with healthfactor < 5 and userConfiguration != 0
-                    let addressesListSql = uniqueAddresses.map(
-                        (address: string) =>
+                    // Filter out addresses with health factor >= 5 or userConfiguration = 0
+                    // and prepare the SQL insert statements
+                    let addressesListSql: string[] = [];
+                    let addressesList: string[] = [];
+
+                    for (const address of uniqueAddresses) {
+                        if (
                             uniqueAddressesInfo[address].healthFactor < 5 &&
                             uniqueAddressesInfo[address].userConfiguration !=
                                 "0"
-                                ? `('${address}', '${key}', ${uniqueAddressesInfo[address].healthFactor}, '${uniqueAddressesInfo[address].userConfiguration}')`
-                                : ""
-                    );
+                        ) {
+                            addressesListSql.push(
+                                `('${address}', '${key}', ${uniqueAddressesInfo[address].healthFactor}, '${uniqueAddressesInfo[address].userConfiguration}')`
+                            );
+                            addressesList.push(address);
+                        }
+                    }
 
-                    addressesListSql = _.reject(addressesListSql, _.isEmpty);
-
+                    //if there are addresses with healthFactor < 5 and userConfiguration != 0
+                    //add them to the batchAddressesListSql array for this chain
+                    //to be monitored and saved in the database
                     if (addressesListSql.length > 0) {
-                        let query = `
+                        if (!this.batchAddressesListSql.hasOwnProperty(key)) {
+                            this.batchAddressesListSql[key] = [];
+                        }
+                        if (!this.addresses.hasOwnProperty(key))
+                            this.addresses[key] = [];
+
+                        this.batchAddressesListSql[key] = _.union(
+                            this.batchAddressesListSql[key],
+                            addressesListSql
+                        );
+                        this.batchAddressesList[key] = _.union(
+                            this.batchAddressesList[key],
+                            addressesList
+                        );
+
+                        if (
+                            this.batchAddressesListSql[key].length >
+                            this.batchAddressesTreshold
+                        ) {
+                            let query = `
                             MERGE INTO addresses AS target
                             USING (VALUES 
-                                ${addressesListSql.join(",")}
+                                ${this.batchAddressesListSql[key].join(",")}
                             ) AS source (address, chain, healthFactor, userConfiguration)
                             ON (target.address = source.address AND target.chain = source.chain)
                             WHEN NOT MATCHED BY TARGET THEN
@@ -220,13 +265,22 @@ class WebhookEngine {
                                 VALUES (source.address, source.chain, source.healthFactor, source.userConfiguration);
                         `;
 
-                        await sqlManager.execQuery(query);
+                            await sqlManager.execQuery(query);
 
-                        await logger.log(
-                            "Addresses added to the database: " +
-                                JSON.stringify(addressesListSql),
-                            "webhookEngineProcessBlock"
-                        );
+                            this.batchAddressesListSql[key] = [];
+                            this.batchAddressesList[key] = [];
+                            this.addresses[key] = _.uniq(
+                                _.union(this.addresses[key], uniqueAddresses)
+                            );
+
+                            await logger.log(
+                                "Addresses added to the database: " +
+                                    JSON.stringify(
+                                        this.batchAddressesListSql[key]
+                                    ),
+                                "webhookEngineProcessBlock"
+                            );
+                        }
                     }
                 }
             }
