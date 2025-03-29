@@ -4,6 +4,9 @@ import logger from "../shared/logger";
 import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 import common from "../shared/common";
 import encryption from "../shared/encryption";
+import { application } from "express";
+import * as applicationInsights from "applicationinsights";
+
 dotenv.config();
 
 logger.initialize("sandbox", false);
@@ -20,10 +23,20 @@ async function main() {
     const decrypted = await encryption.decrypt(encrypted);
     console.log("decrypted", decrypted);
 */
+    /*
     logger.setOutputTypeHTML();
     const logs = await logger.viewLogs();
     console.log("logs", logs);
+    */
     //await healthFactorCheckEngine.startCheckReservesPrices();
+
+    applicationInsights.setup(); //.start();
+    const client = applicationInsights.defaultClient;
+    client.trackEvent({
+        name: "testEvent",
+        properties: { customProperty: "customValue" },
+    });
+    await client.flush();
 }
 
 main();
