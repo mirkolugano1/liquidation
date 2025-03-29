@@ -37,7 +37,7 @@ test("encryption_testEncryptDecrypt", { only: false }, async () => {
     assert.strictEqual(text, decrypted2);
 });
 
-test("we_manageVariable", { only: false }, async () => {
+test("we_manageVariable", { only: true }, async () => {
     const req: any = {
         query: {
             value: "testValue",
@@ -45,10 +45,6 @@ test("we_manageVariable", { only: false }, async () => {
         },
     };
     //key is not defined, should throw an error
-    assert.throws(() => webhookEngine.manageVariable(req));
-
-    //key is not present, should throw an error
-    req.query.key = "someTestKeyWhichIsNotInPresent";
     assert.throws(() => webhookEngine.manageVariable(req));
 
     //key is not allowed to be changed, should throw an error

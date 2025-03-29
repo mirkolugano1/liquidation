@@ -58,7 +58,7 @@ class WebhookEngine {
                         value;
                     break;
                 default:
-                    return "Key not allowed to be changed";
+                    throw new Error("Cannot set this variable: " + key);
             }
             return `Variable ${key} set to ${req.query.value}`;
         } else {
