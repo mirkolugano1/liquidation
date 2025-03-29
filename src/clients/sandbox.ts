@@ -9,7 +9,7 @@ import * as applicationInsights from "applicationinsights";
 
 dotenv.config();
 
-logger.initialize("sandbox", false);
+logger.initialize("sandbox");
 
 async function main() {
     /*
