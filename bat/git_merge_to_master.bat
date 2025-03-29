@@ -7,4 +7,4 @@ git pull
 git merge develop -m "Merged develop into master"
 git push
 git checkout develop
-cd batch_scripts
+cd bat
