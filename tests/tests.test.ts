@@ -101,11 +101,12 @@ test("hf_initializeHealthFactorEngine", { only: false }, async () => {
     );
 });
 
-test("logger_logsCorrectly", { only: false }, async () => {
+test("logger_logsCorrectly", { only: true }, async () => {
     const text = Math.random().toString();
+    logger.useTableLogging();
     await logger.log(text, "test");
     const result = await sqlManager.execQuery(
-        "SELECT TOP 1 * FROM dbo.logs ORDER BY timestamp DESC"
+        "SELECT TOP 1 * FROM dbo.logs WHERE loglevel = 'test' ORDER BY timestamp DESC"
     );
     assert.ok(result.length > 0);
     assert.strictEqual(result[0].log, text);

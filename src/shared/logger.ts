@@ -184,26 +184,13 @@ class Logger {
         await this.log(log, "error");
     }
 
-    async logEvent(
-        log: any,
-        logLevel: string = "info",
-        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
-    ) {
-        await this.log(log, logLevel, loggingFramework, LogType.Event);
-    }
-
-    async logToTable(
-        log: any,
-        logLevel: string = "info",
-        logType: LogType = LogType.Trace
-    ) {
-        await this.log(log, logLevel, LoggingFramework.Table, logType);
+    async logEvent(log: any, logLevel: string = "info") {
+        await this.log(log, logLevel, LogType.Event);
     }
 
     async log(
         log: any,
         logLevel: string = "info",
-        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights,
         logType: LogType = LogType.Trace
     ) {
         if (typeof log !== "string") {
@@ -220,10 +207,7 @@ class Logger {
 
         console.log("Logger", parameters);
 
-        if (
-            loggingFramework == LoggingFramework.ApplicationInsights ||
-            this.loggingFramework === LoggingFramework.ApplicationInsights
-        ) {
+        if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
             if (logType === LogType.Event) {
                 this.applicationInsightsClient.trackEvent({
                     name: logLevel,
