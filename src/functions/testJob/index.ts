@@ -4,6 +4,10 @@ import logger from "../../shared/logger";
 dotenv.config();
 
 async function main() {
+    logger.initialize("webJob:testJob");
+    await healthFactorCheckEngine.testJob();
+    return;
+
     const args = process.argv;
     if (args.length < 3)
         throw new Error("Must define function to be executed.");

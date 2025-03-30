@@ -16,11 +16,11 @@ jobs:
             - name: Delete workflow runs
               run: |
                   gh run list --limit 100 --json databaseId,createdAt \
-                  --jq '.[] | select(.createdAt < (now - 86400 | todate)) | .databaseId' \
-                  | xargs -I {} gh run delete {}
+                    --jq '.[] | select(.createdAt < (now - 86400 | todateiso8601)) | .databaseId' \
+                    | xargs -I {} gh run delete {}
 
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_TOKEN: ${{ github.token }}
 
     delete_deployments:
         runs-on: ubuntu-latest
@@ -43,7 +43,7 @@ jobs:
 
             - name: Delete old deployments
               env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  GH_TOKEN: ${{ github.token }}
                   LAST_DEPLOYMENT_ID: ${{ env.LAST_DEPLOYMENT_ID }}
               run: |
                   cat deployments.txt | while read -r deployment_id; do
