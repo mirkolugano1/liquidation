@@ -26,9 +26,8 @@
         "typescript": "^5.7.3"
     },
     "scripts": {
-        "build": "tsc && npm run copy-config && npm run copy-assets",
+        "build": "tsc && npm run copy-config",
         "copy-config": "copyfiles package.json package-lock.json dist/",
-        "copy-assets": "copyfiles -u 1 src/functions/**/*.json dist",
         "start": "npm install && node clients/webServer.js",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly src/clients/webServer.ts",
