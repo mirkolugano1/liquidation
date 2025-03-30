@@ -29,7 +29,7 @@ async function main() {
     console.log("logs", logs);
     */
     //await healthFactorCheckEngine.startCheckReservesPrices();
-
+    /*
     applicationInsights.setup(); //.start();
     const client = applicationInsights.defaultClient;
     client.trackEvent({
@@ -37,6 +37,7 @@ async function main() {
         properties: { customProperty: "customValue" },
     });
     await client.flush();
+    */
 }
 
 main();
