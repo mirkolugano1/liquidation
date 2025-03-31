@@ -3,6 +3,19 @@ import dotenv from "dotenv";
 import logger from "../shared/logger";
 dotenv.config();
 
+import { app, Timer } from "@azure/functions";
+
+async function testFunction(myTimet: Timer): Promise<void> {
+    logger.initialize("function:testJob");
+    await healthFactorCheckEngine.testJob();
+}
+
+app.timer("testFunction", {
+    schedule: "0 */5 * * * *", // Cron expression for every 5 minutes
+    handler: testFunction,
+});
+
+/*
 async function main() {
     logger.initialize("webJob:testJob");
     await healthFactorCheckEngine.testJob();
@@ -33,3 +46,4 @@ async function main() {
 }
 
 main();
+*/
