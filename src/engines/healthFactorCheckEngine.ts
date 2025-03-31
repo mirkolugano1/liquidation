@@ -5,6 +5,8 @@ import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
 import logger from "../shared/logger";
+import { InvocationContext } from "@azure/functions";
+import { LoggingFramework } from "../shared/enums";
 
 class HealthFactorCheckEngine {
     private static instance: HealthFactorCheckEngine;
@@ -737,8 +739,12 @@ class HealthFactorCheckEngine {
         console.log(userConfiguration);
     }
 
-    async testFunction() {
-        logger.initialize("function:testFunction");
+    async testFunction(context: InvocationContext) {
+        logger.initialize(
+            "function:testFunction",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
         await logger.log("Start testFunction", "functionAppExecution");
         await common.sleep(1000);
         await logger.log("End testFunction", "functionAppExecution");
