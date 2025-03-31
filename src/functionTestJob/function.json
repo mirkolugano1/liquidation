@@ -4,8 +4,8 @@
             "name": "myTimer",
             "type": "timerTrigger",
             "direction": "in",
-            "schedule": "0 */30 * * * *"
+            "schedule": "0 */10 * * * *"
         }
     ],
-    "scriptFile": "../../../dist/functions/testJob/index.js"
+    "scriptFile": "../../dist/functionTestJob/index.js"
 }

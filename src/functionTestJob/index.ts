@@ -1,6 +1,6 @@
-import healthFactorCheckEngine from "../../engines/healthFactorCheckEngine";
+import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
 import dotenv from "dotenv";
-import logger from "../../shared/logger";
+import logger from "../shared/logger";
 dotenv.config();
 
 async function main() {
