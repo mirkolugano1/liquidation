@@ -53,5 +53,5 @@
         "tough-cookie": "^5.1.2",
         "y18n": "^5.0.8"
     },
-    "main": "dist/functions/functions.js"
+    "main": "functions/functions.js"
 }
