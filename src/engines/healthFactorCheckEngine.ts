@@ -737,10 +737,11 @@ class HealthFactorCheckEngine {
         console.log(userConfiguration);
     }
 
-    async testJob() {
-        await logger.log("Start testJob", "webJobExecution");
+    async testFunction() {
+        logger.initialize("function:testFunction");
+        await logger.log("Start testFunction", "functionAppExecution");
         await common.sleep(1000);
-        await logger.log("End testJob", "webJobExecution");
+        await logger.log("End testFunction", "functionAppExecution");
     }
 
     //#endregion test

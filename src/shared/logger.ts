@@ -2,6 +2,8 @@ import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
 import { table } from "table";
 import * as applicationInsights from "applicationinsights";
+import { LoggingFramework, LogType, OutputType } from "../shared/enums";
+import { InvocationContext } from "@azure/functions";
 
 class Logger {
     private clientAppName: string = "";
@@ -11,15 +13,18 @@ class Logger {
     private isInitialized: boolean = false;
     private applicationInsightsClient: any = null;
     private static instance: Logger;
+    private context: InvocationContext | null = null;
     private constructor() {}
 
     initialize(
         clientAppName: string,
-        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights,
+        context: InvocationContext | null = null
     ) {
         if (this.isInitialized) return;
         this.isInitialized = true;
         this.clientAppName = clientAppName;
+        this.context = context;
 
         applicationInsights
             .setup()
@@ -215,16 +220,39 @@ class Logger {
         console.log("Logger", dbParameters);
 
         if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
-            if (logType === LogType.Event) {
-                this.applicationInsightsClient.trackEvent({
-                    name: logLevel,
-                    properties: aiParameters,
-                });
+            if (this.context) {
+                switch (logLevel) {
+                    case "error":
+                        this.context.error(log);
+                        break;
+                    case "warning":
+                        this.context.warn(log);
+                        break;
+                    case "info":
+                        this.context.info(log);
+                        break;
+                    case "debug":
+                        this.context.debug(log);
+                        break;
+                    case "trace":
+                        this.context.trace(log);
+                        break;
+                    default:
+                        this.context.log(log);
+                        break;
+                }
             } else {
-                this.applicationInsightsClient.trackTrace({
-                    message: logLevel,
-                    properties: aiParameters,
-                });
+                if (logType === LogType.Event) {
+                    this.applicationInsightsClient.trackEvent({
+                        name: logLevel,
+                        properties: aiParameters,
+                    });
+                } else {
+                    this.applicationInsightsClient.trackTrace({
+                        message: logLevel,
+                        properties: aiParameters,
+                    });
+                }
             }
         } else {
             const query = `INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname) VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)`;
@@ -238,21 +266,6 @@ class Logger {
         }
         return Logger.instance;
     }
-}
-
-enum LogType {
-    Event,
-    Trace,
-}
-
-enum LoggingFramework {
-    Table,
-    ApplicationInsights,
-}
-
-enum OutputType {
-    Console,
-    HTML,
 }
 
 export default Logger.getInstance();
