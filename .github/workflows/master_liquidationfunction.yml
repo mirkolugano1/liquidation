@@ -22,10 +22,6 @@ jobs:
             - name: "Checkout GitHub Action"
               uses: actions/checkout@v4
 
-            - name: List files in repository after checkout
-              run: |
-                  ls -la
-
             - name: Setup Node ${{ env.NODE_VERSION }} Environment
               uses: actions/setup-node@v3
               with:
@@ -44,6 +40,9 @@ jobs:
 
             - name: List files in repository after build
               run: |
+                  ls -la
+                  cp .deployment dist/
+                  cd dist
                   ls -la
 
             - name: Upload artifact for deployment job
