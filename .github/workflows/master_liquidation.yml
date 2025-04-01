@@ -36,4 +36,4 @@ jobs:
               shell: bash
               run: |
                   az webapp config appsettings set --resource-group liquidation_group --name liquidation --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
-                  az webapp deploy --resource-group liquidation_group --name liquidation --src-path "./deployment.zip" --type zip --remote-build true
+                  az webapp deploy --resource-group liquidation_group --name liquidation --src-path "./deployment.zip" --type zip --build-remote true
