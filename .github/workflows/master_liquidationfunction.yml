@@ -38,32 +38,18 @@ jobs:
                   npm install
                   npm run build --if-present
 
-            - name: Copy .deployment to dist
+            - name: Prepare deployment package
               run: |
-                  cp .deployment dist/
-                  echo "Listing files in dist directory:"
-                  ls -la dist
-
-            - name: Create deployment package
-              run: |
-                  cd dist
-                  zip -r ../deployment.zip .
-                  cd ..
+                  # Create a deployment package excluding node_modules
+                  zip -r deployment.zip . -x "node_modules/*" "dist/*" ".git/*"
                   echo "Listing contents of deployment.zip:"
                   unzip -l deployment.zip
-
-            - name: Upload artifact for deployment job
-              uses: actions/upload-artifact@v4
-              with:
-                  name: node-app
-                  path: deployment.zip
-
-            - name: Set SCM_DO_BUILD_DURING_DEPLOYMENT app setting
-              shell: bash
-              run: |
-                  az functionapp config appsettings set --name liquidationfunction --resource-group liquidation_functionappgroup --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
 
             - name: Deploy to Azure FunctionApp
               shell: bash
               run: |
+                  # Configure Azure to build the app during deployment
+                  az functionapp config appsettings set --name liquidationfunction --resource-group liquidation_functionappgroup --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
+
+                  # Deploy the source code and let Azure build it
                   az functionapp deployment source config-zip -g liquidation_functionappgroup -n liquidationfunction --src "./deployment.zip" --build-remote true
