@@ -22,6 +22,10 @@ jobs:
             - name: "Checkout GitHub Action"
               uses: actions/checkout@v4
 
+            - name: List files in repository after checkout
+              run: |
+                  ls -la
+
             - name: Setup Node ${{ env.NODE_VERSION }} Environment
               uses: actions/setup-node@v3
               with:
@@ -36,8 +40,7 @@ jobs:
               shell: bash
               run: |
                   npm install
-                  npm run build --if-present                  
-                  npm run copy-deployment
+                  npm run build --if-present
 
             - name: Upload artifact for deployment job
               uses: actions/upload-artifact@v4
