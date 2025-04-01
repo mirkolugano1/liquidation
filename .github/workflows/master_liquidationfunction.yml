@@ -38,13 +38,6 @@ jobs:
                   npm install
                   npm run build --if-present
 
-            - name: List files in repository after build
-              run: |
-                  ls -la
-                  cp .deployment dist/
-                  cd dist
-                  ls -la
-
             - name: Upload artifact for deployment job
               uses: actions/upload-artifact@v4
               with:
@@ -74,6 +67,11 @@ jobs:
             - name: Create deployment package
               run: |
                   zip -r deployment.zip .
+
+            - name: List files and add to zip
+              run: |
+                  ls -la
+                  zip -u deployment.zip .deployment
 
             - name: Deploy to Azure FunctionApp
               shell: bash
