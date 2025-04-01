@@ -58,6 +58,11 @@ jobs:
                   name: node-app
                   path: deployment.zip
 
+            - name: Set SCM_DO_BUILD_DURING_DEPLOYMENT app setting
+              shell: bash
+              run: |
+                  az functionapp config appsettings set --name liquidationfunction --resource-group liquidation_functionappgroup --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
+
             - name: Deploy to Azure FunctionApp
               shell: bash
               run: |
