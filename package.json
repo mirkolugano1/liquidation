@@ -27,7 +27,7 @@
     },
     "scripts": {
         "build": "tsc && npm run copy-config",
-        "copy-config": "copyfiles package.json package-lock.json host.json .deployment dist/",
+        "copy-config": "copyfiles package.json package-lock.json host.json .deployment sh/* dist/",
         "start": "npm install && node clients/webServer.js",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly src/clients/webServer.ts",

@@ -1,8 +1,3 @@
-# delete workflow runs older than 1 day
-gh run --limit 100 --json databaseId,createdAt \
---jq '.[] | select(.createdAt < (now - 86400 | todateiso8601)) | .databaseId' \
-| xargs -I {} gh run delete {}
-
 # delete all deployments except the last one
 gh api repos/mirkolugano1/liquidation/deployments --jq '.[].id' > deployments.txt
 LAST_DEPLOYMENT_ID=$(gh api repos/mirkolugano1/liquidation/deployments --jq '.[0].id')                
