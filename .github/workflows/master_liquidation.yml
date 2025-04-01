@@ -31,9 +31,8 @@ jobs:
                   # Create a deployment package excluding node_modules
                   zip -r deployment.zip . -x "node_modules/*" "dist/*" ".git/*"
 
-            - name: Deploy to Azure WebApp
-              id: deploy-to-webapp
-              shell: bash
-              run: |
-                  az webapp config appsettings set --resource-group liquidation_group --name liquidation --settings SCM_DO_BUILD_DURING_DEPLOYMENT=true
-                  az webapp deploy --resource-group liquidation_group --name liquidation --src-path "./deployment.zip" --type zip --build-remote true
+            # Using the GitHub Action (recommended)
+            - uses: azure/webapps-deploy@v2
+              with:
+                  app-name: liquidation
+                  package: "./deployment.zip"
