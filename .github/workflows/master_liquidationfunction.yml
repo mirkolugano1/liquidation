@@ -65,6 +65,10 @@ jobs:
               with:
                   creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+            - name: Copy node_modules to dist directory
+              run: |
+                  cp -r node_modules dist/
+
             - name: Create deployment package
               run: |
                   zip -r deployment.zip .
