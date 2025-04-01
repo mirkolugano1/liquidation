@@ -38,6 +38,13 @@ jobs:
                   npm install
                   npm run build --if-present
 
+            - name: List files in repository after build
+              run: |
+                  cp .deployment dist/
+                  echo "copied .deployment to dist. Listing files in dist:"
+                  cd dist
+                  ls -la
+
             - name: Upload artifact for deployment job
               uses: actions/upload-artifact@v4
               with:
