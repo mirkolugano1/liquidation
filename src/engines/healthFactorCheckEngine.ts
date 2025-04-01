@@ -745,9 +745,9 @@ class HealthFactorCheckEngine {
             LoggingFramework.ApplicationInsights,
             context
         );
-        await logger.log("Start testFunction", "functionAppExecution");
+        await logger.log("Start testFunction");
         await common.sleep(1000);
-        await logger.log("End testFunction", "functionAppExecution");
+        await logger.log("End testFunction");
     }
 
     //#endregion test

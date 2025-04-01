@@ -103,10 +103,16 @@ class Logger {
         this.outputType = OutputType.HTML;
     }
 
-    async deleteOldLogs() {
+    async deleteOldTableLogs(context: InvocationContext) {
+        this.initialize(
+            "function:deleteOldTableLogs",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+        this.log("Started function deleteOldTableLogs");
         const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETDATE())`;
         await sqlManager.execQuery(query);
-        this.logEvent("Old logs deleted successfully.");
+        this.log("Ended function deleteOldTableLogs");
     }
 
     async getLogLevels() {
