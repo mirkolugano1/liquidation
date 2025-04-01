@@ -38,7 +38,7 @@ jobs:
                   npm install
                   npm run build --if-present
 
-            - name: List files in repository after build
+            - name: Copy .deployment to dist
               run: |
                   cp .deployment dist/
                   echo "Listing files in dist directory:"
@@ -47,15 +47,18 @@ jobs:
             - name: Create deployment package
               run: |
                   cd dist
-                  zip -r deployment.zip .
+                  zip -r ../deployment.zip .
+                  cd ..
+                  echo "Listing contents of deployment.zip:"
+                  unzip -l deployment.zip
 
             - name: Upload artifact for deployment job
               uses: actions/upload-artifact@v4
               with:
                   name: node-app
-                  path: dist
+                  path: deployment.zip
 
             - name: Deploy to Azure FunctionApp
               shell: bash
               run: |
-                  az functionapp deployment source config-zip -g liquidation_functionappgroup -n liquidationfunction --src "./dist/deployment.zip"
+                  az functionapp deployment source config-zip -g liquidation_functionappgroup -n liquidationfunction --src "./deployment.zip"
