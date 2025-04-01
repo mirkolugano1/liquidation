@@ -66,4 +66,4 @@ jobs:
             - name: Deploy to Azure FunctionApp
               shell: bash
               run: |
-                  az functionapp deployment source config-zip -g liquidation_functionappgroup -n liquidationfunction --src "./deployment.zip"
+                  az functionapp deployment source config-zip -g liquidation_functionappgroup -n liquidationfunction --src "./deployment.zip" --build-remote true
