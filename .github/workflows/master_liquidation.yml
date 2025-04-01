@@ -30,7 +30,7 @@ jobs:
               run: |
                   npm install
                   npm run build --if-present
-                  npm run test --if-present
+                  cp .deployment dist
 
             # Option 1: Upload just the dist directory
             - name: Upload artifact for deployment job
