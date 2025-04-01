@@ -1,2 +1,2 @@
 [config] 
-command = bash sh/post_deploy_function_app.sh
+SCM_DO_BUILD_DURING_DEPLOYMENT = true
