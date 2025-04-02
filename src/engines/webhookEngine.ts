@@ -198,37 +198,14 @@ class WebhookEngine {
 
                 //if there are any unique addresses to add, get their health factor and user configuration
                 if (uniqueAddresses.length > 0) {
-                    let uniqueAddressesInfo: any = {};
-                    const results =
-                        await healthFactorCheckEngine.getHealthFactorAndConfigurationForAddresses(
-                            uniqueAddresses,
-                            chain,
-                            chainEnv
-                        );
-
-                    for (const result of results) {
-                        uniqueAddressesInfo[result.address] = {
-                            healthFactor: result.healthFactor,
-                            userConfiguration: result.userConfiguration,
-                        };
-                    }
-
-                    // Filter out addresses with health factor >= 2 or userConfiguration = 0
-                    // and prepare the SQL insert statements
                     let addressesListSql: string[] = [];
                     let addressesList: string[] = [];
 
                     for (const address of uniqueAddresses) {
-                        if (
-                            uniqueAddressesInfo[address].healthFactor < 2 &&
-                            uniqueAddressesInfo[address].userConfiguration !=
-                                "0"
-                        ) {
-                            addressesListSql.push(
-                                `('${address}', '${key}', ${uniqueAddressesInfo[address].healthFactor}, '${uniqueAddressesInfo[address].userConfiguration}')`
-                            );
-                            addressesList.push(address);
-                        }
+                        addressesListSql.push(
+                            `('${address}', '${key}', null, 'null')`
+                        );
+                        addressesList.push(address);
                     }
 
                     //if there are addresses with healthFactor < 5 and userConfiguration != 0
