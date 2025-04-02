@@ -35,8 +35,8 @@ jobs:
 
             - name: Prepare deployment package
               run: |
-                  # Create a deployment package including dist but excluding node_modules
-                  zip -r deployment.zip . -x "node_modules/*" ".git/*"
+                  # This will zip everything except node_modules and common exclude patterns
+                  zip -r deployment.zip . -x "node_modules/*" "dist/*" ".git/*" "*.log" "*.md" "README.md" "LICENSE" ".github/*" ".vscode/*" "tests/*" "test/*" "*.spec.js" "*.test.js" "*.spec.ts" "*.test.ts"
 
             # Using the GitHub Action (recommended)
             - uses: azure/webapps-deploy@v2
