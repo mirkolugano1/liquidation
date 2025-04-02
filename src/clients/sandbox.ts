@@ -12,7 +12,7 @@ dotenv.config();
 logger.initialize("sandbox");
 
 async function main() {
-    //test1
+    //test
     /*
     const pwdEncrypted =
         "tDS1H0NvEBRH98ceM/CF6iBIF7F6Ss6Elxqwxinnv0A1i6TTRdYmk1nGfyaNfjvxPtKWv3IfV65JgCVC9eah3LKlzVtrTbf9YR+vlB9UJU6EUsFEruT+gTfJN8CROgdzp+K2gYt4qk9hxQG8IVLvruxVS3dqsTODbD6aIrNVAgJCcDZ6DOR6CZmqHvNVHhzCHKpByCAk3YyzyF1CYNYYbRsQrL6SPGBPBo39jnAdLBB8vpDkrP7W7JTqcx1y8KtnDTLbxlaP6I/lq4RaIQDsY4mIyouV6SY9YZRa2LoY3ya0O5FziGwLiGysl5TgxVo2FfkuCvQt9hIX5LtxJbqEZA==";
