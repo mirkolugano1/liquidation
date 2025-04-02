@@ -12,6 +12,11 @@ dotenv.config();
 logger.initialize("sandbox");
 
 async function main() {
+    try {
+        await healthFactorCheckEngine.updateReservesConfiguration();
+    } catch (error) {
+        console.error("Error in main function:", error);
+    }
     //test
     /*
     const pwdEncrypted =

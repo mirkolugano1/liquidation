@@ -103,6 +103,12 @@ class Logger {
         this.outputType = OutputType.HTML;
     }
 
+    /**
+     * deletes old entries from the logs table older than 2 days
+     * so that the table does not grow indefinitely
+     *
+     * @param context the InvocationContext of the function app (for Application Insights logging)
+     */
     async deleteOldTableLogs(context: InvocationContext) {
         this.initialize(
             "function:deleteOldTableLogs",

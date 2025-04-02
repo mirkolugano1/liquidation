@@ -1,5 +1,5 @@
 import common from "../shared/common";
-import _ from "lodash";
+import _, { chain } from "lodash";
 import encryption from "../shared/encryption";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
@@ -74,19 +74,23 @@ class HealthFactorCheckEngine {
             provider
         );
 
-        const reserves = await aaveLendingPoolContract.getReservesList();
-        let tokenContracts: any = {};
-        let tokenDecimals: any = {};
-        for (const reserve of reserves) {
-            const tokenContract = new ethers.Contract(
-                reserve,
-                this.aaveTokenAbi,
-                provider
-            );
-            tokenContracts[reserve] = tokenContract;
+        const dbReserves = await sqlManager.execQuery(
+            `SELECT * FROM reserves WHERE chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}';`
+        );
 
-            const decimals = await tokenContract.decimals();
-            tokenDecimals[reserve] = decimals;
+        const reserves: any = {};
+        for (let reserve of dbReserves) {
+            reserves[reserve.address] = {
+                address: reserve.address,
+                contract: new ethers.Contract(
+                    reserve.address,
+                    this.aaveTokenAbi,
+                    provider
+                ),
+                configuration: this.parseReserveConfiguration(
+                    reserve.configuration
+                ),
+            };
         }
 
         return _.assign(aaveChainInfo, {
@@ -96,9 +100,7 @@ class HealthFactorCheckEngine {
             aaveLendingPoolContract: aaveLendingPoolContract,
             aaveAddressesProviderContract: aaveAddressesProviderContract,
             aavePriceOracleContract: aavePriceOracleContract,
-            tokenContracts: tokenContracts,
-            tokenDecimals: tokenDecimals,
-            reserves: Array.from(reserves),
+            reserves: reserves,
         });
     }
 
@@ -117,6 +119,7 @@ class HealthFactorCheckEngine {
         "function getReservesList() external view returns (address[] memory)",
         "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
         "function getUserConfiguration(address user) external view returns (uint256 configuration)",
+        "function getConfiguration(address asset) external view returns (uint256 data)",
     ];
 
     aaveAddressesProviderContractAbi = [
@@ -166,6 +169,81 @@ class HealthFactorCheckEngine {
     }
 
     //#endregion Helper methods
+
+    /**
+     * Periodically update the reserves configuration in the DB
+     * so that we don't need to fetch it from the blockchain every time
+     *
+     * @param context the InvocationContext of the function app on azure (for Application Insights)
+     */
+    async updateReservesConfiguration(
+        context: InvocationContext | null = null
+    ) {
+        logger.initialize(
+            "function:updateReservesConfiguration",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+
+        await logger.log(
+            "Start updateReservesConfiguration",
+            "functionAppExecution"
+        );
+        await this.initialize();
+        const chainInfos = await this.getAaveChainsInfosFromJson();
+        for (const chainInfo of chainInfos) {
+            const key = `${chainInfo.chain}-${chainInfo.chainEnv}`;
+            const aaveLendingPoolContract = this.getAaveChainInfo(
+                chainInfo.chain,
+                chainInfo.chainEnv
+            ).aaveLendingPoolContract;
+            const reservesList =
+                await aaveLendingPoolContract.getReservesList();
+
+            let alpcArray = [];
+            for (let i = 0; i < reservesList.length; i++) {
+                alpcArray.push(aaveLendingPoolContract.target);
+            }
+
+            const reserveConfigurations = await this.batchEthCallForAddresses(
+                alpcArray,
+                reservesList,
+                this.aaveLendingPoolContractAbi,
+                "getConfiguration",
+                chainInfo.chain,
+                chainInfo.chainEnv
+            );
+
+            let reservesSQLList: any[] = [];
+            for (let i = 0; i < reservesList.length; i++) {
+                const reserveAddress = reservesList[i];
+                const configuration = reserveConfigurations[i];
+                reservesSQLList.push(
+                    `('${reserveAddress}', '${key}', '${configuration}')`
+                );
+            }
+
+            if (reservesSQLList.length > 0) {
+                const sqlQuery = `
+                    MERGE INTO reserves AS target
+                    USING (VALUES 
+                        ${reservesSQLList.join(",")}
+                    ) AS source (address, chain, configuration)
+                    ON (target.address = source.address AND target.chain = source.chain)
+                    WHEN NOT MATCHED BY TARGET THEN
+                        INSERT (address, chain, configuration)
+                        VALUES (source.address, source.chain, source.configuration);
+                `;
+
+                await sqlManager.execQuery(sqlQuery);
+            }
+        }
+
+        await logger.log(
+            "Ended updateReservesConfiguration",
+            "functionAppExecution"
+        );
+    }
 
     //#region healthFactor DB check loop
 
@@ -278,7 +356,7 @@ class HealthFactorCheckEngine {
     async periodicalAccountsHealthFactorAndConfigurationCheck() {
         await logger.log(
             "Start periodicalAccountsHealthFactorAndConfigurationCheck",
-            "webJobExecution"
+            "functionAppExecution"
         );
 
         await this.initialize();
@@ -311,7 +389,7 @@ class HealthFactorCheckEngine {
 
         await logger.log(
             "End periodicalAccountsHealthFactorAndConfigurationCheck",
-            "webJobExecution"
+            "functionAppExecution"
         );
     }
 
@@ -365,17 +443,15 @@ class HealthFactorCheckEngine {
      * @param chainEnv
      */
     async checkReservesPrices(chain: string, chainEnv: string = "mainnet") {
-        await logger.log("Start checkReservesPrices", "webJobExecution");
+        await logger.log("Start checkReservesPrices", "functionAppExecution");
 
         //#region initialization
 
         await this.initialize();
         const aaveChainInfo: any = this.getAaveChainInfo(chain, chainEnv);
-        const reserves = aaveChainInfo.reserves;
-        const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
-            aaveChainInfo.chain,
-            aaveChainInfo.chainEnv
-        ).aaveLendingPoolContract.target;
+        const reserves = Object.keys(aaveChainInfo.reserves);
+        const aaveLendingPoolContractAddress =
+            aaveChainInfo.aaveLendingPoolContract.target;
 
         //#endregion
 
@@ -425,7 +501,8 @@ class HealthFactorCheckEngine {
             for (const reserveAddress of reserves) {
                 const oldPrice = this.oldReservesPrices[reserveAddress];
                 const newPrice = newReservesPrices[reserveAddress];
-                const decimals = aaveChainInfo.tokenDecimals[reserveAddress];
+                const decimals =
+                    aaveChainInfo.reserves[reserveAddress].decimals;
                 const normalizedChange = new Big(newPrice - oldPrice).div(
                     new Big(10).pow(
                         new Big(18).minus(new Big(decimals)).toNumber()
@@ -623,7 +700,7 @@ class HealthFactorCheckEngine {
             }
         }
 
-        await logger.log("End checkReservesPrices", "webJobExecution");
+        await logger.log("End checkReservesPrices", "functionAppExecution");
     }
 
     /**
@@ -710,33 +787,67 @@ class HealthFactorCheckEngine {
 
     //#region test
 
-    async doTest() {
-        //test
-
+    async doTest(chain: string, chainEnv: string = "mainnet") {
         await this.initialize();
 
-        const aaveLendingPoolContractAddress =
-            this.getAaveChainInfo("arb").aaveLendingPoolContract.target;
+        const key = `${chain}-${chainEnv}`;
+        const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
 
+        const queryParams = {
+            chain: key,
+        };
         const dbAddresses = await sqlManager.execQuery(
-            `SELECT * FROM addresses where chain = 'arb-mainnet';`
+            `SELECT TOP 2 SKIP 2000 * FROM addresses where chain = @chain AND userconfiguration IS NOT NULL AND healthfactor < 2;`,
+            queryParams
         );
 
-        const _addresses = _.map(dbAddresses, (o) => o.address);
-        let contractAddressArray: string[] = [];
-        for (let i = 0; i < _addresses.length; i++) {
-            contractAddressArray.push(aaveLendingPoolContractAddress);
+        let usersReserves: any = {};
+        for (let j = 0; j < dbAddresses.length; j++) {
+            const address = dbAddresses[j].address;
+            const userConfiguration = dbAddresses[j].userconfiguration;
+            let i = userConfiguration.length - 1;
+            let userReserves: string[] = [];
+            //loop through reserves
+            for (let reserve of Object.keys(aaveChainInfo.reserves)) {
+                if (
+                    (i >= 0 && userConfiguration[i] == "1") ||
+                    (i > 0 && userConfiguration[i - 1] == "1")
+                ) {
+                    userReserves.push(reserve);
+                }
+                i = i - 2;
+            }
+            if (userReserves.length > 0) {
+                usersReserves[address] = userReserves;
+            }
+        }
+        console.log("userReserves", usersReserves);
+
+        const userReservesAddresses = Object.keys(usersReserves);
+        let balanceOfTokenAddresses: string[] = [];
+        let balanceOfUserAddresses: string[] = [];
+        for (let i = 0; i < userReservesAddresses.length; i++) {
+            const address = userReservesAddresses[i];
+            const reserves = usersReserves[address];
+            let addressesArray: string[] = [];
+            for (let j = 0; j < reserves.length; j++) {
+                const reserve = reserves[j];
+                addressesArray.push(reserve);
+                balanceOfTokenAddresses.push(reserve);
+                balanceOfUserAddresses.push(address);
+            }
         }
 
-        const userConfiguration = await this.batchEthCallForAddresses(
-            contractAddressArray,
-            _addresses,
-            this.aaveLendingPoolContractAbi,
-            "getUserConfiguration",
-            "arb"
+        const result = await this.batchEthCallForAddresses(
+            balanceOfTokenAddresses,
+            balanceOfUserAddresses,
+            this.aaveTokenAbi,
+            "balanceOf",
+            chain,
+            chainEnv
         );
 
-        console.log(userConfiguration);
+        console.log(result);
     }
 
     async testFunction(context: InvocationContext) {
@@ -806,6 +917,142 @@ class HealthFactorCheckEngine {
     }
 
     //#endregion healthFactor check loop
+
+    parseReserveConfiguration(data: any) {
+        const bnData = new Big(data);
+
+        // Constants for bit positions and lengths
+        const LTV_BITS = { start: 0, length: 16 };
+        const LIQ_THRESHOLD_BITS = { start: 16, length: 16 };
+        const LIQ_BONUS_BITS = { start: 32, length: 16 };
+        const DECIMALS_BITS = { start: 48, length: 8 };
+        const ACTIVE_BIT = 56;
+        const FROZEN_BIT = 57;
+        const BORROWING_ENABLED_BIT = 58;
+        const STABLE_BORROWING_ENABLED_BIT = 59;
+        const PAUSED_BIT = 60;
+        const ISOLATION_MODE_BIT = 61;
+        const SILOED_BORROWING_BIT = 62;
+        const FLASHLOAN_ENABLED_BIT = 63;
+        const RESERVE_FACTOR_BITS = { start: 64, length: 16 };
+        const BORROW_CAP_BITS = { start: 80, length: 36 };
+        const SUPPLY_CAP_BITS = { start: 116, length: 36 };
+        const LIQ_PROTOCOL_FEE_BITS = { start: 152, length: 16 };
+        const EMODE_CATEGORY_BITS = { start: 168, length: 8 };
+        const UNBACKED_MINT_CAP_BITS = { start: 176, length: 36 };
+        const DEBT_CEILING_BITS = { start: 212, length: 40 };
+        const VIRTUAL_ACCOUNTING_BIT = 252;
+
+        // Helper function to extract bits
+        const extractBits = (data: any, start: any, length: any) => {
+            return parseInt(
+                bnData.div(Big(2).pow(start)).mod(Big(2).pow(length)).toFixed(0)
+            );
+        };
+
+        // Extract properties using bitwise operations
+        const ltv = extractBits(bnData, LTV_BITS.start, LTV_BITS.length);
+        const liquidationThreshold = extractBits(
+            bnData,
+            LIQ_THRESHOLD_BITS.start,
+            LIQ_THRESHOLD_BITS.length
+        );
+        const liquidationBonus = extractBits(
+            bnData,
+            LIQ_BONUS_BITS.start,
+            LIQ_BONUS_BITS.length
+        );
+        const decimals = extractBits(
+            bnData,
+            DECIMALS_BITS.start,
+            DECIMALS_BITS.length
+        );
+        const isActive = bnData.div(Big(2).pow(ACTIVE_BIT)).mod(2).eq(1);
+        const isFrozen = bnData.div(Big(2).pow(FROZEN_BIT)).mod(2).eq(1);
+        const isBorrowingEnabled = bnData
+            .div(Big(2).pow(BORROWING_ENABLED_BIT))
+            .mod(2)
+            .eq(1);
+        const isStableBorrowingEnabled = bnData
+            .div(Big(2).pow(STABLE_BORROWING_ENABLED_BIT))
+            .mod(2)
+            .eq(1);
+        const isPaused = bnData.div(Big(2).pow(PAUSED_BIT)).mod(2).eq(1);
+        const isIsolationModeEnabled = bnData
+            .div(Big(2).pow(ISOLATION_MODE_BIT))
+            .mod(2)
+            .eq(1);
+        const isSiloedBorrowingEnabled = bnData
+            .div(Big(2).pow(SILOED_BORROWING_BIT))
+            .mod(2)
+            .eq(1);
+        const isFlashloanEnabled = bnData
+            .div(Big(2).pow(FLASHLOAN_ENABLED_BIT))
+            .mod(2)
+            .eq(1);
+        const reserveFactor = extractBits(
+            bnData,
+            RESERVE_FACTOR_BITS.start,
+            RESERVE_FACTOR_BITS.length
+        );
+        const borrowCap = extractBits(
+            bnData,
+            BORROW_CAP_BITS.start,
+            BORROW_CAP_BITS.length
+        );
+        const supplyCap = extractBits(
+            bnData,
+            SUPPLY_CAP_BITS.start,
+            SUPPLY_CAP_BITS.length
+        );
+        const liqProtocolFee = extractBits(
+            bnData,
+            LIQ_PROTOCOL_FEE_BITS.start,
+            LIQ_PROTOCOL_FEE_BITS.length
+        );
+        const eModeCategory = extractBits(
+            bnData,
+            EMODE_CATEGORY_BITS.start,
+            EMODE_CATEGORY_BITS.length
+        );
+        const unbackedMintCap = extractBits(
+            bnData,
+            UNBACKED_MINT_CAP_BITS.start,
+            UNBACKED_MINT_CAP_BITS.length
+        );
+        const debtCeiling = extractBits(
+            bnData,
+            DEBT_CEILING_BITS.start,
+            DEBT_CEILING_BITS.length
+        );
+        const isVirtualAccountingEnabled = bnData
+            .div(Big(2).pow(VIRTUAL_ACCOUNTING_BIT))
+            .mod(2)
+            .eq(1);
+
+        return {
+            ltv,
+            liquidationThreshold,
+            liquidationBonus,
+            decimals,
+            isActive,
+            isFrozen,
+            isBorrowingEnabled,
+            isStableBorrowingEnabled,
+            isPaused,
+            isIsolationModeEnabled,
+            isSiloedBorrowingEnabled,
+            isFlashloanEnabled,
+            reserveFactor,
+            borrowCap,
+            supplyCap,
+            liqProtocolFee,
+            eModeCategory,
+            unbackedMintCap,
+            debtCeiling,
+            isVirtualAccountingEnabled,
+        };
+    }
 }
 
 export default HealthFactorCheckEngine.getInstance();

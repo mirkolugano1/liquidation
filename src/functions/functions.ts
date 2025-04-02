@@ -15,3 +15,10 @@ app.timer("deleteOldTableLogsFunction", {
         await logger.deleteOldTableLogs(context);
     },
 });
+
+app.timer("updateReservesConfiguration", {
+    schedule: "30 0 */3 * *", // Cron expression for every 3 days at 00:30 h
+    handler: async (myTimer, context) => {
+        await healthFactorCheckEngine.updateReservesConfiguration(context);
+    },
+});
