@@ -213,14 +213,14 @@ class WebhookEngine {
                         };
                     }
 
-                    // Filter out addresses with health factor >= 5 or userConfiguration = 0
+                    // Filter out addresses with health factor >= 2 or userConfiguration = 0
                     // and prepare the SQL insert statements
                     let addressesListSql: string[] = [];
                     let addressesList: string[] = [];
 
                     for (const address of uniqueAddresses) {
                         if (
-                            uniqueAddressesInfo[address].healthFactor < 5 &&
+                            uniqueAddressesInfo[address].healthFactor < 2 &&
                             uniqueAddressesInfo[address].userConfiguration !=
                                 "0"
                         ) {

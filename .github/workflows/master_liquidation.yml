@@ -20,16 +20,23 @@ jobs:
               uses: actions/setup-node@v3
               with:
                   node-version: "22.x"
+                  cache: "npm" # Enable npm cache
 
-            - name: Login to Azure (for tests)
+            - name: Install dependencies
+              run: npm ci # Use npm ci for faster, more reliable builds
+
+            - name: Build
+              run: npm run build
+
+            - name: Login to Azure
               uses: azure/login@v2
               with:
                   creds: ${{ secrets.AZURE_CREDENTIALS }}
 
             - name: Prepare deployment package
               run: |
-                  # Create a deployment package excluding node_modules
-                  zip -r deployment.zip . -x "node_modules/*" "dist/*" ".git/*"
+                  # Create a deployment package including dist but excluding node_modules
+                  zip -r deployment.zip . -x "node_modules/*" ".git/*"
 
             # Using the GitHub Action (recommended)
             - uses: azure/webapps-deploy@v2
