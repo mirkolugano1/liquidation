@@ -195,10 +195,7 @@ class HealthFactorCheckEngine {
                 aaveChainInfo.reserves,
                 (o) => o.address
             );
-            const fetchedReservesAddresses = _.map(
-                reservesData,
-                (o) => o.address
-            );
+            const fetchedReservesAddresses = _.map(reservesData, (o) => o[0]);
 
             const removedReservesAddresses = _.difference(
                 currentDbReservesAddresses,
@@ -222,26 +219,28 @@ class HealthFactorCheckEngine {
                         '${reserveData[1]}',
                         '${reserveData[2]}',
                         ${reserveData[3]},
-                        ${reserveData[4]},
-                        ${reserveData[5]},
-                        ${reserveData[6]},
-                        ${reserveData[7]},
-                        '${sqlManager.getBitFromBoolean(reserveData[8])}',
-                        '${sqlManager.getBitFromBoolean(reserveData[9])}',
-                        '${sqlManager.getBitFromBoolean(reserveData[10])}',
-                        '${sqlManager.getBitFromBoolean(reserveData[11])}',
-                        '${sqlManager.getBitFromBoolean(reserveData[12])}',
-                        ${reserveData[13]},
-                        ${reserveData[14]},
-                        ${reserveData[15]},
-                        ${reserveData[16]},
-                        ${reserveData[17]},
-                        ${reserveData[18]},
+                        '${reserveData[4]}',
+                        '${reserveData[5]}',
+                        '${reserveData[6]}',
+                        '${reserveData[7]}',
+                        ${sqlManager.getBitFromBoolean(reserveData[8])},
+                        ${sqlManager.getBitFromBoolean(reserveData[9])},
+                        ${sqlManager.getBitFromBoolean(reserveData[10])},
+                        ${sqlManager.getBitFromBoolean(reserveData[11])},
+                        ${sqlManager.getBitFromBoolean(reserveData[12])},
+                        '${reserveData[13]}',
+                        '${reserveData[14]}',
+                        '${reserveData[15]}',
+                        '${reserveData[16]}',
+                        '${reserveData[17]}',
+                        '${reserveData[18]}',
                         '${reserveData[19]}',
                         '${reserveData[20]}',
                         '${reserveData[21]}',
-                        '${reserveData[22]}',)`
+                        '${reserveData[22]}')`
                 );
+
+                break; //TODO remove break, this is just for testing
             }
 
             if (reservesSQLList.length > 0) {
@@ -249,11 +248,11 @@ class HealthFactorCheckEngine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenAddress, intereststrategyaddress)
+                    ) AS source (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenaddress, interestratestrategyaddress)
                     ON (target.address = source.address AND target.chain = source.chain)
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenAddress, intereststrategyaddress)
-                        VALUES (source.address, source.chain, source.name, source.symbol, source.decimals, source.baseltvascollateral, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.stableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.stabledebttokenaddress, source.variabledebttokenAddress, source.intereststrategyaddress);
+                        INSERT (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenaddress, interestratestrategyaddress)
+                        VALUES (source.address, source.chain, source.name, source.symbol, source.decimals, source.baseltvascollateral, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.stableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.stabledebttokenaddress, source.variabledebttokenaddress, source.interestratestrategyaddress);
                 `;
 
                 await sqlManager.execQuery(sqlQuery);

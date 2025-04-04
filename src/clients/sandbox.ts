@@ -14,11 +14,12 @@ dotenv.config();
 
 async function main() {
     try {
-        if (false) await healthFactorCheckEngine.updateReservesConfiguration();
+        if (true) await healthFactorCheckEngine.updateReservesConfiguration();
         else await healthFactorCheckEngine.doTest("arb");
     } catch (error) {
         console.error("Error in main function:", error);
     }
+
     //test
     /*
     const pwdEncrypted =
