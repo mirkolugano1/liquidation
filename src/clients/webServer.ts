@@ -22,7 +22,7 @@ app.get("/logs", async (req: any, res: any) => {
     res.send(await logger.viewLogs(logLevel, env));
 });
 
-app.get("/health", (req, res) => {
+app.get("/healthcheck", (req, res) => {
     res.status(200).send("Healthy");
 });
 
@@ -35,8 +35,7 @@ app.post("/aaveEvent", async (req: any, res: any) => {
 });
 
 app.listen(port, "0.0.0.0", async () => {
-    console.log("Web server is up. Initializing engines...");
+    console.log("Web server is up. Initializing engine...");
     await webhookEngine.initialize();
-    await healthFactorCheckEngine.initialize();
-    console.log("Engines Initialized. Ready to receive requests...");
+    console.log("Engine Initialized. Ready to receive requests...");
 });

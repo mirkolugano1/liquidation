@@ -37,37 +37,13 @@ test("encryption_testEncryptDecrypt", { only: false }, async () => {
     assert.strictEqual(text, decrypted2);
 });
 
-test("we_manageVariable", { only: true }, async () => {
-    const req: any = {
-        query: {
-            value: "testValue",
-            method: "set",
-        },
-    };
-    //key is not defined, should throw an error
-    assert.throws(() => webhookEngine.manageVariable(req));
-
-    //key is not allowed to be changed, should throw an error
-    req.query.key = "addresses";
-    assert.throws(() => webhookEngine.manageVariable(req));
-
-    //key is allowed to be changed, should return the value
-    req.query.key = "checkReservesPricesIntervalInSeconds";
-    req.query.value = 10;
-    webhookEngine.manageVariable(req);
-
-    req.query.method = "get";
-    assert.strictEqual(webhookEngine.manageVariable(req), 10);
-});
-
 test("hf_aaveChainInfosArrayIsDefined", { only: false }, async () => {
     assert.ok(healthFactorCheckEngine.aaveChainsInfos.length > 0);
 });
 
 test("hf_initializeHealthFactorEngine", { only: false }, async () => {
     const aaveChainInfo = await healthFactorCheckEngine.getAaveChainInfo("arb");
-    const aaveLendingPoolContractAddress =
-        aaveChainInfo.aaveLendingPoolContract.target;
+    const aaveLendingPoolContractAddress = aaveChainInfo.lendingPoolAddress;
 
     assertStringIsNotNullOrEmpty(aaveLendingPoolContractAddress);
 
@@ -81,20 +57,6 @@ test("hf_initializeHealthFactorEngine", { only: false }, async () => {
     const dbAddress = dbAddressesArr[0];
 
     assertStringIsNotNullOrEmpty(dbAddress.address);
-
-    const data: any =
-        await healthFactorCheckEngine.getUserHealthFactorAndConfiguration(
-            dbAddress.address,
-            "arb"
-        );
-
-    assertStringIsNotNullOrEmpty(data.healthFactor);
-    assertStringIsNotNullOrEmpty(data.userConfiguration);
-
-    assert.ok(
-        /^[01]*$/.test(data.userConfiguration),
-        "String must contain only 0s and 1s"
-    );
 });
 
 test("logger_logsCorrectly", { only: false }, async () => {

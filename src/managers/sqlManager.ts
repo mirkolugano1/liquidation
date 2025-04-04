@@ -40,6 +40,10 @@ class SqlManager {
         };
     }
 
+    getBitFromBoolean(value: boolean): number {
+        return value ? 1 : 0;
+    }
+
     async execQuery(query: string, parameters: Record<string, any> = {}) {
         if (!this.config) await this.initialize();
         let pool;

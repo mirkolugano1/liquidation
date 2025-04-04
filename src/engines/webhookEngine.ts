@@ -1,6 +1,5 @@
 import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
-import healthFactorCheckEngine from "./healthFactorCheckEngine";
 import { ethers } from "ethers";
 import logger from "../shared/logger";
 
@@ -52,11 +51,6 @@ class WebhookEngine {
                     value = parseInt(req.query.value);
                     this.batchAddressesTreshold = value;
                     break;
-                case "checkReservesPricesIntervalInSeconds":
-                    value = parseInt(req.query.value);
-                    healthFactorCheckEngine.checkReservesPricesIntervalInSeconds =
-                        value;
-                    break;
                 default:
                     throw new Error("Cannot set this variable: " + key);
             }
@@ -64,8 +58,6 @@ class WebhookEngine {
         } else {
             if ((this as any).hasOwnProperty(key)) {
                 return (this as any)[key];
-            } else if ((healthFactorCheckEngine as any).hasOwnProperty(key)) {
-                return (healthFactorCheckEngine as any)[key];
             } else {
                 return "Key not found";
             }
@@ -203,7 +195,7 @@ class WebhookEngine {
 
                     for (const address of uniqueAddresses) {
                         addressesListSql.push(
-                            `('${address}', '${key}', null, 'null')`
+                            `('${address}', '${key}', null, null)`
                         );
                         addressesList.push(address);
                     }

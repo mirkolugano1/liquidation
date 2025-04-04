@@ -1,5 +1,5 @@
 import common from "../shared/common";
-import _, { chain } from "lodash";
+import _ from "lodash";
 import encryption from "../shared/encryption";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
@@ -7,6 +7,8 @@ import Big from "big.js";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
 import { LoggingFramework } from "../shared/enums";
+import Constants from "../shared/constants";
+import { Alchemy, Network } from "alchemy-sdk";
 
 class HealthFactorCheckEngine {
     private static instance: HealthFactorCheckEngine;
@@ -21,136 +23,84 @@ class HealthFactorCheckEngine {
 
     //#region Initialization
 
-    async initialize() {
-        if (this.aave) return;
-        this.aave = {};
+    async initializeReserves() {
+        if (!this.aave) throw new Error("Aave object not initialized");
 
-        const privateKey = await encryption.getAndDecryptSecretFromKeyVault(
-            "PRIVATEKEYENCRYPTED"
+        const dbReserves = await sqlManager.execQuery(
+            `SELECT * FROM reserves;`
         );
-        const alchemyKey = await encryption.getAndDecryptSecretFromKeyVault(
-            "ALCHEMYKEYENCRYPTED"
-        );
-
-        this.aaveChainsInfos = await this.getAaveChainsInfosFromJson();
-
-        for (const aaveChainInfo of this.aaveChainsInfos) {
-            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
-            this.aave[key] = await this.setAaveChainInfo(
-                privateKey,
-                alchemyKey,
-                aaveChainInfo
+        if (!dbReserves || dbReserves.length == 0) {
+            await logger.log(
+                "No reserves found in DB. Please run the updateReservesConfiguration function first.",
+                "functionAppExecution"
             );
+            return;
+        }
+
+        let reserves: any = {};
+        for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
+            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
+            const chainReserves = _.filter(dbReserves, { chain: key });
+            for (let chainReserve of chainReserves) {
+                reserves[chainReserve.address] = chainReserve;
+            }
+            this.aave[key] = _.assign(aaveChainInfo, { reserves: reserves });
         }
     }
 
-    async setAaveChainInfo(
-        privateKey: string,
-        alchemyKey: string,
-        aaveChainInfo: any
-    ) {
-        const alchemyUrl = `https://${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}.g.alchemy.com/v2/${alchemyKey}`;
-        const provider = new ethers.JsonRpcProvider(alchemyUrl);
-        const signer = new ethers.Wallet(privateKey, provider);
+    async initializeAlchemy() {
+        if (this.aave) return;
+        this.aave = {};
 
-        const aaveLendingPoolContract = new ethers.Contract(
-            aaveChainInfo.lendingPoolAddress,
-            this.aaveLendingPoolContractAbi,
-            signer
+        const alchemyKey = await encryption.getAndDecryptSecretFromKeyVault(
+            "ALCHEMYKEYENCRYPTED"
         );
-
-        const aaveAddressesProviderContract = new ethers.Contract(
-            aaveChainInfo.addressesProviderAddress,
-            this.aaveAddressesProviderContractAbi,
-            provider
+        /*
+        const alchemyFromAddress = await common.getAppSetting(
+            "ALCHEMY_FROM_ADDRESS"
         );
-
-        const aavePriceOracleAddress =
-            await aaveAddressesProviderContract.getPriceOracle();
-
-        const aavePriceOracleContract = new ethers.Contract(
-            aavePriceOracleAddress,
-            this.aavePriceOracleAbi,
-            provider
+        const privateKey = await encryption.getAndDecryptSecretFromKeyVault(
+            "PRIVATEKEYENCRYPTED"
         );
+        */
 
-        const dbReserves = await sqlManager.execQuery(
-            `SELECT * FROM reserves WHERE chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}';`
-        );
-
-        const reserves: any = {};
-        for (let reserve of dbReserves) {
-            reserves[reserve.address] = {
-                address: reserve.address,
-                contract: new ethers.Contract(
-                    reserve.address,
-                    this.aaveTokenAbi,
-                    provider
-                ),
-                configuration: this.parseReserveConfiguration(
-                    reserve.configuration
-                ),
-            };
+        if (!alchemyKey) {
+            await logger.log(
+                "No Alchemy key found. Please set the ALCHEMYKEYENCRYPTED environment variable.",
+                "functionAppExecution"
+            );
+            return;
         }
 
-        return _.assign(aaveChainInfo, {
-            alchemyUrl: alchemyUrl,
-            provider: provider,
-            signer: signer,
-            aaveLendingPoolContract: aaveLendingPoolContract,
-            aaveAddressesProviderContract: aaveAddressesProviderContract,
-            aavePriceOracleContract: aavePriceOracleContract,
-            reserves: reserves,
-        });
+        for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
+            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
+
+            const config = {
+                apiKey: alchemyKey, // Replace with your API key
+                network: (Network as any)[key.replace("-", "_").toUpperCase()], // Replace with your network
+            };
+            const alchemy = new Alchemy(config);
+            const alchemyProvider = await alchemy.config.getProvider();
+
+            let chainInfo: any = _.assign(aaveChainInfo, {
+                alchemy: alchemy,
+                alchemyProvider: alchemyProvider,
+            });
+
+            this.aave[key] = chainInfo;
+        }
     }
 
     //#endregion Initialization
 
     //#region Variables
 
-    aaveChainsInfos: any[] = [];
     aave: any;
     oldReservesPrices: any;
-
-    aaveLendingPoolContractAbi = [
-        "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
-        "function getUserEMode(address user) external view returns (uint256)",
-        "function liquidationCall(address collateralAsset, address debtAsset, address user, uint256 debtToCover, bool receiveAToken) external returns (uint256, uint256, uint256)",
-        "function getReservesList() external view returns (address[] memory)",
-        "function getReserveData(address asset) external view returns (uint256 configuration, uint128 liquidityIndex, uint128 currentLiquidityRate, uint128 variableBorrowIndex, uint128 currentVariableBorrowRate, uint128 currentStableBorrowRate, uint40 lastUpdateTimestamp, uint16 id, uint40 liquidationGracePeriodUntil, address aTokenAddress, address stableDebtTokenAddress, address variableDebtTokenAddress, address interestRateStrategyAddress, uint128 accruedToTreasury, uint128 unbacked, uint128 isolationModeTotalDebt, uint128 virtualUnderlyingBalance)",
-        "function getUserConfiguration(address user) external view returns (uint256 configuration)",
-        "function getConfiguration(address asset) external view returns (uint256 data)",
-    ];
-
-    aaveAddressesProviderContractAbi = [
-        "function getPriceOracle() external view returns (address)",
-    ];
-
-    aavePriceOracleAbi = [
-        "function getAssetsPrices(address[] calldata assets) external view returns (uint256[] memory)",
-    ];
-
-    aaveTokenAbi = [
-        "function balanceOf(address) view returns (uint256)",
-        "function decimals() external view returns (uint8)",
-    ];
 
     //#endregion Variables
 
     //#region Helper methods
-
-    async getAaveChainsInfosFromJson() {
-        return [
-            {
-                chain: "arb",
-                chainEnv: "mainnet",
-                lendingPoolAddress:
-                    "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
-                addressesProviderAddress:
-                    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
-            },
-        ];
-    }
 
     getAaveChainInfo(chain: string, chainEnv: string = "mainnet") {
         const key = `${chain}-${chainEnv}`;
@@ -168,6 +118,20 @@ class HealthFactorCheckEngine {
         return parseFloat(healthFactorStr);
     }
 
+    getContract(
+        address: string,
+        contractAbi: any,
+        chain: string,
+        chainEnv: string
+    ) {
+        const chainInfo = this.getAaveChainInfo(chain, chainEnv);
+        return new ethers.Contract(
+            address,
+            contractAbi,
+            chainInfo.alchemyProvider
+        );
+    }
+
     //#endregion Helper methods
 
     /**
@@ -179,6 +143,8 @@ class HealthFactorCheckEngine {
     async updateReservesConfiguration(
         context: InvocationContext | null = null
     ) {
+        //#region initialization
+
         logger.initialize(
             "function:updateReservesConfiguration",
             LoggingFramework.ApplicationInsights,
@@ -189,37 +155,92 @@ class HealthFactorCheckEngine {
             "Start updateReservesConfiguration",
             "functionAppExecution"
         );
-        await this.initialize();
-        const chainInfos = await this.getAaveChainsInfosFromJson();
-        for (const chainInfo of chainInfos) {
+        await this.initializeAlchemy();
+        await this.initializeReserves();
+
+        //#endregion initialization
+
+        for (const chainInfo of Constants.AAVE_CHAINS_INFOS) {
             const key = `${chainInfo.chain}-${chainInfo.chainEnv}`;
-            const aaveLendingPoolContract = this.getAaveChainInfo(
-                chainInfo.chain,
-                chainInfo.chainEnv
-            ).aaveLendingPoolContract;
-            const reservesList =
-                await aaveLendingPoolContract.getReservesList();
-
-            let alpcArray = [];
-            for (let i = 0; i < reservesList.length; i++) {
-                alpcArray.push(aaveLendingPoolContract.target);
-            }
-
-            const reserveConfigurations = await this.batchEthCallForAddresses(
-                alpcArray,
-                reservesList,
-                this.aaveLendingPoolContractAbi,
-                "getConfiguration",
+            const aaveChainInfo = this.getAaveChainInfo(
                 chainInfo.chain,
                 chainInfo.chainEnv
             );
 
+            //get current list of reserves from the chain
+            const uiPoolDataProviderContract = this.getContract(
+                aaveChainInfo.addresses.uiPoolDataProvider,
+                Constants.UI_POOL_DATA_PROVIDER_ABI,
+                chainInfo.chain,
+                chainInfo.chainEnv
+            );
+            const [reservesData, baseCurrencyInfo] =
+                await uiPoolDataProviderContract.getReservesData(
+                    chainInfo.addresses.poolAddressesProvider
+                );
+
+            //mirko parse new data
+
+            if (!reservesData || reservesData.length == 0) {
+                await logger.log(
+                    `No reserves found for chain ${chainInfo.chain} and env ${chainInfo.chainEnv}`,
+                    "functionAppExecution"
+                );
+                return;
+            }
+
+            //check if there are reserves in the DB which are not in the reservesList
+            //and in case delete them from the DB
+            const currentDbReservesAddresses = _.map(
+                aaveChainInfo.reserves,
+                (o) => o.address
+            );
+            const fetchedReservesAddresses = _.map(
+                reservesData,
+                (o) => o.address
+            );
+
+            const removedReservesAddresses = _.difference(
+                currentDbReservesAddresses,
+                fetchedReservesAddresses
+            );
+            if (removedReservesAddresses.length > 0) {
+                const sqlQuery = `DELETE FROM reserves WHERE address IN ('${removedReservesAddresses.join(
+                    "','"
+                )}') AND chain = '${key}';`;
+                await sqlManager.execQuery(sqlQuery);
+            }
+
+            //prepare query to update reserves list in DB
+            //and update DB
             let reservesSQLList: any[] = [];
-            for (let i = 0; i < reservesList.length; i++) {
-                const reserveAddress = reservesList[i];
-                const configuration = reserveConfigurations[i];
+            for (let i = 0; i < reservesData.length; i++) {
+                const reserveData = reservesData[i];
                 reservesSQLList.push(
-                    `('${reserveAddress}', '${key}', '${configuration}')`
+                    `('${reserveData[0]}', 
+                        '${key}', 
+                        '${reserveData[1]}',
+                        '${reserveData[2]}',
+                        ${reserveData[3]},
+                        ${reserveData[4]},
+                        ${reserveData[5]},
+                        ${reserveData[6]},
+                        ${reserveData[7]},
+                        '${sqlManager.getBitFromBoolean(reserveData[8])}',
+                        '${sqlManager.getBitFromBoolean(reserveData[9])}',
+                        '${sqlManager.getBitFromBoolean(reserveData[10])}',
+                        '${sqlManager.getBitFromBoolean(reserveData[11])}',
+                        '${sqlManager.getBitFromBoolean(reserveData[12])}',
+                        ${reserveData[13]},
+                        ${reserveData[14]},
+                        ${reserveData[15]},
+                        ${reserveData[16]},
+                        ${reserveData[17]},
+                        ${reserveData[18]},
+                        '${reserveData[19]}',
+                        '${reserveData[20]}',
+                        '${reserveData[21]}',
+                        '${reserveData[22]}',)`
                 );
             }
 
@@ -228,11 +249,11 @@ class HealthFactorCheckEngine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, chain, configuration)
+                    ) AS source (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenAddress, intereststrategyaddress)
                     ON (target.address = source.address AND target.chain = source.chain)
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, chain, configuration)
-                        VALUES (source.address, source.chain, source.configuration);
+                        INSERT (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenAddress, intereststrategyaddress)
+                        VALUES (source.address, source.chain, source.name, source.symbol, source.decimals, source.baseltvascollateral, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.stableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.stabledebttokenaddress, source.variabledebttokenAddress, source.intereststrategyaddress);
                 `;
 
                 await sqlManager.execQuery(sqlQuery);
@@ -251,18 +272,17 @@ class HealthFactorCheckEngine {
     checkReservesPricesIntervalInSeconds = 60 * 5; // 5 minutes, for the moment...
 
     async startCheckReservesPrices() {
-        await this.initialize();
-        const chainInfos = await this.getAaveChainsInfosFromJson();
-        for (const chainInfo of chainInfos) {
+        await this.initializeAlchemy();
+        await this.initializeReserves();
+        for (const chainInfo of Constants.AAVE_CHAINS_INFOS) {
             await this.checkReservesPrices(chainInfo.chain, chainInfo.chainEnv); // Initial call
-            this.checkReservesPricesIntervalId = setInterval(
-                async () =>
-                    await this.checkReservesPrices(
-                        chainInfo.chain,
-                        chainInfo.chainEnv
-                    ),
-                this.checkReservesPricesIntervalInSeconds * 1000
-            );
+            this.checkReservesPricesIntervalId = setInterval(async () => {
+                await this.initializeReserves();
+                await this.checkReservesPrices(
+                    chainInfo.chain,
+                    chainInfo.chainEnv
+                );
+            }, this.checkReservesPricesIntervalInSeconds * 1000);
         }
 
         // Graceful shutdown
@@ -285,29 +305,21 @@ class HealthFactorCheckEngine {
 
         let results: any[] = [];
 
-        const aaveLendingPoolContractAddress = await this.getAaveChainInfo(
-            chain,
-            chainEnv
-        ).aaveLendingPoolContract.target;
+        const chainInfo = await this.getAaveChainInfo(chain, chainEnv);
 
-        let contractAddressArray = [];
-        for (let i = 0; i < _addresses.length; i++) {
-            contractAddressArray.push(aaveLendingPoolContractAddress);
-        }
-
-        const userAccountData = await this.batchEthCallForAddresses(
-            contractAddressArray,
+        const userAccountData = await this.batchEthCall(
+            chainInfo.addresses.pool,
             _addresses,
-            this.aaveLendingPoolContractAbi,
+            Constants.POOL_ABI,
             "getUserAccountData",
             chain,
             chainEnv
         );
 
-        const userConfiguration = await this.batchEthCallForAddresses(
-            contractAddressArray,
+        const userConfiguration = await this.batchEthCall(
+            chainInfo.addresses.pool,
             _addresses,
-            this.aaveLendingPoolContractAbi,
+            Constants.POOL_ABI,
             "getUserConfiguration",
             chain,
             chainEnv
@@ -320,29 +332,16 @@ class HealthFactorCheckEngine {
             );
             let userConfigurationInt = parseInt(userConfiguration[i]);
 
-            if (Number.isNaN(userConfigurationInt)) {
-                await logger.log(
-                    `address ${address} on chain ${chain}-${chainEnv}`,
-                    "userConfigurarionIsNaN"
-                );
+            if (!Number.isNaN(userConfigurationInt)) {
+                const userConfigurationBinary =
+                    common.intToBinary(userConfigurationInt);
 
-                const userInfo = await this.getUserHealthFactorAndConfiguration(
-                    address,
-                    chain,
-                    chainEnv
-                );
-
-                userConfigurationInt = parseInt(userInfo.userConfiguration);
+                results.push({
+                    address: address,
+                    healthFactor: healthFactor,
+                    userConfiguration: userConfigurationBinary,
+                });
             }
-
-            const userConfigurationBinary =
-                common.intToBinary(userConfigurationInt);
-
-            results.push({
-                address: address,
-                healthFactor: healthFactor,
-                userConfiguration: userConfigurationBinary,
-            });
         }
 
         return results;
@@ -359,8 +358,8 @@ class HealthFactorCheckEngine {
             "functionAppExecution"
         );
 
-        await this.initialize();
-        for (const info of this.aaveChainsInfos) {
+        await this.initializeAlchemy();
+        for (const info of Constants.AAVE_CHAINS_INFOS) {
             const dbAddressesArr = await sqlManager.execQuery(
                 `SELECT * FROM addresses where chain = '${info.chain}-${info.chainEnv}';`
             );
@@ -372,16 +371,38 @@ class HealthFactorCheckEngine {
                     info.chainEnv
                 );
 
-            let query = "";
+            let query =
+                results.length > 0
+                    ? `
+                UPDATE addresses 
+                SET 
+                    healthfactor = CASE
+                        {0}
+                    ELSE healthfactor,
+                    END,
+                    userconfiguration = CASE
+                        {1}
+                    ELSE userconfiguration,
+                    END,
+                WHERE address IN ({2});
+            `
+                    : "";
+
+            const key = `${info.chain}-${info.chainEnv}`;
+            let arr0 = [];
+            let arr1 = [];
+            let arr2 = [];
             for (let i = 0; i < results.length; i++) {
-                const address = results[i].address;
-                const healthFactor = results[i].healthFactor;
-                const userConfigurationBinary = results[i].userConfiguration;
-                if (healthFactor > 5) {
-                    query += `DELETE FROM addresses WHERE address = '${address}' AND chain = '${info.chain}-${info.chainEnv}';`;
-                } else {
-                    query += `UPDATE addresses SET healthfactor = ${healthFactor}, userconfiguration = '${userConfigurationBinary}' WHERE address = '${address}' AND chain = '${info.chain}-${info.chainEnv}';`;
-                }
+                arr0.push(
+                    `WHEN address = '${results[i].address}' AND chain = '${key}' THEN ${results[i].healthFactor}`
+                );
+                arr1.push(
+                    `WHEN address = '${results[i].address}' AND chain = '${key}' THEN ${results[i].userConfiguration}`
+                );
+                arr2.push(`'${results[i].address}'`);
+                query.replace("{0}", arr0.join(" "));
+                query.replace("{1}", arr1.join(" "));
+                query.replace("{2}", arr2.join(","));
             }
 
             if (query) await sqlManager.execQuery(query);
@@ -396,46 +417,11 @@ class HealthFactorCheckEngine {
     //#endregion healthFactor DB check loop
 
     /**
-     * This method is used currently from webhookEngine.ts to get the health factor and user configuration for a given address
-     *
-     * @param address
-     * @param chain
-     * @param chainEnv
-     * @returns
-     */
-    async getUserHealthFactorAndConfiguration(
-        address: string,
-        chain: string,
-        chainEnv: string = "mainnet"
-    ) {
-        await this.initialize();
-        let aaveLendingPoolContract = this.getAaveChainInfo(
-            chain,
-            chainEnv
-        ).aaveLendingPoolContract;
-        const userAccountData =
-            await aaveLendingPoolContract.getUserAccountData(address);
-
-        const healthFactor =
-            this.getHealthFactorFromUserAccountData(userAccountData);
-        const userConfiguration =
-            await aaveLendingPoolContract.getUserConfiguration(address);
-
-        const userConfigurationBinary = common.intToBinary(
-            parseInt(userConfiguration)
-        );
-        return {
-            healthFactor: healthFactor,
-            userConfiguration: userConfigurationBinary,
-        };
-    }
-
-    /**
      *  Check the health factor for the addresses that have the reserves whose prices have changed, either as collateral or as debt
      *  and liquidate them if their health factor is below 1. The method contains an infinite loop that checks the reserves prices
      *  every n seconds and if the prices have changed, it checks the health factor for the addresses that have the changed reserves
      *
-     * //TODO check Compute Units utilization of method batchEthCallForAddresses if there are many addresses, evtl split call in smaller chunks
+     * //TODO check Compute Units utilization of method batchEthCall if there are many addresses, evtl split call in smaller chunks
      * //TODO implement logic to decide which asset pair to liquidate for a given user
      * //TODO connect to smart contract for liquidation process
      *
@@ -447,11 +433,8 @@ class HealthFactorCheckEngine {
 
         //#region initialization
 
-        await this.initialize();
         const aaveChainInfo: any = this.getAaveChainInfo(chain, chainEnv);
         const reserves = Object.keys(aaveChainInfo.reserves);
-        const aaveLendingPoolContractAddress =
-            aaveChainInfo.aaveLendingPoolContract.target;
 
         //#endregion
 
@@ -474,11 +457,13 @@ class HealthFactorCheckEngine {
         //#region infinite loop
 
         //get the prices for the reserves of the lending protocol
-        console.log("Getting reserves prices");
-        const prices =
-            await aaveChainInfo.aavePriceOracleContract.getAssetsPrices(
-                reserves
-            );
+        const aaveOracleContract = this.getContract(
+            aaveChainInfo.addresses.aaveOracle,
+            Constants.AAVE_ORACLE_ABI,
+            aaveChainInfo.chain,
+            aaveChainInfo.chainEnv
+        );
+        const prices = await aaveOracleContract.getAssetsPrices(reserves);
 
         let newReservesPrices: any = {};
         for (let i = 0; i < reserves.length; i++) {
@@ -634,24 +619,21 @@ class HealthFactorCheckEngine {
                         addressesToCheck
                     );
 
-                    let contractAddressArray = [];
-                    for (let i = 0; i < addressesToCheck.length; i++) {
-                        contractAddressArray.push(
-                            aaveLendingPoolContractAddress
-                        );
-                    }
-
                     //#endregion
 
+                    /*
                     //batch call the health factor for the addresses
-                    const userAccountData = await this.batchEthCallForAddresses(
-                        contractAddressArray,
+                    const userAccountData = await this.batchEthCall(
+                        aavePoolContractAddress,
                         addressesToCheck,
-                        this.aaveLendingPoolContractAbi,
+                        this.aavePoolContractAbi,
                         "getUserAccountData",
                         aaveChainInfo.chain,
                         aaveChainInfo.chainEnv
                     );
+*/
+                    //TODO calculate HF off-chain
+                    const userAccountData: any[] = [];
 
                     let addressesToLiquidate: any[] = [];
 
@@ -717,21 +699,40 @@ class HealthFactorCheckEngine {
      * @param chainEnv string, the chain environment (mainnet, kovan, etc)
      * @returns Array of results for each smartContract call
      */
-    async batchEthCallForAddresses(
-        contractsAddresses: string[],
-        methodParams: string[] | null,
+    async batchEthCall(
+        contractsAddresses: string | string[],
+        targetsAddresses: string | string[] | null,
         contractAbi: any,
         methodName: string,
         chain: string,
         chainEnv: string = "mainnet"
     ) {
-        await this.initialize();
+        if (!contractsAddresses || contractsAddresses.length == 0)
+            throw new Error("No contractsAddresses provided");
+        if (!Array.isArray(contractsAddresses))
+            contractsAddresses = [contractsAddresses];
 
-        if (methodParams && contractsAddresses.length != methodParams.length)
-            throw new Error(
-                "contractsAddresses and methodParams length mismatch"
-            );
+        if (targetsAddresses) {
+            if (!Array.isArray(targetsAddresses))
+                targetsAddresses = [targetsAddresses];
 
+            if (contractsAddresses.length == 1) {
+                for (let i = 1; i < targetsAddresses.length; i++) {
+                    contractsAddresses.push(contractsAddresses[0]);
+                }
+            } else if (targetsAddresses.length == 1) {
+                for (let i = 1; i < contractsAddresses.length; i++) {
+                    targetsAddresses.push(targetsAddresses[0]);
+                }
+            }
+
+            if (contractsAddresses.length != targetsAddresses.length)
+                throw new Error(
+                    "contractsAddresses and methodParams length mismatch"
+                );
+        }
+
+        const chainInfo = this.getAaveChainInfo(chain, chainEnv);
         const contractInterface = new ethers.Interface(contractAbi);
         const batchRequests = contractsAddresses.map(
             (contractAddress, index) => ({
@@ -740,9 +741,9 @@ class HealthFactorCheckEngine {
                 params: [
                     {
                         to: contractAddress,
-                        data: methodParams
+                        data: targetsAddresses
                             ? contractInterface.encodeFunctionData(methodName, [
-                                  methodParams[index],
+                                  targetsAddresses[index],
                               ])
                             : contractInterface.encodeFunctionData(methodName),
                     },
@@ -752,63 +753,129 @@ class HealthFactorCheckEngine {
             })
         );
 
-        try {
-            const alchemyUrl = this.getAaveChainInfo(
-                chain,
-                chainEnv
-            ).alchemyUrl;
-            const response = await fetch(alchemyUrl, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify(batchRequests),
-            });
+        //const response = await chainInfo.alchemyProvider.send(batchRequests);
+        const providerUrl = chainInfo.alchemyProvider.connection.url;
+        const response = await fetch(providerUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(batchRequests),
+        });
 
-            const results = await response.json();
+        const results = await response.json();
 
-            // Decode the results
-            const decodedResults = results.map((result: any) => {
-                if (result.error) {
-                    return { error: result.error };
-                }
-                return contractInterface.decodeFunctionResult(
-                    methodName,
-                    result.result
-                );
-            });
+        // Decode the results
+        const decodedResults = results.map((result: any) => {
+            if (result.error) {
+                return { error: result.error };
+            }
+            return contractInterface.decodeFunctionResult(
+                methodName,
+                result.result
+            );
+        });
 
-            return decodedResults;
-        } catch (error) {
-            console.error("Error batch calling " + methodName, error);
-            return null;
-        }
+        if (
+            Array.isArray(decodedResults[0]) &&
+            Array.isArray(decodedResults[0][0])
+        )
+            return decodedResults[0][0];
+        else return decodedResults;
     }
 
     //#region test
 
     async doTest(chain: string, chainEnv: string = "mainnet") {
-        await this.initialize();
+        await this.initializeAlchemy();
 
-        const key = `${chain}-${chainEnv}`;
-        const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
+        const chainInfo = this.getAaveChainInfo(chain, chainEnv);
+        const key = `${chainInfo.chain}-${chainInfo.chainEnv}`;
+        const aaveChainInfo = this.getAaveChainInfo(
+            chainInfo.chain,
+            chainInfo.chainEnv
+        );
+
+        //mirko
+        const uiPoolDataProviderContract = this.getContract(
+            aaveChainInfo.addresses.uiPoolDataProvider,
+            Constants.UI_POOL_DATA_PROVIDER_ABI,
+            chainInfo.chain,
+            chainInfo.chainEnv
+        );
+
+        const [reservesData, baseCurrencyInfo] =
+            await uiPoolDataProviderContract.getReservesData(
+                chainInfo.addresses.poolAddressesProvider
+            );
+        /*
+        const reservesData = await this.batchEthCall(
+            aaveChainInfo.addresses.pool,
+            null,
+            this.aavePoolContractAbi,
+            "getReservesData",
+            chainInfo.chain,
+            chainInfo.chainEnv
+        );
+*/
+        console.log(reservesData);
+        /*
+        const result1 = await this.getHealthFactorAndConfigurationForAddresses(
+            [
+                "0x00000000000b189d484abb06a0eb5ed0fb3e9db2",
+                "0x00000001fd5f90b69bc5d650985ea1bfe5fea7ac",
+            ],
+            chain,
+            chainEnv
+        );
+
+        const prices = await this.batchEthCall(
+            aaveChainInfo.aaveOracleAddress,
+            reserves,
+            this.aaveOracleAbi,
+            "getAssetsPrices",
+            chain,
+            chainEnv
+        );
+
+        console.log(prices);
+*/
+        return;
 
         const queryParams = {
             chain: key,
         };
-        const dbAddresses = await sqlManager.execQuery(
-            `SELECT TOP 2 SKIP 2000 * FROM addresses where chain = @chain AND userconfiguration IS NOT NULL AND healthfactor < 2;`,
+        const _dbAddresses = await sqlManager.execQuery(
+            `SELECT * FROM addresses 
+            where chain = @chain AND userconfiguration IS NOT NULL AND healthfactor < 2 
+            ORDER BY healthfactor
+            OFFSET 2000 ROWS FETCH NEXT 1 ROWS ONLY;`,
             queryParams
         );
 
+        //test - retrieve user configuration from chain
+        const dbAddressesHFandConfig =
+            await this.getHealthFactorAndConfigurationForAddresses(
+                _.map(_dbAddresses, (a: any) => a.address),
+                chain,
+                chainEnv
+            );
+        const dbAddresses = _.map(dbAddressesHFandConfig, (o) => {
+            return {
+                address: o.address,
+                userconfiguration: o.userConfiguration,
+            };
+        });
+
+        let reservesAddresses = Object.keys(aaveChainInfo.reserves);
         let usersReserves: any = {};
         for (let j = 0; j < dbAddresses.length; j++) {
             const address = dbAddresses[j].address;
-            const userConfiguration = dbAddresses[j].userconfiguration;
+            let userConfiguration = dbAddresses[j].userconfiguration;
             let i = userConfiguration.length - 1;
             let userReserves: string[] = [];
             //loop through reserves
-            for (let reserve of Object.keys(aaveChainInfo.reserves)) {
+            for (let reserve of reservesAddresses) {
                 if (
                     (i >= 0 && userConfiguration[i] == "1") ||
                     (i > 0 && userConfiguration[i - 1] == "1")
@@ -816,12 +883,12 @@ class HealthFactorCheckEngine {
                     userReserves.push(reserve);
                 }
                 i = i - 2;
+                if (i <= 0) break;
             }
             if (userReserves.length > 0) {
                 usersReserves[address] = userReserves;
             }
         }
-        console.log("userReserves", usersReserves);
 
         const userReservesAddresses = Object.keys(usersReserves);
         let balanceOfTokenAddresses: string[] = [];
@@ -829,25 +896,41 @@ class HealthFactorCheckEngine {
         for (let i = 0; i < userReservesAddresses.length; i++) {
             const address = userReservesAddresses[i];
             const reserves = usersReserves[address];
-            let addressesArray: string[] = [];
             for (let j = 0; j < reserves.length; j++) {
                 const reserve = reserves[j];
-                addressesArray.push(reserve);
                 balanceOfTokenAddresses.push(reserve);
                 balanceOfUserAddresses.push(address);
             }
         }
 
-        const result = await this.batchEthCallForAddresses(
+        const result = await this.batchEthCall(
             balanceOfTokenAddresses,
             balanceOfUserAddresses,
-            this.aaveTokenAbi,
+            Constants.TOKEN_ABI,
             "balanceOf",
             chain,
             chainEnv
         );
 
-        console.log(result);
+        console.log(balanceOfTokenAddresses, result);
+    }
+
+    async getBalanceOf(
+        address: string,
+        tokenAddress: string,
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
+        await this.initializeAlchemy();
+        const balance = await this.batchEthCall(
+            tokenAddress,
+            address,
+            Constants.TOKEN_ABI,
+            "balanceOf",
+            chain,
+            chainEnv
+        );
+        return balance.toString();
     }
 
     async testFunction(context: InvocationContext) {
@@ -879,7 +962,7 @@ class HealthFactorCheckEngine {
         /*
         // Iterate through each reserve and get user data
         for (const reserve of reservesList) {
-            const reserveData = await this.lendingPoolContract.getReserveData(
+            const reserveData = await this.poolContract.getReserveData(
                 reserve
             );
 

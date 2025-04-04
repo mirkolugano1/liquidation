@@ -6,14 +6,16 @@ import common from "../shared/common";
 import encryption from "../shared/encryption";
 import { application } from "express";
 import * as applicationInsights from "applicationinsights";
+import { Alchemy, Network } from "alchemy-sdk";
 
 dotenv.config();
 
-logger.initialize("sandbox");
+//logger.initialize("sandbox");
 
 async function main() {
     try {
-        await healthFactorCheckEngine.updateReservesConfiguration();
+        if (false) await healthFactorCheckEngine.updateReservesConfiguration();
+        else await healthFactorCheckEngine.doTest("arb");
     } catch (error) {
         console.error("Error in main function:", error);
     }
