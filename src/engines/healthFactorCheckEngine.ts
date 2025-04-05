@@ -31,7 +31,7 @@ class HealthFactorCheckEngine {
         );
         if (!dbReserves || dbReserves.length == 0) {
             await logger.log(
-                "No reserves found in DB. Please run the updateReservesConfiguration function first.",
+                "No reserves found in DB. Please run the updateReservesData function first.",
                 "functionAppExecution"
             );
             return;
@@ -144,15 +144,12 @@ class HealthFactorCheckEngine {
         //#region initialization
 
         logger.initialize(
-            "function:updateReservesConfiguration",
+            "function:updateReservesData",
             LoggingFramework.ApplicationInsights,
             context
         );
 
-        await logger.log(
-            "Start updateReservesConfiguration",
-            "functionAppExecution"
-        );
+        await logger.log("Start updateReservesData", "functionAppExecution");
         await this.initializeAlchemy();
         await this.initializeReserves();
 
@@ -279,10 +276,7 @@ class HealthFactorCheckEngine {
             }
         }
 
-        await logger.log(
-            "Ended updateReservesConfiguration",
-            "functionAppExecution"
-        );
+        await logger.log("Ended updateReservesData", "functionAppExecution");
     }
 
     //#region healthFactor DB check loop
