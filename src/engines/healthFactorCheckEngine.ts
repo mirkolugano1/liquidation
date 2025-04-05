@@ -140,9 +140,7 @@ class HealthFactorCheckEngine {
      *
      * @param context the InvocationContext of the function app on azure (for Application Insights)
      */
-    async updateReservesConfiguration(
-        context: InvocationContext | null = null
-    ) {
+    async updateReservesData(context: InvocationContext | null = null) {
         //#region initialization
 
         logger.initialize(
@@ -178,8 +176,6 @@ class HealthFactorCheckEngine {
                 await uiPoolDataProviderContract.getReservesData(
                     chainInfo.addresses.poolAddressesProvider
                 );
-
-            //mirko parse new data
 
             if (!reservesData || reservesData.length == 0) {
                 await logger.log(
@@ -240,7 +236,7 @@ class HealthFactorCheckEngine {
                         '${reserveData[22]}')`
                 );
 
-                break; //TODO remove break, this is just for testing
+                //break; //TODO remove break, this is just for testing
             }
 
             if (reservesSQLList.length > 0) {
@@ -250,6 +246,30 @@ class HealthFactorCheckEngine {
                         ${reservesSQLList.join(",")}
                     ) AS source (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenaddress, interestratestrategyaddress)
                     ON (target.address = source.address AND target.chain = source.chain)
+                    WHEN MATCHED THEN
+                    UPDATE SET
+                        name = source.name,
+                        symbol = source.symbol,
+                        decimals = source.decimals,
+                        baseltvascollateral = source.baseltvascollateral,
+                        reserveliquidationtreshold = source.reserveliquidationtreshold,
+                        reserveliquidationbonus = source.reserveliquidationbonus,
+                        reservefactor = source.reservefactor,
+                        usageascollateralenabled = source.usageascollateralenabled,
+                        borrowingenabled = source.borrowingenabled,
+                        stableborrowrateenabled = source.stableborrowrateenabled,
+                        isactive = source.isactive,
+                        isfrozen = source.isfrozen,
+                        liquidityindex = source.liquidityindex,
+                        variableborrowindex = source.variableborrowindex,
+                        liquidityrate = source.liquidityrate,
+                        variableborrowrate = source.variableborrowrate,
+                        stableborrowrate = source.stableborrowrate,
+                        lastupdatetimestamp = source.lastupdatetimestamp,
+                        atokenaddress = source.atokenaddress,
+                        stabledebttokenaddress = source.stabledebttokenaddress,
+                        variabledebttokenaddress = source.variabledebttokenaddress,
+                        interestratestrategyaddress = source.interestratestrategyaddress
                     WHEN NOT MATCHED BY TARGET THEN
                         INSERT (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenaddress, interestratestrategyaddress)
                         VALUES (source.address, source.chain, source.name, source.symbol, source.decimals, source.baseltvascollateral, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.stableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.stabledebttokenaddress, source.variabledebttokenaddress, source.interestratestrategyaddress);

@@ -22,8 +22,7 @@ before(async () => {
     //these are the ones that are in the .env file, which are not very sensitive
     process.env.LIQUIDATIONENVIRONMENT = "prod";
 
-    await webhookEngine.initialize();
-    await healthFactorCheckEngine.initialize();
+    await healthFactorCheckEngine.initializeAlchemy();
 });
 
 test("encryption_testEncryptDecrypt", { only: false }, async () => {
@@ -37,13 +36,9 @@ test("encryption_testEncryptDecrypt", { only: false }, async () => {
     assert.strictEqual(text, decrypted2);
 });
 
-test("hf_aaveChainInfosArrayIsDefined", { only: false }, async () => {
-    assert.ok(healthFactorCheckEngine.aaveChainsInfos.length > 0);
-});
-
-test("hf_initializeHealthFactorEngine", { only: false }, async () => {
+test("hf_initializeHealthFactorEngine", { only: true }, async () => {
     const aaveChainInfo = await healthFactorCheckEngine.getAaveChainInfo("arb");
-    const aaveLendingPoolContractAddress = aaveChainInfo.lendingPoolAddress;
+    const aaveLendingPoolContractAddress = aaveChainInfo.addresses.pool;
 
     assertStringIsNotNullOrEmpty(aaveLendingPoolContractAddress);
 
