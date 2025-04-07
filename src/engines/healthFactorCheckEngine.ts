@@ -9,6 +9,7 @@ import { InvocationContext } from "@azure/functions";
 import { LoggingFramework } from "../shared/enums";
 import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
+import { pool } from "mssql";
 
 class HealthFactorCheckEngine {
     private static instance: HealthFactorCheckEngine;
@@ -88,6 +89,27 @@ class HealthFactorCheckEngine {
             });
 
             this.aave[key] = chainInfo;
+
+            const addresses = await this.multicall(
+                aaveChainInfo.addresses.poolAddressesProvider,
+                null,
+                "ADDRESSES_PROVIDER_ABI",
+                ["getPoolDataProvider", "getPriceOracle", "getPool"],
+                aaveChainInfo.chain,
+                aaveChainInfo.chainEnv
+            );
+
+            if (!addresses) {
+                await logger.log(
+                    `No addresses found for chain ${aaveChainInfo.chain} and env ${aaveChainInfo.chainEnv}`,
+                    "functionAppExecution"
+                );
+                return;
+            }
+
+            chainInfo.addresses.poolDataProvider = addresses[0]?.toString();
+            chainInfo.addresses.aaveOracle = addresses[1]?.toString();
+            chainInfo.addresses.pool = addresses[2]?.toString();
         }
     }
 
@@ -135,7 +157,7 @@ class HealthFactorCheckEngine {
     //#endregion Helper methods
 
     /**
-     * Periodically update the reserves configuration in the DB
+     * Periodically update the reserves data in the DB
      * so that we don't need to fetch it from the blockchain every time
      *
      * @param context the InvocationContext of the function app on azure (for Application Insights)
@@ -163,23 +185,95 @@ class HealthFactorCheckEngine {
             );
 
             //get current list of reserves from the chain
-            const uiPoolDataProviderContract = this.getContract(
-                aaveChainInfo.addresses.uiPoolDataProvider,
-                Constants.UI_POOL_DATA_PROVIDER_ABI,
+            const poolDataProviderContract = this.getContract(
+                aaveChainInfo.addresses.poolDataProvider,
+                Constants.ABIS.POOL_DATA_PROVIDER_ABI,
                 chainInfo.chain,
                 chainInfo.chainEnv
             );
-            const [reservesData, baseCurrencyInfo] =
-                await uiPoolDataProviderContract.getReservesData(
-                    chainInfo.addresses.poolAddressesProvider
-                );
 
-            if (!reservesData || reservesData.length == 0) {
-                await logger.log(
-                    `No reserves found for chain ${chainInfo.chain} and env ${chainInfo.chainEnv}`,
-                    "functionAppExecution"
+            const results = await this.multicall(
+                chainInfo.addresses.poolDataProvider,
+                null,
+                "POOL_DATA_PROVIDER_ABI",
+                ["getAllReservesTokens", "getAllATokens"],
+                chainInfo.chain,
+                chainInfo.chainEnv
+            );
+
+            const allReserveTokens: any[] = _.map(results[0][0], (o) => {
+                return {
+                    chain: key,
+                    symbol: o[0].toString(),
+                    address: o[1].toString(),
+                };
+            });
+            const aTokens = results[1][0];
+            for (let i = 0; i < aTokens.length; i++) {
+                allReserveTokens[i].atokenaddress = aTokens[i][1].toString();
+            }
+
+            const allReserveTokensAddresses = _.map(
+                allReserveTokens,
+                (o) => o.address
+            );
+
+            const reservesData1 = await this.multicall(
+                aaveChainInfo.addresses.poolDataProvider,
+                allReserveTokensAddresses,
+                "POOL_DATA_PROVIDER_ABI",
+                "getReserveData",
+                chainInfo.chain,
+                chainInfo.chainEnv
+            );
+
+            for (let i = 0; i < reservesData1.length; i++) {
+                allReserveTokens[i].liquidityindex =
+                    reservesData1[i][9].toString();
+                allReserveTokens[i].variableborrowindex =
+                    reservesData1[i][10].toString();
+                allReserveTokens[i].liquidityrate =
+                    reservesData1[i][5].toString();
+                allReserveTokens[i].variableborrowrate =
+                    reservesData1[i][6].toString();
+                allReserveTokens[i].totalstabledebt =
+                    reservesData1[i][3].toString();
+                allReserveTokens[i].lastupdatetimestamp =
+                    reservesData1[i][11].toString();
+                allReserveTokens[i].totalvariabledebt =
+                    reservesData1[i][4].toString();
+            }
+
+            const reservesConfigData1 = await this.multicall(
+                aaveChainInfo.addresses.poolDataProvider,
+                allReserveTokensAddresses,
+                "POOL_DATA_PROVIDER_ABI",
+                "getReserveConfigurationData",
+                chainInfo.chain,
+                chainInfo.chainEnv
+            );
+
+            for (let i = 0; i < reservesConfigData1.length; i++) {
+                allReserveTokens[i].decimals = reservesConfigData1[i][0];
+                allReserveTokens[i].ltv = reservesConfigData1[i][1].toString();
+                allReserveTokens[i].reserveliquidationthreshold =
+                    reservesConfigData1[i][2].toString();
+                allReserveTokens[i].reserveliquidationbonus =
+                    reservesConfigData1[i][3].toString();
+                allReserveTokens[i].reservefactor =
+                    reservesConfigData1[i][4].toString();
+                allReserveTokens[i].usageascollateralenabled =
+                    sqlManager.getBitFromBoolean(reservesConfigData1[i][5]);
+                allReserveTokens[i].borrowingenabled =
+                    sqlManager.getBitFromBoolean(reservesConfigData1[i][6]);
+                allReserveTokens[i].stableborrowrateenabled =
+                    sqlManager.getBitFromBoolean(reservesConfigData1[i][7]);
+                allReserveTokens[i].isactive = sqlManager.getBitFromBoolean(
+                    reservesConfigData1[i][8]
                 );
-                return;
+                allReserveTokens[i].isfrozen = sqlManager.getBitFromBoolean(
+                    reservesConfigData1[i][9]
+                );
             }
 
             //check if there are reserves in the DB which are not in the reservesList
@@ -188,7 +282,10 @@ class HealthFactorCheckEngine {
                 aaveChainInfo.reserves,
                 (o) => o.address
             );
-            const fetchedReservesAddresses = _.map(reservesData, (o) => o[0]);
+            const fetchedReservesAddresses = _.map(
+                allReserveTokens,
+                (o) => o.address
+            );
 
             const removedReservesAddresses = _.difference(
                 currentDbReservesAddresses,
@@ -203,52 +300,39 @@ class HealthFactorCheckEngine {
 
             //prepare query to update reserves list in DB
             //and update DB
-            let reservesSQLList: any[] = [];
-            for (let i = 0; i < reservesData.length; i++) {
-                const reserveData = reservesData[i];
-                reservesSQLList.push(
-                    `('${reserveData[0]}', 
-                        '${key}', 
-                        '${reserveData[1]}',
-                        '${reserveData[2]}',
-                        ${reserveData[3]},
-                        '${reserveData[4]}',
-                        '${reserveData[5]}',
-                        '${reserveData[6]}',
-                        '${reserveData[7]}',
-                        ${sqlManager.getBitFromBoolean(reserveData[8])},
-                        ${sqlManager.getBitFromBoolean(reserveData[9])},
-                        ${sqlManager.getBitFromBoolean(reserveData[10])},
-                        ${sqlManager.getBitFromBoolean(reserveData[11])},
-                        ${sqlManager.getBitFromBoolean(reserveData[12])},
-                        '${reserveData[13]}',
-                        '${reserveData[14]}',
-                        '${reserveData[15]}',
-                        '${reserveData[16]}',
-                        '${reserveData[17]}',
-                        '${reserveData[18]}',
-                        '${reserveData[19]}',
-                        '${reserveData[20]}',
-                        '${reserveData[21]}',
-                        '${reserveData[22]}')`
-                );
-
-                //break; //TODO remove break, this is just for testing
-            }
+            let reservesSQLList: string[] = _.map(allReserveTokens, (o) => {
+                return `('${o.address}', '${key}', '${o.symbol}', ${
+                    o.decimals
+                }, '${o.reserveliquidationthreshold}', '${
+                    o.reserveliquidationbonus
+                }', '${o.reservefactor}', ${
+                    o.usageascollateralenabled
+                }, ${sqlManager.getBitFromBoolean(
+                    o.borrowingenabled
+                )}, ${sqlManager.getBitFromBoolean(
+                    o.stableborrowrateenabled
+                )}, ${sqlManager.getBitFromBoolean(
+                    o.isactive
+                )}, ${sqlManager.getBitFromBoolean(o.isfrozen)}, '${
+                    o.liquidityindex
+                }', '${o.variableborrowindex}', '${o.liquidityrate}', '${
+                    o.variableborrowrate
+                }', '${o.lastupdatetimestamp}', '${o.atokenaddress}', '${
+                    o.totalstabledebt
+                }', '${o.totalvariabledebt}', '${o.ltv}')`;
+            });
 
             if (reservesSQLList.length > 0) {
                 const sqlQuery = `
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenaddress, interestratestrategyaddress)
+                    ) AS source (address, chain, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, totalstabledebt, totalvariabledebt, ltv)
                     ON (target.address = source.address AND target.chain = source.chain)
                     WHEN MATCHED THEN
-                    UPDATE SET
-                        name = source.name,
+                    UPDATE SET                        
                         symbol = source.symbol,
-                        decimals = source.decimals,
-                        baseltvascollateral = source.baseltvascollateral,
+                        decimals = source.decimals,                        
                         reserveliquidationtreshold = source.reserveliquidationtreshold,
                         reserveliquidationbonus = source.reserveliquidationbonus,
                         reservefactor = source.reservefactor,
@@ -260,18 +344,18 @@ class HealthFactorCheckEngine {
                         liquidityindex = source.liquidityindex,
                         variableborrowindex = source.variableborrowindex,
                         liquidityrate = source.liquidityrate,
-                        variableborrowrate = source.variableborrowrate,
-                        stableborrowrate = source.stableborrowrate,
+                        variableborrowrate = source.variableborrowrate,                        
                         lastupdatetimestamp = source.lastupdatetimestamp,
                         atokenaddress = source.atokenaddress,
-                        stabledebttokenaddress = source.stabledebttokenaddress,
-                        variabledebttokenaddress = source.variabledebttokenaddress,
-                        interestratestrategyaddress = source.interestratestrategyaddress
+                        totalstabledebt = source.totalstabledebt,
+                        totalvariabledebt = source.totalvariabledebt,
+                        ltv = source.ltv
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, chain, name, symbol, decimals, baseltvascollateral, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, stableborrowrate, lastupdatetimestamp, atokenaddress, stabledebttokenaddress, variabledebttokenaddress, interestratestrategyaddress)
-                        VALUES (source.address, source.chain, source.name, source.symbol, source.decimals, source.baseltvascollateral, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.stableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.stabledebttokenaddress, source.variabledebttokenaddress, source.interestratestrategyaddress);
+                        INSERT (address, chain, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, totalstabledebt, totalvariabledebt, ltv)
+                        VALUES (source.address, source.chain, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv);
                 `;
 
+                //console.log(sqlQuery);
                 await sqlManager.execQuery(sqlQuery);
             }
         }
@@ -279,7 +363,7 @@ class HealthFactorCheckEngine {
         await logger.log("Ended updateReservesData", "functionAppExecution");
     }
 
-    //#region healthFactor DB check loop
+    //#region TEST CODE (NOT YET READY)
 
     checkReservesPricesIntervalId: any;
     checkReservesPricesIntervalInSeconds = 60 * 5; // 5 minutes, for the moment...
@@ -320,19 +404,19 @@ class HealthFactorCheckEngine {
 
         const chainInfo = await this.getAaveChainInfo(chain, chainEnv);
 
-        const userAccountData = await this.batchEthCall(
+        const userAccountData = await this.multicall(
             chainInfo.addresses.pool,
             _addresses,
-            Constants.POOL_ABI,
+            "POOL_ABI",
             "getUserAccountData",
             chain,
             chainEnv
         );
 
-        const userConfiguration = await this.batchEthCall(
+        const userConfiguration = await this.multicall(
             chainInfo.addresses.pool,
             _addresses,
-            Constants.POOL_ABI,
+            "POOL_ABI",
             "getUserConfiguration",
             chain,
             chainEnv
@@ -343,7 +427,9 @@ class HealthFactorCheckEngine {
             const healthFactor = this.getHealthFactorFromUserAccountData(
                 userAccountData[i]
             );
-            let userConfigurationInt = parseInt(userConfiguration[i]);
+            let userConfigurationInt = parseInt(
+                userConfiguration[i].toString()
+            );
 
             if (!Number.isNaN(userConfigurationInt)) {
                 const userConfigurationBinary =
@@ -434,7 +520,7 @@ class HealthFactorCheckEngine {
      *  and liquidate them if their health factor is below 1. The method contains an infinite loop that checks the reserves prices
      *  every n seconds and if the prices have changed, it checks the health factor for the addresses that have the changed reserves
      *
-     * //TODO check Compute Units utilization of method batchEthCall if there are many addresses, evtl split call in smaller chunks
+     * //TODO check Compute Units utilization of method multicall if there are many addresses, evtl split call in smaller chunks
      * //TODO implement logic to decide which asset pair to liquidate for a given user
      * //TODO connect to smart contract for liquidation process
      *
@@ -472,7 +558,7 @@ class HealthFactorCheckEngine {
         //get the prices for the reserves of the lending protocol
         const aaveOracleContract = this.getContract(
             aaveChainInfo.addresses.aaveOracle,
-            Constants.AAVE_ORACLE_ABI,
+            Constants.ABIS.AAVE_ORACLE_ABI,
             aaveChainInfo.chain,
             aaveChainInfo.chainEnv
         );
@@ -636,7 +722,7 @@ class HealthFactorCheckEngine {
 
                     /*
                     //batch call the health factor for the addresses
-                    const userAccountData = await this.batchEthCall(
+                    const userAccountData = await this.multicall(
                         aavePoolContractAddress,
                         addressesToCheck,
                         this.aavePoolContractAbi,
@@ -698,161 +784,51 @@ class HealthFactorCheckEngine {
         await logger.log("End checkReservesPrices", "functionAppExecution");
     }
 
-    /**
-     * Utility function to batch call a method for multiple smartContract addresses
-     * or for a single smartContract address with multiple method parameters
-     * or both. The method will return an array of results for each call.
-     * Important is, if methodParams is defined, it must be same length of contractsAddresses
-     *
-     * @param contractsAddresses string[], the smartContract addresses
-     * @param methodParams string[] | null, the method parameters for each smartContract address
-     * @param contractAbi any, the smartContract ABI of the function to be called
-     * @param methodName string, the method name to be called
-     * @param chain string, the chain name (eth, arb, etc)
-     * @param chainEnv string, the chain environment (mainnet, kovan, etc)
-     * @returns Array of results for each smartContract call
-     */
-    async batchEthCall(
-        contractsAddresses: string | string[],
-        targetsAddresses: string | string[] | null,
-        contractAbi: any,
-        methodName: string,
-        chain: string,
-        chainEnv: string = "mainnet"
-    ) {
-        if (!contractsAddresses || contractsAddresses.length == 0)
-            throw new Error("No contractsAddresses provided");
-        if (!Array.isArray(contractsAddresses))
-            contractsAddresses = [contractsAddresses];
-
-        if (targetsAddresses) {
-            if (!Array.isArray(targetsAddresses))
-                targetsAddresses = [targetsAddresses];
-
-            if (contractsAddresses.length == 1) {
-                for (let i = 1; i < targetsAddresses.length; i++) {
-                    contractsAddresses.push(contractsAddresses[0]);
-                }
-            } else if (targetsAddresses.length == 1) {
-                for (let i = 1; i < contractsAddresses.length; i++) {
-                    targetsAddresses.push(targetsAddresses[0]);
-                }
-            }
-
-            if (contractsAddresses.length != targetsAddresses.length)
-                throw new Error(
-                    "contractsAddresses and methodParams length mismatch"
-                );
-        }
-
-        const chainInfo = this.getAaveChainInfo(chain, chainEnv);
-        const contractInterface = new ethers.Interface(contractAbi);
-        const batchRequests = contractsAddresses.map(
-            (contractAddress, index) => ({
-                jsonrpc: "2.0",
-                method: "eth_call",
-                params: [
-                    {
-                        to: contractAddress,
-                        data: targetsAddresses
-                            ? contractInterface.encodeFunctionData(methodName, [
-                                  targetsAddresses[index],
-                              ])
-                            : contractInterface.encodeFunctionData(methodName),
-                    },
-                    "latest",
-                ],
-                id: index,
-            })
-        );
-
-        //const response = await chainInfo.alchemyProvider.send(batchRequests);
-        const providerUrl = chainInfo.alchemyProvider.connection.url;
-        const response = await fetch(providerUrl, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(batchRequests),
-        });
-
-        const results = await response.json();
-
-        // Decode the results
-        const decodedResults = results.map((result: any) => {
-            if (result.error) {
-                return { error: result.error };
-            }
-            return contractInterface.decodeFunctionResult(
-                methodName,
-                result.result
-            );
-        });
-
-        if (
-            Array.isArray(decodedResults[0]) &&
-            Array.isArray(decodedResults[0][0])
-        )
-            return decodedResults[0][0];
-        else return decodedResults;
-    }
-
     //#region test
 
     async doTest(chain: string, chainEnv: string = "mainnet") {
         await this.initializeAlchemy();
+        await this.initializeReserves();
 
-        const chainInfo = this.getAaveChainInfo(chain, chainEnv);
-        const key = `${chainInfo.chain}-${chainInfo.chainEnv}`;
-        const aaveChainInfo = this.getAaveChainInfo(
-            chainInfo.chain,
-            chainInfo.chainEnv
+        const top = 5;
+        const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
+        const key = `${chain}-${chainEnv}`;
+        const _dbAddresses1 = await sqlManager.execQuery(
+            `SELECT top 5000 * FROM addresses`
         );
 
-        //mirko
-        const uiPoolDataProviderContract = this.getContract(
-            aaveChainInfo.addresses.uiPoolDataProvider,
-            Constants.UI_POOL_DATA_PROVIDER_ABI,
-            chainInfo.chain,
-            chainInfo.chainEnv
-        );
+        const _addresses = _.map(_dbAddresses1, (a: any) => a.address);
 
-        const [reservesData, baseCurrencyInfo] =
-            await uiPoolDataProviderContract.getReservesData(
-                chainInfo.addresses.poolAddressesProvider
-            );
-        /*
-        const reservesData = await this.batchEthCall(
-            aaveChainInfo.addresses.pool,
-            null,
-            this.aavePoolContractAbi,
-            "getReservesData",
-            chainInfo.chain,
-            chainInfo.chainEnv
-        );
-*/
-        console.log(reservesData);
-        /*
-        const result1 = await this.getHealthFactorAndConfigurationForAddresses(
-            [
-                "0x00000000000b189d484abb06a0eb5ed0fb3e9db2",
-                "0x00000001fd5f90b69bc5d650985ea1bfe5fea7ac",
-            ],
+        let targetAddresses: any[] = [];
+        let paramAddresses: any[] = [];
+        const reservesAddresses1 = Object.keys(aaveChainInfo.reserves);
+        for (let i = 0; i < _addresses.length; i++) {
+            const address = _addresses[i];
+            for (let j = 0; j < reservesAddresses1.length; j++) {
+                const atoken =
+                    aaveChainInfo.reserves[reservesAddresses1[j]].atokenaddress;
+                targetAddresses.push(atoken);
+                paramAddresses.push(address);
+            }
+        }
+
+        console.log(targetAddresses.length, paramAddresses.length);
+
+        const multicall = await this.multicall(
+            targetAddresses,
+            paramAddresses,
+            "TOKEN_ABI",
+            "balanceOf",
             chain,
             chainEnv
         );
 
-        const prices = await this.batchEthCall(
-            aaveChainInfo.aaveOracleAddress,
-            reserves,
-            this.aaveOracleAbi,
-            "getAssetsPrices",
-            chain,
-            chainEnv
+        console.log(
+            multicall[multicall.length - 1],
+            multicall[multicall.length - 2],
+            multicall[multicall.length - 3]
         );
 
-        console.log(prices);
-*/
         return;
 
         const queryParams = {
@@ -915,35 +891,6 @@ class HealthFactorCheckEngine {
                 balanceOfUserAddresses.push(address);
             }
         }
-
-        const result = await this.batchEthCall(
-            balanceOfTokenAddresses,
-            balanceOfUserAddresses,
-            Constants.TOKEN_ABI,
-            "balanceOf",
-            chain,
-            chainEnv
-        );
-
-        console.log(balanceOfTokenAddresses, result);
-    }
-
-    async getBalanceOf(
-        address: string,
-        tokenAddress: string,
-        chain: string,
-        chainEnv: string = "mainnet"
-    ) {
-        await this.initializeAlchemy();
-        const balance = await this.batchEthCall(
-            tokenAddress,
-            address,
-            Constants.TOKEN_ABI,
-            "balanceOf",
-            chain,
-            chainEnv
-        );
-        return balance.toString();
     }
 
     async testFunction(context: InvocationContext) {
@@ -1014,140 +961,233 @@ class HealthFactorCheckEngine {
 
     //#endregion healthFactor check loop
 
-    parseReserveConfiguration(data: any) {
-        const bnData = new Big(data);
+    async multicallEstimateGas(
+        targetAddresses: string | string[],
+        paramAddresses: string | string[] | null,
+        contractABIsKeys: string | string[],
+        methodNames: string | string[],
+        chain: string,
+        chainEnv: string = "mainnet"
+    ) {
+        const estimate = await this.multicall(
+            targetAddresses,
+            paramAddresses,
+            contractABIsKeys,
+            methodNames,
+            chain,
+            chainEnv,
+            true
+        );
+        return Number(estimate);
+    }
 
-        // Constants for bit positions and lengths
-        const LTV_BITS = { start: 0, length: 16 };
-        const LIQ_THRESHOLD_BITS = { start: 16, length: 16 };
-        const LIQ_BONUS_BITS = { start: 32, length: 16 };
-        const DECIMALS_BITS = { start: 48, length: 8 };
-        const ACTIVE_BIT = 56;
-        const FROZEN_BIT = 57;
-        const BORROWING_ENABLED_BIT = 58;
-        const STABLE_BORROWING_ENABLED_BIT = 59;
-        const PAUSED_BIT = 60;
-        const ISOLATION_MODE_BIT = 61;
-        const SILOED_BORROWING_BIT = 62;
-        const FLASHLOAN_ENABLED_BIT = 63;
-        const RESERVE_FACTOR_BITS = { start: 64, length: 16 };
-        const BORROW_CAP_BITS = { start: 80, length: 36 };
-        const SUPPLY_CAP_BITS = { start: 116, length: 36 };
-        const LIQ_PROTOCOL_FEE_BITS = { start: 152, length: 16 };
-        const EMODE_CATEGORY_BITS = { start: 168, length: 8 };
-        const UNBACKED_MINT_CAP_BITS = { start: 176, length: 36 };
-        const DEBT_CEILING_BITS = { start: 212, length: 40 };
-        const VIRTUAL_ACCOUNTING_BIT = 252;
+    checkMulticallInputs(
+        targetAddresses: string | string[],
+        paramAddresses: string | string[] | null,
+        contractABIsKeys: string | string[],
+        methodNames: string | string[]
+    ): [string[], string[], string[], string[]] {
+        if (!paramAddresses) paramAddresses = [];
 
-        // Helper function to extract bits
-        const extractBits = (data: any, start: any, length: any) => {
-            return parseInt(
-                bnData.div(Big(2).pow(start)).mod(Big(2).pow(length)).toFixed(0)
+        if (!targetAddresses || targetAddresses.length == 0)
+            throw new Error("No targetAddresses provided");
+
+        if (!Array.isArray(targetAddresses))
+            targetAddresses = [targetAddresses];
+
+        if (targetAddresses.length == 1 && paramAddresses.length > 1) {
+            for (let i = 1; i < paramAddresses.length; i++) {
+                targetAddresses.push(targetAddresses[0]);
+            }
+        } else if (targetAddresses.length == 1 && methodNames.length > 1) {
+            for (let i = 1; i < methodNames.length; i++) {
+                targetAddresses.push(targetAddresses[0]);
+            }
+        }
+
+        if (!Array.isArray(paramAddresses)) paramAddresses = [paramAddresses];
+
+        if (
+            paramAddresses.length == 1 &&
+            targetAddresses &&
+            targetAddresses.length > 1
+        ) {
+            for (let i = 1; i < targetAddresses.length; i++) {
+                paramAddresses.push(paramAddresses[0]);
+            }
+        }
+
+        if (
+            paramAddresses.length > 0 &&
+            targetAddresses.length != paramAddresses.length
+        ) {
+            throw new Error(
+                "targetAddresses and paramAddresses length mismatch"
             );
-        };
+        }
 
-        // Extract properties using bitwise operations
-        const ltv = extractBits(bnData, LTV_BITS.start, LTV_BITS.length);
-        const liquidationThreshold = extractBits(
-            bnData,
-            LIQ_THRESHOLD_BITS.start,
-            LIQ_THRESHOLD_BITS.length
-        );
-        const liquidationBonus = extractBits(
-            bnData,
-            LIQ_BONUS_BITS.start,
-            LIQ_BONUS_BITS.length
-        );
-        const decimals = extractBits(
-            bnData,
-            DECIMALS_BITS.start,
-            DECIMALS_BITS.length
-        );
-        const isActive = bnData.div(Big(2).pow(ACTIVE_BIT)).mod(2).eq(1);
-        const isFrozen = bnData.div(Big(2).pow(FROZEN_BIT)).mod(2).eq(1);
-        const isBorrowingEnabled = bnData
-            .div(Big(2).pow(BORROWING_ENABLED_BIT))
-            .mod(2)
-            .eq(1);
-        const isStableBorrowingEnabled = bnData
-            .div(Big(2).pow(STABLE_BORROWING_ENABLED_BIT))
-            .mod(2)
-            .eq(1);
-        const isPaused = bnData.div(Big(2).pow(PAUSED_BIT)).mod(2).eq(1);
-        const isIsolationModeEnabled = bnData
-            .div(Big(2).pow(ISOLATION_MODE_BIT))
-            .mod(2)
-            .eq(1);
-        const isSiloedBorrowingEnabled = bnData
-            .div(Big(2).pow(SILOED_BORROWING_BIT))
-            .mod(2)
-            .eq(1);
-        const isFlashloanEnabled = bnData
-            .div(Big(2).pow(FLASHLOAN_ENABLED_BIT))
-            .mod(2)
-            .eq(1);
-        const reserveFactor = extractBits(
-            bnData,
-            RESERVE_FACTOR_BITS.start,
-            RESERVE_FACTOR_BITS.length
-        );
-        const borrowCap = extractBits(
-            bnData,
-            BORROW_CAP_BITS.start,
-            BORROW_CAP_BITS.length
-        );
-        const supplyCap = extractBits(
-            bnData,
-            SUPPLY_CAP_BITS.start,
-            SUPPLY_CAP_BITS.length
-        );
-        const liqProtocolFee = extractBits(
-            bnData,
-            LIQ_PROTOCOL_FEE_BITS.start,
-            LIQ_PROTOCOL_FEE_BITS.length
-        );
-        const eModeCategory = extractBits(
-            bnData,
-            EMODE_CATEGORY_BITS.start,
-            EMODE_CATEGORY_BITS.length
-        );
-        const unbackedMintCap = extractBits(
-            bnData,
-            UNBACKED_MINT_CAP_BITS.start,
-            UNBACKED_MINT_CAP_BITS.length
-        );
-        const debtCeiling = extractBits(
-            bnData,
-            DEBT_CEILING_BITS.start,
-            DEBT_CEILING_BITS.length
-        );
-        const isVirtualAccountingEnabled = bnData
-            .div(Big(2).pow(VIRTUAL_ACCOUNTING_BIT))
-            .mod(2)
-            .eq(1);
+        if (!methodNames || methodNames.length == 0)
+            throw new Error("No methodNames provided");
 
-        return {
-            ltv,
-            liquidationThreshold,
-            liquidationBonus,
-            decimals,
-            isActive,
-            isFrozen,
-            isBorrowingEnabled,
-            isStableBorrowingEnabled,
-            isPaused,
-            isIsolationModeEnabled,
-            isSiloedBorrowingEnabled,
-            isFlashloanEnabled,
-            reserveFactor,
-            borrowCap,
-            supplyCap,
-            liqProtocolFee,
-            eModeCategory,
-            unbackedMintCap,
-            debtCeiling,
-            isVirtualAccountingEnabled,
-        };
+        if (!Array.isArray(methodNames)) methodNames = [methodNames];
+
+        if (
+            methodNames.length == 1 &&
+            targetAddresses &&
+            targetAddresses.length > 1
+        ) {
+            for (let i = 1; i < targetAddresses.length; i++) {
+                methodNames.push(methodNames[0]);
+            }
+        }
+
+        if (targetAddresses.length != methodNames.length) {
+            throw new Error("targetAddresses and methodNames length mismatch");
+        }
+
+        if (!contractABIsKeys || contractABIsKeys.length == 0)
+            throw new Error("No contractABIs provided");
+
+        if (!Array.isArray(contractABIsKeys))
+            contractABIsKeys = [contractABIsKeys];
+
+        if (
+            contractABIsKeys.length == 1 &&
+            targetAddresses &&
+            targetAddresses.length > 1
+        ) {
+            for (let i = 1; i < targetAddresses.length; i++) {
+                contractABIsKeys.push(contractABIsKeys[0]);
+            }
+        }
+
+        if (targetAddresses.length != contractABIsKeys.length) {
+            throw new Error("targetAddresses and contractABIs length mismatch");
+        }
+
+        return [targetAddresses, paramAddresses, contractABIsKeys, methodNames];
+    }
+
+    getContractInterface(contractABI: any) {
+        if (!contractABI) throw new Error("No contractABI provided");
+        const contractABIString = JSON.stringify(contractABI);
+
+        if (!this.contractInterfaces[contractABIString]) {
+            this.contractInterfaces[contractABIString] = new ethers.Interface(
+                contractABI
+            );
+        }
+        return this.contractInterfaces[contractABIString];
+    }
+
+    contractInterfaces: any = {};
+
+    /**
+     * Batches multiple calls to a smartContract using the Multicall3 contract.
+     *
+     * @param targetAddresses the smartContract addresses(es) to call the method on
+     * @param paramAddresses the method parameters for each smartContract address
+     * @param contractABI the smartContract ABI of the function to be called
+     * @param methodName the method name to be called
+     * @param chain the chain name (eth, arb, etc)
+     * @param chainEnv the chain environment (mainnet, kovan, etc)
+     * @returns
+     */
+    async multicall(
+        targetAddresses: string | string[],
+        paramAddresses: string | string[] | null,
+        contractABIsKeys: string | string[],
+        methodNames: string | string[],
+        chain: string,
+        chainEnv: string = "mainnet",
+        estimateGas: boolean = false
+    ) {
+        [targetAddresses, paramAddresses, contractABIsKeys, methodNames] =
+            this.checkMulticallInputs(
+                targetAddresses,
+                paramAddresses,
+                contractABIsKeys,
+                methodNames
+            );
+
+        const multicallContract = this.getContract(
+            Constants.MULTICALL3_ADDRESS,
+            Constants.ABIS.MULTICALL3_ABI,
+            chain,
+            chainEnv
+        );
+
+        const calls = _.map(
+            targetAddresses,
+            (targetAddress: string, index: number) => {
+                const contractInterface = this.getContractInterface(
+                    Constants.ABIS[contractABIsKeys[index]]
+                );
+                const calldata =
+                    !paramAddresses || paramAddresses.length == 0
+                        ? contractInterface.encodeFunctionData(
+                              methodNames[index]
+                          )
+                        : contractInterface.encodeFunctionData(
+                              methodNames[index],
+                              [paramAddresses[index]]
+                          );
+                return {
+                    target: targetAddress,
+                    callData: calldata,
+                };
+            }
+        );
+
+        if (estimateGas) {
+            const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
+            return aaveChainInfo.alchemyProvider.estimateGas(calls);
+        }
+
+        // Split into chunks of 1000 or fewer calls
+        const CHUNK_SIZE = 1000;
+        const callBatches = _.chunk(calls, CHUNK_SIZE);
+
+        // Create a tracking array to map chunk results back to original indices
+        const callIndices = Array.from({ length: calls.length }, (_, i) => i);
+        const indexBatches = _.chunk(callIndices, CHUNK_SIZE);
+
+        // Execute each chunk
+        const chunkPromises = callBatches.map(async (callBatch) => {
+            return multicallContract.aggregate(callBatch);
+        });
+
+        const chunkResults = await Promise.all(chunkPromises);
+
+        // Process results from each chunk
+        const allDecodedResults = [];
+
+        for (
+            let chunkIndex = 0;
+            chunkIndex < chunkResults.length;
+            chunkIndex++
+        ) {
+            const [blockNumber, chunkReturnData] = chunkResults[chunkIndex];
+            const originalIndices = indexBatches[chunkIndex];
+
+            // Decode each result in this chunk
+            for (let i = 0; i < chunkReturnData.length; i++) {
+                const originalIndex = originalIndices[i];
+                const contractInterface = this.getContractInterface(
+                    Constants.ABIS[contractABIsKeys[originalIndex]]
+                );
+
+                const decodedResult = contractInterface.decodeFunctionResult(
+                    methodNames[originalIndex],
+                    chunkReturnData[i]
+                );
+
+                // Store at the original position to maintain order
+                allDecodedResults[originalIndex] = decodedResult;
+            }
+        }
+
+        return allDecodedResults;
     }
 }
 
