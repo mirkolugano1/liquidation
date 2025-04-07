@@ -22,3 +22,10 @@ app.timer("updateReservesData", {
         await healthFactorCheckEngine.updateReservesData(context);
     },
 });
+
+app.timer("updateHealthFactorAndUserConfiguration", {
+    schedule: "20 0 * * *", // Cron expression for every day at 00:10 h
+    handler: async (myTimer, context) => {
+        await healthFactorCheckEngine.updateReservesData(context);
+    },
+});

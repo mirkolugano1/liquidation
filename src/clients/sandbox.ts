@@ -14,7 +14,8 @@ dotenv.config();
 
 async function main() {
     try {
-        if (false) await healthFactorCheckEngine.updateReservesData();
+        if (true)
+            await healthFactorCheckEngine.updateHealthFactorAndUserConfiguration();
         else await healthFactorCheckEngine.doTest("arb");
     } catch (error) {
         console.error("Error in main function:", error);

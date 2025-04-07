@@ -365,34 +365,6 @@ class HealthFactorCheckEngine {
 
     //#region TEST CODE (NOT YET READY)
 
-    checkReservesPricesIntervalId: any;
-    checkReservesPricesIntervalInSeconds = 60 * 5; // 5 minutes, for the moment...
-
-    async startCheckReservesPrices() {
-        await this.initializeAlchemy();
-        await this.initializeReserves();
-        for (const chainInfo of Constants.AAVE_CHAINS_INFOS) {
-            await this.checkReservesPrices(chainInfo.chain, chainInfo.chainEnv); // Initial call
-            this.checkReservesPricesIntervalId = setInterval(async () => {
-                await this.initializeReserves();
-                await this.checkReservesPrices(
-                    chainInfo.chain,
-                    chainInfo.chainEnv
-                );
-            }, this.checkReservesPricesIntervalInSeconds * 1000);
-        }
-
-        // Graceful shutdown
-        process.on("SIGTERM", this.stopCheckReservesPrices.bind(this));
-        process.on("SIGINT", this.stopCheckReservesPrices.bind(this));
-    }
-
-    stopCheckReservesPrices() {
-        if (this.checkReservesPricesIntervalId) {
-            clearInterval(this.checkReservesPricesIntervalId);
-        }
-    }
-
     async getHealthFactorAndConfigurationForAddresses(
         _addresses: string[],
         chain: string,
@@ -451,64 +423,94 @@ class HealthFactorCheckEngine {
      * so that the data in the DB is always up to date, up to the interval of the cron job that calls this method.
      * The method does NOT contains an infinite loop. It is meant to be scheduled by a cron job or similar.
      */
-    async periodicalAccountsHealthFactorAndConfigurationCheck() {
+    async updateHealthFactorAndUserConfiguration(
+        context: InvocationContext | null = null
+    ) {
+        //#region initialization
+
+        logger.initialize(
+            "function:updateHealthFactorAndUserConfiguration",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+
         await logger.log(
-            "Start periodicalAccountsHealthFactorAndConfigurationCheck",
+            "Start updateHealthFactorAndUserConfiguration",
             "functionAppExecution"
         );
 
         await this.initializeAlchemy();
+
+        //#endregion initialization
+
         for (const info of Constants.AAVE_CHAINS_INFOS) {
             const dbAddressesArr = await sqlManager.execQuery(
                 `SELECT * FROM addresses where chain = '${info.chain}-${info.chainEnv}';`
             );
             const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
-            const results =
-                await this.getHealthFactorAndConfigurationForAddresses(
-                    _addresses,
-                    info.chain,
-                    info.chainEnv
-                );
+            const addressesChunks = _.chunk(_addresses, 1000);
 
-            let query =
-                results.length > 0
-                    ? `
+            for (let i = 0; i < addressesChunks.length; i++) {
+                const results =
+                    await this.getHealthFactorAndConfigurationForAddresses(
+                        addressesChunks[i],
+                        info.chain,
+                        info.chainEnv
+                    );
+
+                let query =
+                    results.length > 0
+                        ? `
                 UPDATE addresses 
                 SET 
                     healthfactor = CASE
                         {0}
-                    ELSE healthfactor,
+                    ELSE healthfactor
                     END,
                     userconfiguration = CASE
                         {1}
-                    ELSE userconfiguration,
-                    END,
+                    ELSE userconfiguration
+                    END
                 WHERE address IN ({2});
             `
-                    : "";
+                        : "";
 
-            const key = `${info.chain}-${info.chainEnv}`;
-            let arr0 = [];
-            let arr1 = [];
-            let arr2 = [];
-            for (let i = 0; i < results.length; i++) {
-                arr0.push(
-                    `WHEN address = '${results[i].address}' AND chain = '${key}' THEN ${results[i].healthFactor}`
-                );
-                arr1.push(
-                    `WHEN address = '${results[i].address}' AND chain = '${key}' THEN ${results[i].userConfiguration}`
-                );
-                arr2.push(`'${results[i].address}'`);
-                query.replace("{0}", arr0.join(" "));
-                query.replace("{1}", arr1.join(" "));
-                query.replace("{2}", arr2.join(","));
+                const key = `${info.chain}-${info.chainEnv}`;
+                let arr0 = [];
+                let arr1 = [];
+                let arr2 = [];
+                let deleteAddresses: string[] = [];
+                for (let i = 0; i < results.length; i++) {
+                    if (results[i].healthFactor < 2) {
+                        arr0.push(
+                            `WHEN address = '${results[i].address}' AND chain = '${key}' THEN ${results[i].healthFactor}`
+                        );
+                        arr1.push(
+                            `WHEN address = '${results[i].address}' AND chain = '${key}' THEN '${results[i].userConfiguration}'`
+                        );
+                        arr2.push(`'${results[i].address}'`);
+                    } else {
+                        deleteAddresses.push(results[i].address);
+                    }
+                }
+
+                query = query.replace("{0}", arr0.join(" "));
+                query = query.replace("{1}", arr1.join(" "));
+                query = query.replace("{2}", arr2.join(","));
+
+                if (query) await sqlManager.execQuery(query);
+
+                if (deleteAddresses.length > 0) {
+                    const sqlQuery = `DELETE FROM addresses WHERE address IN ('${deleteAddresses.join(
+                        "','"
+                    )}') AND chain = '${key}';`;
+                    await sqlManager.execQuery(sqlQuery);
+                }
             }
-
-            if (query) await sqlManager.execQuery(query);
         }
 
         await logger.log(
-            "End periodicalAccountsHealthFactorAndConfigurationCheck",
+            "End updateHealthFactorAndUserConfiguration",
             "functionAppExecution"
         );
     }
