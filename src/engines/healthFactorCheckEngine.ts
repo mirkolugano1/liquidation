@@ -24,12 +24,15 @@ class HealthFactorCheckEngine {
 
     //#region Initialization
 
-    async initializeReserves() {
+    async initializeReserves(
+        chain: string | null = null,
+        chainEnv: string | null = null
+    ) {
         if (!this.aave) throw new Error("Aave object not initialized");
-
-        const dbReserves = await sqlManager.execQuery(
-            `SELECT * FROM reserves;`
-        );
+        const _key = chain ? `${chain}-${chainEnv}` : null;
+        let query = `SELECT * FROM reserves`;
+        if (_key) query += ` WHERE chain = '${_key}'`;
+        const dbReserves = await sqlManager.execQuery(query);
         if (!dbReserves || dbReserves.length == 0) {
             await logger.log(
                 "No reserves found in DB. Please run the updateReservesData function first.",
@@ -41,6 +44,8 @@ class HealthFactorCheckEngine {
         let reserves: any = {};
         for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
             const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
+            if (_key && key != _key) continue;
+
             const chainReserves = _.filter(dbReserves, { chain: key });
             for (let chainReserve of chainReserves) {
                 reserves[chainReserve.address] = chainReserve;
@@ -786,53 +791,205 @@ class HealthFactorCheckEngine {
         await logger.log("End checkReservesPrices", "functionAppExecution");
     }
 
+    async updateTokenPricesWrapperFunction(
+        context: InvocationContext | null = null
+    ) {
+        logger.initialize(
+            "function:updateTokenPricesWrapperFunction",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+        await logger.log("Start updateTokenPricesWrapperFunction");
+        await this.updateTokensPrices();
+        await logger.log("End updateTokenPricesWrapperFunction");
+    }
+
+    async updateTokensPrices(
+        chain: string | null = null,
+        chainEnv: string | null = null
+    ) {
+        await this.initializeAlchemy();
+        await this.initializeReserves(chain, chainEnv);
+
+        let allPrices: any = {};
+        for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
+            if (chain && chainEnv) {
+                if (
+                    aaveChainInfo.chain != chain ||
+                    aaveChainInfo.chainEnv != chainEnv
+                ) {
+                    continue;
+                }
+            }
+            let list = _.map(aaveChainInfo.reserves, (o) => {
+                return {
+                    address: o.address,
+                    priceFeedAddress: o.pricefeedaddress,
+                    priceFeedPriceRelativeTo: o.pricefeedpricerelativeto,
+                };
+            });
+            list = _.reject(list, (o) => !o.priceFeedAddress);
+            const priceFeedAddresses = _.map(list, (o) => o.priceFeedAddress);
+            const results = await this.multicall(
+                priceFeedAddresses,
+                null,
+                "AGGREGATOR_V3_INTERFACE_ABI",
+                "latestRoundData",
+                aaveChainInfo.chain,
+                aaveChainInfo.chainEnv
+            );
+
+            let prices: any[] = _.map(results, (o: any, index: number) => {
+                const priceDecimals =
+                    list[index].priceFeedPriceRelativeTo == "usd" ? 8 : 18;
+                const symbol =
+                    aaveChainInfo.reserves[list[index].address].symbol;
+                const price = parseFloat(formatUnits(o.answer, priceDecimals));
+
+                return {
+                    address: list[index].address,
+                    priceFeedPriceRelativeTo:
+                        list[index].priceFeedPriceRelativeTo,
+                    symbol: symbol,
+                    price: price,
+                    updatedAt: o.updatedAt,
+                };
+            });
+
+            //get ETH price
+            const ethPriceInUSD = _.find(prices, { symbol: "WETH" })?.price;
+            if (!ethPriceInUSD) throw new Error("ETH price not found");
+
+            prices = _.map(prices, (o) => {
+                const priceInUSD =
+                    o.priceFeedPriceRelativeTo == "usd"
+                        ? o.price
+                        : common.convertUSDtoETH(o.price, ethPriceInUSD);
+                return {
+                    ...o,
+                    priceInUSD: priceInUSD,
+                };
+            });
+
+            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
+            let reservesSQLList: string[] = _.map(prices, (o) => {
+                return `('${o.address}', '${key}', ${o.priceInUSD})`;
+            });
+            const sqlQuery = `
+            MERGE INTO reserves AS target
+            USING (VALUES 
+                ${reservesSQLList.join(",")}
+            ) AS source (address, chain, priceinusd)
+            ON (target.address = source.address AND target.chain = source.chain)
+            WHEN MATCHED THEN
+            UPDATE SET                        
+                priceinusd = source.priceinusd;                        
+                        `;
+
+            if (reservesSQLList.length > 0) {
+                allPrices[key] = prices;
+                await sqlManager.execQuery(sqlQuery);
+            }
+        }
+
+        return allPrices;
+    }
+
     //#region test
 
     async doTest(chain: string, chainEnv: string = "mainnet") {
         await this.initializeAlchemy();
         await this.initializeReserves();
 
-        const top = 5;
         const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
-        const key = `${chain}-${chainEnv}`;
-        const _dbAddresses1 = await sqlManager.execQuery(
-            `SELECT top 5000 * FROM addresses`
-        );
-
-        const _addresses = _.map(_dbAddresses1, (a: any) => a.address);
-
-        let targetAddresses: any[] = [];
-        let paramAddresses: any[] = [];
-        const reservesAddresses1 = Object.keys(aaveChainInfo.reserves);
-        for (let i = 0; i < _addresses.length; i++) {
-            const address = _addresses[i];
-            for (let j = 0; j < reservesAddresses1.length; j++) {
-                const atoken =
-                    aaveChainInfo.reserves[reservesAddresses1[j]].atokenaddress;
-                targetAddresses.push(atoken);
-                paramAddresses.push(address);
-            }
-        }
-
-        console.log(targetAddresses.length, paramAddresses.length);
-
-        const multicall = await this.multicall(
-            targetAddresses,
-            paramAddresses,
-            "TOKEN_ABI",
-            "balanceOf",
+        let list = _.map(aaveChainInfo.reserves, (o) => {
+            return {
+                address: o.address,
+                priceFeedAddress: o.pricefeedaddress,
+                priceFeedPriceRelativeTo: o.pricefeedpricerelativeto,
+            };
+        });
+        list = _.reject(list, (o) => !o.priceFeedAddress);
+        const priceFeedAddresses = _.map(list, (o) => o.priceFeedAddress);
+        const results = await this.multicall(
+            priceFeedAddresses,
+            null,
+            "AGGREGATOR_V3_INTERFACE_ABI",
+            "latestRoundData",
             chain,
             chainEnv
         );
 
-        console.log(
-            multicall[multicall.length - 1],
-            multicall[multicall.length - 2],
-            multicall[multicall.length - 3]
-        );
+        let prices: any[] = _.map(results, (o: any, index: number) => {
+            const priceDecimals =
+                list[index].priceFeedPriceRelativeTo == "usd" ? 8 : 18;
+            const symbol = aaveChainInfo.reserves[list[index].address].symbol;
+            const price = parseFloat(formatUnits(o.answer, priceDecimals));
+
+            return {
+                priceFeedPriceRelativeTo: list[index].priceFeedPriceRelativeTo,
+                symbol: symbol,
+                price: price,
+                updatedAt: o.updatedAt,
+            };
+        });
+
+        //get ETH price
+        const ethPriceInUSD = _.find(prices, { symbol: "WETH" })?.price;
+        if (!ethPriceInUSD) throw new Error("ETH price not found");
+
+        prices = _.map(prices, (o) => {
+            const priceInUSD =
+                o.priceFeedPriceRelativeTo == "usd"
+                    ? o.price
+                    : common.convertUSDtoETH(o.price, ethPriceInUSD);
+            return {
+                ...o,
+                priceInUSD: priceInUSD,
+            };
+        });
+
+        console.log("Prices: ", prices);
+
+        return prices;
+        /*
+        for (const reserve of aaveChainInfo.reserves) {
+            // Choose which asset you want to track
+
+            const priceFeedContract = this.getContract(
+                reserve.address,
+                Constants.ABIS.AGGREGATOR_V3_INTERFACE_ABI,
+                chain,
+                chainEnv
+            );
+
+            priceFeedContract.on(
+                "AnswerUpdated",
+                (roundId, updatedAt, price, event) => {
+                    // Format the price to a readable value (Chainlink typically uses 8 decimals)
+                    const formattedPrice = formatUnits(price, 8);
+
+                    console.log(`
+                    New price update:
+                    Asset: ${reserve.address}
+                    Price: $${formattedPrice}
+                    Updated at: ${new Date(
+                        updatedAt.toNumber() * 1000
+                    ).toISOString()}
+                    Round ID: ${roundId.toString()}
+                    Transaction Hash: ${event.transactionHash}
+                `);
+                }
+            );
+
+            const roundData = await priceFeedContract.latestRoundData();
+            const formattedPrice = formatUnits(roundData.answer, 8);
+            console.log(`Latest price: $${formattedPrice}`);
+        }
 
         return;
 
+        const key = `${chain}-${chainEnv}`;
         const queryParams = {
             chain: key,
         };
@@ -893,6 +1050,7 @@ class HealthFactorCheckEngine {
                 balanceOfUserAddresses.push(address);
             }
         }
+            */
     }
 
     async testFunction(context: InvocationContext) {

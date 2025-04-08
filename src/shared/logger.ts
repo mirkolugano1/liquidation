@@ -232,6 +232,9 @@ class Logger {
         console.log("Logger", dbParameters);
 
         if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
+            if (!this.applicationInsightsClient)
+                throw new Error("Application Insights client not initialized");
+
             if (this.context) {
                 switch (logLevel) {
                     case "error":

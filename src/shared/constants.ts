@@ -88,6 +88,36 @@ class Constants {
             "function getPriceOracle() external view returns (address)",
         ],
 
+        PRICE_FEED_ABI: [
+            "event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)",
+        ],
+
+        AGGREGATOR_V3_INTERFACE_ABI: [
+            {
+                inputs: [],
+                name: "latestRoundData",
+                outputs: [
+                    { name: "roundId", type: "uint80" },
+                    { name: "answer", type: "int256" },
+                    { name: "startedAt", type: "uint256" },
+                    { name: "updatedAt", type: "uint256" },
+                    { name: "answeredInRound", type: "uint80" },
+                ],
+                stateMutability: "view",
+                type: "function",
+            },
+            {
+                anonymous: false,
+                inputs: [
+                    { indexed: true, name: "roundId", type: "uint256" },
+                    { indexed: true, name: "updatedAt", type: "uint256" },
+                    { indexed: false, name: "price", type: "int256" },
+                ],
+                name: "AnswerUpdated",
+                type: "event",
+            },
+        ],
+
         // Detailed ABI with exact component structure
         POOL_DATA_PROVIDER_ABI: [
             {
