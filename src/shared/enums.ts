@@ -12,3 +12,9 @@ export enum OutputType {
     Console,
     HTML,
 }
+
+export enum UserReserveType {
+    Collateral,
+    Debt,
+    CollateralAndDebt,
+}

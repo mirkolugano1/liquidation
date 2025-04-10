@@ -32,9 +32,9 @@ app.timer("updateHealthFactorAndUserConfiguration", {
     },
 });
 
-app.timer("updateTokenPricesWrapperFunction", {
+app.timer("updateTokensPrices", {
     schedule: "20 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await healthFactorCheckEngine.updateTokenPricesWrapperFunction(context);
+        await healthFactorCheckEngine.updateTokensPrices(context);
     },
 });

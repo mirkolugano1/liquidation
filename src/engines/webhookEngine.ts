@@ -104,7 +104,29 @@ class WebhookEngine {
             let addressesToAdd: string[] = [];
             let from = log.transaction?.from?.address;
 
+            //#################
+            //TEST TO BE DELETED
+            //#################
+            /*
+            if (
+                eventHash !=
+                "0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f"
+            )
+                return;
+                */
+            //#################
+            //END TEST TO BE DELETED
+            //#################
+
             switch (eventHash) {
+                //AnswerUpdated (from price feed contracts)
+                case "0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f":
+                    console.log("AnswerUpdated event detected");
+                    console.log(topics);
+                    console.log(log.data);
+                    console.log(log.transaction?.from?.address);
+                    return;
+
                 //Deposit
                 case "0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951":
                     const decodedLogDeposit = this.ifaceDeposit.parseLog(log);

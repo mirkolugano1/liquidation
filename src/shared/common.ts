@@ -73,6 +73,16 @@ class Common {
         return tokenPrice.mul(ethPrice).toNumber();
     }
 
+    public getJsonObjectFromArray(
+        array: any[],
+        key: string,
+        value: any = null
+    ) {
+        return Object.fromEntries(
+            _.map(array, (item: any) => [item[key], value ? item[value] : item])
+        );
+    }
+
     public intToBinary(integerValue: any) {
         return integerValue.toString(2);
     }

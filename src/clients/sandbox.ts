@@ -7,6 +7,7 @@ import encryption from "../shared/encryption";
 import { application } from "express";
 import * as applicationInsights from "applicationinsights";
 import { Alchemy, Network } from "alchemy-sdk";
+import { ethers } from "ethers";
 
 dotenv.config();
 
@@ -14,8 +15,7 @@ dotenv.config();
 
 async function main() {
     try {
-        if (true)
-            await healthFactorCheckEngine.updateTokenPricesWrapperFunction();
+        if (false) await healthFactorCheckEngine.updateTokensPrices();
         else await healthFactorCheckEngine.doTest("arb");
     } catch (error) {
         console.error("Error in main function:", error);

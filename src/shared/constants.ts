@@ -93,25 +93,59 @@ class Constants {
         ],
 
         AGGREGATOR_V3_INTERFACE_ABI: [
+            // Function to get the latest price data
             {
                 inputs: [],
                 name: "latestRoundData",
                 outputs: [
-                    { name: "roundId", type: "uint80" },
-                    { name: "answer", type: "int256" },
-                    { name: "startedAt", type: "uint256" },
-                    { name: "updatedAt", type: "uint256" },
-                    { name: "answeredInRound", type: "uint80" },
+                    { internalType: "uint80", name: "roundId", type: "uint80" },
+                    { internalType: "int256", name: "answer", type: "int256" },
+                    {
+                        internalType: "uint256",
+                        name: "startedAt",
+                        type: "uint256",
+                    },
+                    {
+                        internalType: "uint256",
+                        name: "updatedAt",
+                        type: "uint256",
+                    },
+                    {
+                        internalType: "uint80",
+                        name: "answeredInRound",
+                        type: "uint80",
+                    },
                 ],
                 stateMutability: "view",
                 type: "function",
             },
+            // Function to get the decimals (useful for formatting price)
+            {
+                inputs: [],
+                name: "decimals",
+                outputs: [{ internalType: "uint8", name: "", type: "uint8" }],
+                stateMutability: "view",
+                type: "function",
+            },
+            // Function to get the underlying aggregator address
+            {
+                inputs: [],
+                name: "aggregator",
+                outputs: [
+                    { internalType: "address", name: "", type: "address" },
+                ],
+                stateMutability: "view",
+                type: "function",
+            },
+            // Event emitted when a new answer is accepted
             {
                 anonymous: false,
                 inputs: [
                     { indexed: true, name: "roundId", type: "uint256" },
-                    { indexed: true, name: "updatedAt", type: "uint256" },
-                    { indexed: false, name: "price", type: "int256" },
+                    { indexed: true, name: "answeredInRound", type: "uint256" },
+                    { indexed: false, name: "answer", type: "int256" },
+                    { indexed: false, name: "timestamp", type: "uint256" },
+                    { indexed: false, name: "startedAt", type: "uint256" },
                 ],
                 name: "AnswerUpdated",
                 type: "event",

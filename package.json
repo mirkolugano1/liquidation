@@ -1,5 +1,6 @@
 {
     "devDependencies": {
+        "@azure/communication-email": "^1.0.0",
         "@azure/identity": "^4.7.0",
         "@azure/keyvault-certificates": "^4.9.0",
         "@azure/keyvault-keys": "^4.9.0",

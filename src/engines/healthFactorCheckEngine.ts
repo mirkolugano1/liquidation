@@ -6,9 +6,14 @@ import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
-import { LoggingFramework } from "../shared/enums";
+import { LoggingFramework, UserReserveType } from "../shared/enums";
 import Constants from "../shared/constants";
-import { Alchemy, Network } from "alchemy-sdk";
+import {
+    Alchemy,
+    AlchemySubscription,
+    AlchemyWebSocketProvider,
+    Network,
+} from "alchemy-sdk";
 import { pool } from "mssql";
 
 class HealthFactorCheckEngine {
@@ -61,14 +66,6 @@ class HealthFactorCheckEngine {
         const alchemyKey = await encryption.getAndDecryptSecretFromKeyVault(
             "ALCHEMYKEYENCRYPTED"
         );
-        /*
-        const alchemyFromAddress = await common.getAppSetting(
-            "ALCHEMY_FROM_ADDRESS"
-        );
-        const privateKey = await encryption.getAndDecryptSecretFromKeyVault(
-            "PRIVATEKEYENCRYPTED"
-        );
-        */
 
         if (!alchemyKey) {
             await logger.log(
@@ -87,10 +84,14 @@ class HealthFactorCheckEngine {
             };
             const alchemy = new Alchemy(config);
             const alchemyProvider = await alchemy.config.getProvider();
+            const websocketProvider = new ethers.WebSocketProvider(
+                alchemyProvider.connection.url.replace("https://", "wss://")
+            );
 
             let chainInfo: any = _.assign(aaveChainInfo, {
                 alchemy: alchemy,
                 alchemyProvider: alchemyProvider,
+                websocketProvider: websocketProvider,
             });
 
             this.aave[key] = chainInfo;
@@ -149,14 +150,14 @@ class HealthFactorCheckEngine {
         address: string,
         contractAbi: any,
         chain: string,
-        chainEnv: string
+        chainEnv: string,
+        isWebSocket: boolean = false
     ) {
         const chainInfo = this.getAaveChainInfo(chain, chainEnv);
-        return new ethers.Contract(
-            address,
-            contractAbi,
-            chainInfo.alchemyProvider
-        );
+        const provider = isWebSocket
+            ? chainInfo.websocketProvider
+            : chainInfo.alchemyProvider;
+        return new ethers.Contract(address, contractAbi, provider);
     }
 
     //#endregion Helper methods
@@ -201,7 +202,7 @@ class HealthFactorCheckEngine {
                 chainInfo.addresses.poolDataProvider,
                 null,
                 "POOL_DATA_PROVIDER_ABI",
-                ["getAllReservesTokens", "getAllATokens"],
+                ["getAllReservesTokens", "getReserveTokensAddresses"],
                 chainInfo.chain,
                 chainInfo.chainEnv
             );
@@ -213,9 +214,14 @@ class HealthFactorCheckEngine {
                     address: o[1].toString(),
                 };
             });
-            const aTokens = results[1][0];
-            for (let i = 0; i < aTokens.length; i++) {
-                allReserveTokens[i].atokenaddress = aTokens[i][1].toString();
+            const reserveTokenAddresses = results[1][0];
+            for (let i = 0; i < reserveTokenAddresses.length; i++) {
+                allReserveTokens[i].atokenaddress =
+                    reserveTokenAddresses[i][0].toString();
+                allReserveTokens[i].variabledebttokenaddress =
+                    reserveTokenAddresses[i][2].toString();
+                allReserveTokens[i].stabledebttokenaddress =
+                    reserveTokenAddresses[i][1].toString();
             }
 
             const allReserveTokensAddresses = _.map(
@@ -322,9 +328,11 @@ class HealthFactorCheckEngine {
                     o.liquidityindex
                 }', '${o.variableborrowindex}', '${o.liquidityrate}', '${
                     o.variableborrowrate
-                }', '${o.lastupdatetimestamp}', '${o.atokenaddress}', '${
-                    o.totalstabledebt
-                }', '${o.totalvariabledebt}', '${o.ltv}')`;
+                }', '${o.lastupdatetimestamp}', '${o.atokenaddress}','${
+                    o.variabledebttokenaddress
+                }', '${o.stabledebttokenaddress}', '${o.totalstabledebt}', '${
+                    o.totalvariabledebt
+                }', '${o.ltv}')`;
             });
 
             if (reservesSQLList.length > 0) {
@@ -332,7 +340,7 @@ class HealthFactorCheckEngine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, chain, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, totalstabledebt, totalvariabledebt, ltv)
+                    ) AS source (address, chain, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv)
                     ON (target.address = source.address AND target.chain = source.chain)
                     WHEN MATCHED THEN
                     UPDATE SET                        
@@ -352,12 +360,14 @@ class HealthFactorCheckEngine {
                         variableborrowrate = source.variableborrowrate,                        
                         lastupdatetimestamp = source.lastupdatetimestamp,
                         atokenaddress = source.atokenaddress,
+                        variabledebttokenaddress = source.variabledebttokenaddress,
+                        stabledebttokenaddress = source.stabledebttokenaddress,
                         totalstabledebt = source.totalstabledebt,
                         totalvariabledebt = source.totalvariabledebt,
                         ltv = source.ltv
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, chain, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, totalstabledebt, totalvariabledebt, ltv)
-                        VALUES (source.address, source.chain, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv);
+                        INSERT (address, chain, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv)
+                        VALUES (source.address, source.chain, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv);
                 `;
 
                 //console.log(sqlQuery);
@@ -523,90 +533,116 @@ class HealthFactorCheckEngine {
     //#endregion healthFactor DB check loop
 
     /**
-     *  Check the health factor for the addresses that have the reserves whose prices have changed, either as collateral or as debt
-     *  and liquidate them if their health factor is below 1. The method contains an infinite loop that checks the reserves prices
-     *  every n seconds and if the prices have changed, it checks the health factor for the addresses that have the changed reserves
+     *  Gets the newest assets prices for the given chain or all chains and updates the prices in the DB if the prices have changed
+     *  beyond a certain treshold (currently set at 0.0005 ETH), then it
+     *  calculates the health factor for the addresses that have the reserves whose prices have changed, either as collateral or as debt
+     *  and liquidates them if their health factor is below 1. The method is defined as a function and called periodically on azure
      *
-     * //TODO check Compute Units utilization of method multicall if there are many addresses, evtl split call in smaller chunks
+     * //TODO implement logic to check the health factor for the addresses that have the changed reserves
      * //TODO implement logic to decide which asset pair to liquidate for a given user
      * //TODO connect to smart contract for liquidation process
      *
      * @param chain
      * @param chainEnv
+     * @param context the InvocationContext of the function app on azure (for Application Insights logging)
      */
-    async checkReservesPrices(chain: string, chainEnv: string = "mainnet") {
-        await logger.log("Start checkReservesPrices", "functionAppExecution");
-
-        //#region initialization
-
-        const aaveChainInfo: any = this.getAaveChainInfo(chain, chainEnv);
-        const reserves = Object.keys(aaveChainInfo.reserves);
-
-        //#endregion
-
-        /*
-            check price changes for each reserve
-            changes must be relevant to the last price and according to this formula
-
-            Normalized change in ETH = (change in wei) / 10 ** (18 - decimals)
-
-            the normalized change must be > 0.0005 ETH (we could change this according to table below)
-
-            Summary of Recommended Thresholds
-            ---------------------------------
-            Asset Type	        Normalized Change Threshold (ETH)
-            Stablecoins	        0.0001 to 0.001
-            Mid-Volatility	    0.0005 to 0.005
-            High-Volatility	    0.001 to 0.01
-        */
-
-        //#region infinite loop
-
-        //get the prices for the reserves of the lending protocol
-        const aaveOracleContract = this.getContract(
-            aaveChainInfo.addresses.aaveOracle,
-            Constants.ABIS.AAVE_ORACLE_ABI,
-            aaveChainInfo.chain,
-            aaveChainInfo.chainEnv
+    async updateTokensPrices(
+        context: InvocationContext | null = null,
+        chain: string | null = null, //if chain is not defined, loop through all chains
+        chainEnv: string | null = "mainnet"
+    ) {
+        logger.initialize(
+            "function:updateTokensPrices",
+            LoggingFramework.ApplicationInsights,
+            context
         );
-        const prices = await aaveOracleContract.getAssetsPrices(reserves);
+        await logger.log("Start updateTokensPrices");
 
-        let newReservesPrices: any = {};
-        for (let i = 0; i < reserves.length; i++) {
-            const reserveAddress = reserves[i];
-            const price = prices[i];
-            newReservesPrices[reserveAddress] = price;
+        await this.initializeAlchemy();
+        await this.initializeReserves(chain, chainEnv);
+        //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
+        const allAddressesDb = await sqlManager.execQuery(
+            `SELECT * FROM addresses WHERE healthfactor < 2;`
+        );
+
+        if (allAddressesDb.length == 0) {
+            await logger.log("No addresses found in DB with health factor < 2");
+            return;
         }
 
-        //by default we should not perform the check. If price changes are found, we do check
-        let shouldPerformCheck = false;
+        for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
+            if (chain && chainEnv) {
+                if (
+                    aaveChainInfo.chain != chain ||
+                    aaveChainInfo.chainEnv != chainEnv
+                ) {
+                    continue;
+                }
+            }
 
-        //if it is the first time we check the prices, we store the current prices as old prices
-        if (!this.oldReservesPrices) {
-            console.log("No oldReservePrices available");
-            this.oldReservesPrices = newReservesPrices;
-        } else {
-            console.log("OldReservePrices present, checking prices changes");
-            //check if the prices have changed for the reserves
-            let reservesChangedCheck: any[] = [];
-            for (const reserveAddress of reserves) {
-                const oldPrice = this.oldReservesPrices[reserveAddress];
-                const newPrice = newReservesPrices[reserveAddress];
-                const decimals =
-                    aaveChainInfo.reserves[reserveAddress].decimals;
-                const normalizedChange = new Big(newPrice - oldPrice).div(
-                    new Big(10).pow(
-                        new Big(18).minus(new Big(decimals)).toNumber()
-                    )
+            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
+            const addressesDb = _.filter(allAddressesDb, (o) => o.chain == key);
+
+            if (addressesDb.length == 0) {
+                await logger.log(
+                    `Chain: ${key} No addresses found in DB with health factor < 2`
                 );
+                return;
+            }
+
+            //get last saved reserves prices from the DB
+            let dbAssetsPrices = common.getJsonObjectFromArray(
+                aaveChainInfo.reserves,
+                "address",
+                "price"
+            );
+
+            //get current reserves prices from the chain
+            const aaveOracleContract = this.getContract(
+                aaveChainInfo.addresses.aaveOracle,
+                Constants.ABIS.AAVE_ORACLE_ABI,
+                aaveChainInfo.chain,
+                aaveChainInfo.chainEnv
+            );
+            const reservesAddresses = Object.keys(aaveChainInfo.reserves);
+            const currentAssetsPrices =
+                await aaveOracleContract.getAssetsPrices(reservesAddresses);
+
+            let newReservesPrices: any = {};
+            for (let i = 0; i < reservesAddresses.length; i++) {
+                const reserveAddress = reservesAddresses[i];
+                const price = currentAssetsPrices[i];
+                newReservesPrices[reserveAddress] = price;
+            }
+
+            //by default we should not perform the check. If price changes are found, we do check
+            let shouldPerformCheck = false;
+            let reservesChangedCheck: any[] = [];
+            let reservesDbUpdate: any[] = [];
+
+            for (const reserveAddress of reservesAddresses) {
+                const oldPrice = dbAssetsPrices[reserveAddress];
+                const newPrice =
+                    new Big(newReservesPrices[reserveAddress]).toNumber() / 1e8;
+                if (!oldPrice) {
+                    //mark current reserve to be updated in the DB since no previous price is defined
+                    reservesDbUpdate.push({
+                        address: reserveAddress,
+                        price: newPrice,
+                    });
+                    continue;
+                }
+                const normalizedChange = newPrice - oldPrice;
 
                 let check = "none";
 
-                //if the normalized change is greater than the given treshold, we should perform the check
-                if (normalizedChange.abs().gte(new Big(0.0005))) {
-                    console.log(
-                        `Price change for reserve ${reserveAddress} is ${normalizedChange.toNumber()}. Old price: ${oldPrice}, new price: ${newPrice}`
-                    );
+                //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
+                if (Math.abs(normalizedChange) > 0.5) {
+                    //mark current reserve to be updated in the DB since the change exceeds the treshold
+                    reservesDbUpdate.push({
+                        address: reserveAddress,
+                        price: newPrice,
+                    });
 
                     //if we come here, it means there is at least 1 changed reserve. We should perform the check
                     //later on all accounts that have the changed reserves either as collateral or as debt
@@ -614,12 +650,7 @@ class HealthFactorCheckEngine {
                     shouldPerformCheck = true;
 
                     //add current reserve to the list of changed reserves and check if it should be checked as collateral or a debt
-                    check =
-                        normalizedChange.toNumber() < 0 ? "collateral" : "debt";
-
-                    //update the old price of the current reserve to the changed price, so that we base our next change detection
-                    //on this current price and not the old one
-                    this.oldReservesPrices[reserveAddress] = newPrice;
+                    check = normalizedChange < 0 ? "collateral" : "debt";
                 }
 
                 //add the reserve to the list of changed reserves. If no price change for this reserve has happened, the check will be "none"
@@ -631,16 +662,6 @@ class HealthFactorCheckEngine {
 
             //filter the addresses from the DB that have the changed reserves either as collateral or as debt
             if (shouldPerformCheck) {
-                //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
-                const addressesDb = await sqlManager.execQuery(
-                    `SELECT * FROM addresses where chain = '${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}' AND healthfactor < 2;`
-                );
-
-                console.log(
-                    "Checking addresses. Loaded addresses with health factor < 2: " +
-                        _.map(addressesDb, (o) => o.address)
-                );
-
                 //define object (map) of user assets that have the changed reserves either as collateral or as debt
                 //userAssets: {address: {collateral: [reserves], debt: [reserves]}}
                 let userAssets: any = {};
@@ -718,29 +739,6 @@ class HealthFactorCheckEngine {
 
                 //check the health factor for the addresses that have the changed reserves either as collateral or as debt
                 if (addressesToCheck.length > 0) {
-                    //#region setup array of contract addresses to call with same address multiple times
-
-                    console.log(
-                        "addresses that have the changed reserves either as collateral or as debt",
-                        addressesToCheck
-                    );
-
-                    //#endregion
-
-                    /*
-                    //batch call the health factor for the addresses
-                    const userAccountData = await this.multicall(
-                        aavePoolContractAddress,
-                        addressesToCheck,
-                        this.aavePoolContractAbi,
-                        "getUserAccountData",
-                        aaveChainInfo.chain,
-                        aaveChainInfo.chainEnv
-                    );
-*/
-                    //TODO calculate HF off-chain
-                    const userAccountData: any[] = [];
-
                     let addressesToLiquidate: any[] = [];
 
                     //iterate through the results and check the health factor of corresponding address
@@ -748,9 +746,7 @@ class HealthFactorCheckEngine {
                         //get address and health factor
                         const address = addressesToCheck[i];
                         const healthFactor =
-                            this.getHealthFactorFromUserAccountData(
-                                userAccountData[i]
-                            );
+                            this.getHealthFactorOffChain(address);
 
                         //if health factor is below 1, we add the address to the list of addresses to liquidate
                         if (healthFactor < 1) {
@@ -774,283 +770,206 @@ class HealthFactorCheckEngine {
                         //TODO MIRKO liquidate the addresses
                         await logger.log(
                             "Addresses to liquidate: " +
-                                JSON.stringify(addressesToLiquidate),
-                            "liquidate"
+                                JSON.stringify(addressesToLiquidate)
                         );
                     } else {
-                        console.log(
+                        await logger.log(
                             `No addresses to liquidate, out of ${addressesToLiquidate.length} addresses`
                         );
                     }
                 }
             } else {
-                console.log("No price changes detected");
+                await logger.log("No price changes detected");
             }
-        }
 
-        await logger.log("End checkReservesPrices", "functionAppExecution");
-    }
+            if (reservesDbUpdate.length > 0) {
+                let reservesSQLList: string[] = _.map(reservesDbUpdate, (o) => {
+                    return `('${o.address}', '${key}', ${o.price})`;
+                });
 
-    async updateTokenPricesWrapperFunction(
-        context: InvocationContext | null = null
-    ) {
-        logger.initialize(
-            "function:updateTokenPricesWrapperFunction",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-        await logger.log("Start updateTokenPricesWrapperFunction");
-        await this.updateTokensPrices();
-        await logger.log("End updateTokenPricesWrapperFunction");
-    }
-
-    async updateTokensPrices(
-        chain: string | null = null,
-        chainEnv: string | null = null
-    ) {
-        await this.initializeAlchemy();
-        await this.initializeReserves(chain, chainEnv);
-
-        let allPrices: any = {};
-        for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
-            if (chain && chainEnv) {
-                if (
-                    aaveChainInfo.chain != chain ||
-                    aaveChainInfo.chainEnv != chainEnv
-                ) {
-                    continue;
-                }
-            }
-            let list = _.map(aaveChainInfo.reserves, (o) => {
-                return {
-                    address: o.address,
-                    priceFeedAddress: o.pricefeedaddress,
-                    priceFeedPriceRelativeTo: o.pricefeedpricerelativeto,
-                };
-            });
-            list = _.reject(list, (o) => !o.priceFeedAddress);
-            const priceFeedAddresses = _.map(list, (o) => o.priceFeedAddress);
-            const results = await this.multicall(
-                priceFeedAddresses,
-                null,
-                "AGGREGATOR_V3_INTERFACE_ABI",
-                "latestRoundData",
-                aaveChainInfo.chain,
-                aaveChainInfo.chainEnv
-            );
-
-            let prices: any[] = _.map(results, (o: any, index: number) => {
-                const priceDecimals =
-                    list[index].priceFeedPriceRelativeTo == "usd" ? 8 : 18;
-                const symbol =
-                    aaveChainInfo.reserves[list[index].address].symbol;
-                const price = parseFloat(formatUnits(o.answer, priceDecimals));
-
-                return {
-                    address: list[index].address,
-                    priceFeedPriceRelativeTo:
-                        list[index].priceFeedPriceRelativeTo,
-                    symbol: symbol,
-                    price: price,
-                    updatedAt: o.updatedAt,
-                };
-            });
-
-            //get ETH price
-            const ethPriceInUSD = _.find(prices, { symbol: "WETH" })?.price;
-            if (!ethPriceInUSD) throw new Error("ETH price not found");
-
-            prices = _.map(prices, (o) => {
-                const priceInUSD =
-                    o.priceFeedPriceRelativeTo == "usd"
-                        ? o.price
-                        : common.convertUSDtoETH(o.price, ethPriceInUSD);
-                return {
-                    ...o,
-                    priceInUSD: priceInUSD,
-                };
-            });
-
-            const key = `${aaveChainInfo.chain}-${aaveChainInfo.chainEnv}`;
-            let reservesSQLList: string[] = _.map(prices, (o) => {
-                return `('${o.address}', '${key}', ${o.priceInUSD})`;
-            });
-            const sqlQuery = `
-            MERGE INTO reserves AS target
-            USING (VALUES 
-                ${reservesSQLList.join(",")}
-            ) AS source (address, chain, priceinusd)
-            ON (target.address = source.address AND target.chain = source.chain)
-            WHEN MATCHED THEN
-            UPDATE SET                        
-                priceinusd = source.priceinusd;                        
+                if (reservesSQLList.length > 0) {
+                    const sqlQuery = `
+                    MERGE INTO reserves AS target
+                    USING (VALUES 
+                        ${reservesSQLList.join(",")}
+                    ) AS source (address, chain, price)
+                    ON (target.address = source.address AND target.chain = source.chain)
+                    WHEN MATCHED THEN
+                    UPDATE SET                        
+                        price = source.price;                        
                         `;
 
-            if (reservesSQLList.length > 0) {
-                allPrices[key] = prices;
-                await sqlManager.execQuery(sqlQuery);
+                    await sqlManager.execQuery(sqlQuery);
+                } else {
+                    //we should actually never come here, but just in case
+                    throw new Error(
+                        "reservesSQLList is empty despite reservesDbUpdate being not empty"
+                    );
+                }
             }
         }
 
-        return allPrices;
+        await logger.log("End updateTokensPrices");
+    }
+
+    getHealthFactorOffChain(address: string) {
+        //TODO MIRKO get health factor from DB for the address
+        const healthFactor = 1.5;
+        return healthFactor;
+    }
+
+    getETHPriceInUSDFromReserves(chain: string, chainEnv: string = "mainnet") {
+        const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
+        if (!aaveChainInfo) throw new Error("Aave chain info not found");
+
+        const ethPriceInUSD = _.find(_.values(aaveChainInfo.reserves), {
+            symbol: "WETH",
+        })?.priceInUSD;
+        if (!ethPriceInUSD) throw new Error("ETH price not found");
+
+        return ethPriceInUSD;
     }
 
     //#region test
 
     async doTest(chain: string, chainEnv: string = "mainnet") {
+        console.log("hello");
+    }
+
+    getUserAssetsFromUserConfiguration(
+        userConfiguration: string,
+        chain: string,
+        chainEnv: string = "mainnet"
+    ): { debt: string[]; collateral: string[] } {
+        if (!userConfiguration || !chain)
+            throw new Error("UserConfiguration and Chain must be defined");
+
+        let userAssets: any = {
+            debt: [],
+            collateral: [],
+        };
+        const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
+        let i = userConfiguration.length - 1;
+
+        //loop through reserves
+        for (let reserveAddress of Object.keys(aaveChainInfo.reserves)) {
+            if (userConfiguration[i] == "1") {
+                userAssets.debt.push(reserveAddress);
+            }
+
+            if (i > 0 && userConfiguration[i - 1] == "1") {
+                userAssets.collateral.push(reserveAddress);
+            }
+
+            i = i - 2;
+        }
+
+        return userAssets;
+    }
+
+    //reserveData can be updated altogether and once a day
+    //user healthfactor, userconfiguration and userassets (amounts) must be fetched together and more often
+
+    async updateUsersData(chain: string, chainEnv: string = "mainnet") {
         await this.initializeAlchemy();
         await this.initializeReserves();
 
-        const aaveChainInfo = this.getAaveChainInfo(chain, chainEnv);
-        let list = _.map(aaveChainInfo.reserves, (o) => {
-            return {
-                address: o.address,
-                priceFeedAddress: o.pricefeedaddress,
-                priceFeedPriceRelativeTo: o.pricefeedpricerelativeto,
-            };
-        });
-        list = _.reject(list, (o) => !o.priceFeedAddress);
-        const priceFeedAddresses = _.map(list, (o) => o.priceFeedAddress);
-        const results = await this.multicall(
-            priceFeedAddresses,
-            null,
-            "AGGREGATOR_V3_INTERFACE_ABI",
-            "latestRoundData",
-            chain,
-            chainEnv
+        const allDbAddresses = await sqlManager.execQuery(
+            `SELECT * FROM addresses WHERE healthfactor < 2;`
         );
 
-        let prices: any[] = _.map(results, (o: any, index: number) => {
-            const priceDecimals =
-                list[index].priceFeedPriceRelativeTo == "usd" ? 8 : 18;
-            const symbol = aaveChainInfo.reserves[list[index].address].symbol;
-            const price = parseFloat(formatUnits(o.answer, priceDecimals));
+        for (const aaveChainInfo of Constants.AAVE_CHAINS_INFOS) {
+            const userAddressesObjects = _.filter(allDbAddresses, (o) => {
+                return o.chain == `${aaveChainInfo.chain}-${chainEnv}`;
+            });
+            const reservesAddresses = Object.keys(aaveChainInfo.reserves);
+            let userReservesOriginalTokensAddresses: string[] = [];
+            let userReservesTypes: UserReserveType[] = []; //true if the currently checked reserve is collateral, false if it's debt
+            let userReservesCheckTokensAddresses: string[] = [];
+            let usersAddresses: string[] = [];
 
-            return {
-                priceFeedPriceRelativeTo: list[index].priceFeedPriceRelativeTo,
-                symbol: symbol,
-                price: price,
-                updatedAt: o.updatedAt,
-            };
-        });
+            for (let i = 0; i < userAddressesObjects.length; i++) {
+                const userAddressObject = userAddressesObjects[i];
+                //get user configuration in string format e.g. 100010001100 (it's stored in DB as a string)
+                const userConfiguration = userAddressObject.userconfiguration;
+                const userAssets = this.getUserAssetsFromUserConfiguration(
+                    userConfiguration,
+                    aaveChainInfo.chain,
+                    aaveChainInfo.chainEnv
+                );
+                const userReservesAddresses = _.uniq(
+                    _.union(userAssets.debt, userAssets.collateral)
+                );
 
-        //get ETH price
-        const ethPriceInUSD = _.find(prices, { symbol: "WETH" })?.price;
-        if (!ethPriceInUSD) throw new Error("ETH price not found");
+                //if user has no reserves, continue
+                if (userReservesAddresses.length == 0) continue;
 
-        prices = _.map(prices, (o) => {
-            const priceInUSD =
-                o.priceFeedPriceRelativeTo == "usd"
-                    ? o.price
-                    : common.convertUSDtoETH(o.price, ethPriceInUSD);
-            return {
-                ...o,
-                priceInUSD: priceInUSD,
-            };
-        });
+                for (let j = 0; j < userReservesAddresses.length; j++) {
+                    const userReservesAddress = userReservesAddresses[j];
+                    const isUserReserveCollateral = _.includes(
+                        userAssets.collateral,
+                        userReservesAddress
+                    );
+                    const isUserReserveDebt = _.includes(
+                        userAssets.debt,
+                        userReservesAddress
+                    );
 
-        console.log("Prices: ", prices);
+                    const reserve = aaveChainInfo.reserves[userReservesAddress];
 
-        return prices;
-        /*
-        for (const reserve of aaveChainInfo.reserves) {
-            // Choose which asset you want to track
+                    if (isUserReserveCollateral) {
+                        //add aToken address to the list of addresses to check balanceOf in case
+                        //the user has the reserve as collateral
+                        userReservesCheckTokensAddresses.push(
+                            reserve.atokenaddress
+                        );
+                        usersAddresses.push(userAddressObject.address);
+                        userReservesTypes.push(UserReserveType.Collateral);
+                        userReservesOriginalTokensAddresses.push(
+                            userReservesAddress
+                        );
+                    }
 
-            const priceFeedContract = this.getContract(
-                reserve.address,
-                Constants.ABIS.AGGREGATOR_V3_INTERFACE_ABI,
+                    if (isUserReserveDebt) {
+                        //add the stable and variable debt token addresses to the list of addresses to check balanceOf in case
+                        //the user has the reserve as debt
+                        userReservesCheckTokensAddresses.push(
+                            reserve.stabledebttokenaddress
+                        );
+                        usersAddresses.push(userAddressObject.address);
+                        userReservesTypes.push(UserReserveType.StableDebt);
+                        userReservesOriginalTokensAddresses.push(
+                            userReservesAddress
+                        );
+
+                        /////////////////////////////
+
+                        userReservesCheckTokensAddresses.push(
+                            reserve.variabledebttokenaddress
+                        );
+                        usersAddresses.push(userAddressObject.address);
+                        userReservesTypes.push(UserReserveType.VariableDebt);
+                        userReservesOriginalTokensAddresses.push(
+                            userReservesAddress
+                        );
+                    }
+                }
+            }
+
+            const balanceOfResults = await this.multicall(
+                userReservesCheckTokensAddresses,
+                usersAddresses,
+                "TOKEN_ABI",
+                "balanceOf",
                 chain,
                 chainEnv
             );
 
-            priceFeedContract.on(
-                "AnswerUpdated",
-                (roundId, updatedAt, price, event) => {
-                    // Format the price to a readable value (Chainlink typically uses 8 decimals)
-                    const formattedPrice = formatUnits(price, 8);
+            //TODO parse results and update DB with the results (usersreserves table)
 
-                    console.log(`
-                    New price update:
-                    Asset: ${reserve.address}
-                    Price: $${formattedPrice}
-                    Updated at: ${new Date(
-                        updatedAt.toNumber() * 1000
-                    ).toISOString()}
-                    Round ID: ${roundId.toString()}
-                    Transaction Hash: ${event.transactionHash}
-                `);
-                }
-            );
-
-            const roundData = await priceFeedContract.latestRoundData();
-            const formattedPrice = formatUnits(roundData.answer, 8);
-            console.log(`Latest price: $${formattedPrice}`);
+            console.log(balanceOfResults);
         }
-
         return;
-
-        const key = `${chain}-${chainEnv}`;
-        const queryParams = {
-            chain: key,
-        };
-        const _dbAddresses = await sqlManager.execQuery(
-            `SELECT * FROM addresses 
-            where chain = @chain AND userconfiguration IS NOT NULL AND healthfactor < 2 
-            ORDER BY healthfactor
-            OFFSET 2000 ROWS FETCH NEXT 1 ROWS ONLY;`,
-            queryParams
-        );
-
-        //test - retrieve user configuration from chain
-        const dbAddressesHFandConfig =
-            await this.getHealthFactorAndConfigurationForAddresses(
-                _.map(_dbAddresses, (a: any) => a.address),
-                chain,
-                chainEnv
-            );
-        const dbAddresses = _.map(dbAddressesHFandConfig, (o) => {
-            return {
-                address: o.address,
-                userconfiguration: o.userConfiguration,
-            };
-        });
-
-        let reservesAddresses = Object.keys(aaveChainInfo.reserves);
-        let usersReserves: any = {};
-        for (let j = 0; j < dbAddresses.length; j++) {
-            const address = dbAddresses[j].address;
-            let userConfiguration = dbAddresses[j].userconfiguration;
-            let i = userConfiguration.length - 1;
-            let userReserves: string[] = [];
-            //loop through reserves
-            for (let reserve of reservesAddresses) {
-                if (
-                    (i >= 0 && userConfiguration[i] == "1") ||
-                    (i > 0 && userConfiguration[i - 1] == "1")
-                ) {
-                    userReserves.push(reserve);
-                }
-                i = i - 2;
-                if (i <= 0) break;
-            }
-            if (userReserves.length > 0) {
-                usersReserves[address] = userReserves;
-            }
-        }
-
-        const userReservesAddresses = Object.keys(usersReserves);
-        let balanceOfTokenAddresses: string[] = [];
-        let balanceOfUserAddresses: string[] = [];
-        for (let i = 0; i < userReservesAddresses.length; i++) {
-            const address = userReservesAddresses[i];
-            const reserves = usersReserves[address];
-            for (let j = 0; j < reserves.length; j++) {
-                const reserve = reserves[j];
-                balanceOfTokenAddresses.push(reserve);
-                balanceOfUserAddresses.push(address);
-            }
-        }
-            */
     }
 
     async testFunction(context: InvocationContext) {

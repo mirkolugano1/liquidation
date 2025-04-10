@@ -10,7 +10,7 @@ class Logger {
     private loggingFramework: LoggingFramework =
         LoggingFramework.ApplicationInsights;
     private outputType: OutputType = OutputType.Console;
-    private isInitialized: boolean = false;
+    public isInitialized: boolean = false;
     private applicationInsightsClient: any = null;
     private static instance: Logger;
     private context: InvocationContext | null = null;
