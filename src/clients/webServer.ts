@@ -26,10 +26,6 @@ app.get("/healthcheck", (req, res) => {
     res.status(200).send("Healthy");
 });
 
-app.get("/var", async (req: any, res: any) => {
-    res.send(webhookEngine.manageVariable(req));
-});
-
 app.post("/aaveEvent", async (req: any, res: any) => {
     await webhookEngine.processAaveEvent(req, res);
 });
