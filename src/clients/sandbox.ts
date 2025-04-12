@@ -7,9 +7,9 @@ dotenv.config();
 //aa
 async function main() {
     try {
-        if (true)
-            await engine.updateHealthFactorAndUserConfigurationAndUserReserves();
-        else await engine.doTest("arb");
+        //await engine.updateHealthFactorAndUserConfigurationAndUserReserves();
+        //await engine.updateReservesData();
+        await engine.doTest();
     } catch (error) {
         console.error("Error in main function:", error);
     }

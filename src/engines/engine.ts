@@ -39,7 +39,7 @@ class Engine {
         }
 
         let reserves: any = {};
-        for (const aaveNetworkInfo of Constants.AAVE_CHAINS_INFOS) {
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             const key = this.getAaveNetworkString(aaveNetworkInfo);
             if (_key && key != _key) continue;
 
@@ -67,7 +67,7 @@ class Engine {
             return;
         }
 
-        for (const aaveNetworkInfo of Constants.AAVE_CHAINS_INFOS) {
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             const key = this.getAaveNetworkString(aaveNetworkInfo);
 
             const config = {
@@ -120,8 +120,9 @@ class Engine {
     //#region Helper methods
 
     getAaveNetworkString(aaveNetworkInfo: any) {
-        if (!aaveNetworkInfo) throw new Error("No aaveNetworkInfo provided");
-        return aaveNetworkInfo.network.toString();
+        return aaveNetworkInfo.hasOwnProperty("network")
+            ? aaveNetworkInfo.network.toString()
+            : aaveNetworkInfo.toString();
     }
 
     /**
@@ -195,7 +196,7 @@ class Engine {
             debt: [],
             collateral: [],
         };
-        const aaveNetworkInfo = this.getAaveChainInfo(network);
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
         let i = userConfiguration.length - 1;
 
         //loop through reserves
@@ -222,7 +223,7 @@ class Engine {
 
         let results: any[] = [];
 
-        const networkInfo = await this.getAaveChainInfo(network);
+        const networkInfo = await this.getAaveNetworkInfo(network);
 
         const userAccountData = await this.multicall(
             networkInfo.addresses.pool,
@@ -277,6 +278,7 @@ class Engine {
                     address: address,
                     healthFactor: healthFactor,
                     userConfiguration: userConfigurationBinary,
+                    network: this.getAaveNetworkString(network),
                 });
             }
         }
@@ -318,6 +320,8 @@ class Engine {
         if (!Array.isArray(targetAddresses))
             targetAddresses = [targetAddresses];
 
+        if (!Array.isArray(methodNames)) methodNames = [methodNames];
+
         if (targetAddresses.length == 1 && paramAddresses.length > 1) {
             for (let i = 1; i < paramAddresses.length; i++) {
                 targetAddresses.push(targetAddresses[0]);
@@ -351,8 +355,6 @@ class Engine {
 
         if (!methodNames || methodNames.length == 0)
             throw new Error("No methodNames provided");
-
-        if (!Array.isArray(methodNames)) methodNames = [methodNames];
 
         if (
             methodNames.length == 1 &&
@@ -459,8 +461,8 @@ class Engine {
         );
 
         if (estimateGas) {
-            const aaveNetworkInfo = this.getAaveChainInfo(network);
-            return aaveNetworkInfo.alchemyProvider.estimateGas(calls);
+            const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+            return await aaveNetworkInfo.alchemyProvider.estimateGas(calls);
         }
 
         // Split into chunks of 1000 or fewer calls
@@ -509,7 +511,8 @@ class Engine {
         return allDecodedResults;
     }
 
-    getAaveChainInfo(network: Network) {
+    getAaveNetworkInfo(network: Network) {
+        if (!network) throw new Error("No network provided");
         const key = this.getAaveNetworkString(network);
         let obj = this.aave[key];
         if (!obj) {
@@ -524,7 +527,7 @@ class Engine {
     }
 
     getContract(address: string, contractAbi: any, network: Network) {
-        const networkInfo = this.getAaveChainInfo(network);
+        const networkInfo = this.getAaveNetworkInfo(network);
         return new ethers.Contract(
             address,
             contractAbi,
@@ -546,7 +549,7 @@ class Engine {
                     "Addresses: " + liquidateHealthFactorAddresses.join(", ")
                 );
                 //TODO MIRKO implement liquidation logic
-                // const aaveNetworkInfo = this.getAaveChainInfo(network);
+                // const aaveNetworkInfo = this.getAaveNetworkInfo(network);
                 // const poolContract = this.getContract(
                 //     aaveNetworkInfo.addresses.pool,
                 //     Constants.ABIS.POOL_ABI,
@@ -581,21 +584,14 @@ class Engine {
 
         //#endregion initialization
 
-        for (const aaveNetworkInfo of Constants.AAVE_CHAINS_INFOS) {
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             const key = this.getAaveNetworkString(aaveNetworkInfo);
-
-            //get current list of reserves from the network
-            const poolDataProviderContract = this.getContract(
-                aaveNetworkInfo.addresses.poolDataProvider,
-                Constants.ABIS.POOL_DATA_PROVIDER_ABI,
-                aaveNetworkInfo.network
-            );
 
             const results = await this.multicall(
                 aaveNetworkInfo.addresses.poolDataProvider,
                 null,
                 "POOL_DATA_PROVIDER_ABI",
-                ["getAllReservesTokens", "getReserveTokensAddresses"],
+                "getAllReservesTokens",
                 aaveNetworkInfo.network
             );
 
@@ -606,7 +602,16 @@ class Engine {
                     address: o[1].toString(),
                 };
             });
-            const reserveTokenAddresses = results[1][0];
+
+            const reserveTokenAddresses = await this.multicall(
+                aaveNetworkInfo.addresses.poolDataProvider,
+                _.map(allReserveTokens, (o) => o.address),
+                "POOL_DATA_PROVIDER_ABI",
+                "getReserveTokensAddresses",
+                aaveNetworkInfo.network
+            );
+
+            //const reserveTokenAddresses = results[1][0];
             for (let i = 0; i < reserveTokenAddresses.length; i++) {
                 allReserveTokens[i].atokenaddress =
                     reserveTokenAddresses[i][0].toString();
@@ -795,10 +800,11 @@ class Engine {
         );
 
         await this.initializeAlchemy();
+        await this.initializeReserves();
 
         //#endregion initialization
 
-        for (const aaveNetworkInfo of Constants.AAVE_CHAINS_INFOS) {
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             const key = this.getAaveNetworkString(aaveNetworkInfo);
             const dbAddressesArr = await sqlManager.execQuery(
                 `SELECT * FROM addresses where network = '${key}';`
@@ -811,9 +817,14 @@ class Engine {
                     aaveNetworkInfo.network
                 );
 
-            let query =
-                results.length > 0
-                    ? `
+            let deleteAddresses: string[] = [];
+            const chunks = _.chunk(results, 1000);
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
+
+                let query =
+                    chunk.length > 0
+                        ? `
                 UPDATE addresses 
                 SET 
                     healthfactor = CASE
@@ -826,50 +837,47 @@ class Engine {
                     END
                 WHERE address IN ({2}) AND network = '${key}';
             `
-                    : "";
+                        : "";
 
-            let arr0 = [];
-            let arr1 = [];
-            let arr2 = [];
-            let deleteAddresses: string[] = [];
-            for (let i = 0; i < results.length; i++) {
-                if (results[i].healthFactor < 2) {
-                    arr0.push(
-                        `WHEN address = '${results[i].address}' AND network = '${key}' THEN ${results[i].healthFactor}`
-                    );
-                    arr1.push(
-                        `WHEN address = '${results[i].address}' AND network = '${key}' THEN '${results[i].userConfiguration}'`
-                    );
-                    arr2.push(`'${results[i].address}'`);
-                } else {
-                    deleteAddresses.push(results[i].address);
+                let arr0 = [];
+                let arr1 = [];
+                let arr2 = [];
+                for (let i = 0; i < chunk.length; i++) {
+                    if (chunk[i].healthFactor < 2) {
+                        arr0.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
+                        );
+                        arr1.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].userConfiguration}'`
+                        );
+                        arr2.push(`'${chunk[i].address}'`);
+                    } else {
+                        deleteAddresses.push(chunk[i].address);
+                    }
                 }
+
+                query = query.replace("{0}", arr0.join(" "));
+                query = query.replace("{1}", arr1.join(" "));
+                query = query.replace("{2}", arr2.join(","));
+
+                if (query) await sqlManager.execQuery(query);
             }
-
-            query = query.replace("{0}", arr0.join(" "));
-            query = query.replace("{1}", arr1.join(" "));
-            query = query.replace("{2}", arr2.join(","));
-
-            if (query) await sqlManager.execQuery(query);
 
             if (deleteAddresses.length > 0) {
-                const sqlQuery = `DELETE FROM addresses WHERE address IN ('${deleteAddresses.join(
-                    "','"
-                )}') AND network = '${key}';`;
-                await sqlManager.execQuery(sqlQuery);
+                const chunks = _.chunk(deleteAddresses, 1000);
+                for (let i = 0; i < chunks.length; i++) {
+                    const sqlQuery = `DELETE FROM addresses WHERE address IN ('${chunks[
+                        i
+                    ].join("','")}') AND network = '${key}';`;
+                    await sqlManager.execQuery(sqlQuery);
+                }
             }
 
-            const allDbAddressesObjectsExceptDeleteds = _.reject(
-                dbAddressesArr,
-                (o: any) => {
-                    return _.includes(deleteAddresses, o.address);
-                }
-            );
+            const resultsExceptDeleteds = _.reject(results, (o: any) => {
+                return _.includes(deleteAddresses, o.address);
+            });
 
-            await this.updateUsersData(
-                allDbAddressesObjectsExceptDeleteds,
-                aaveNetworkInfo
-            );
+            await this.updateUsersData(resultsExceptDeleteds, aaveNetworkInfo);
         }
 
         await logger.log(
@@ -878,22 +886,22 @@ class Engine {
         );
     }
 
-    async updateUsersData(dbAddressesObjects: any[], aaveNetworkInfo: any) {
+    async updateUsersData(resultsObjects: any[], aaveNetworkInfo: any) {
         const key = this.getAaveNetworkString(aaveNetworkInfo);
-        const userAddressesObjects = _.filter(dbAddressesObjects, (o) => {
+        const userAddressesObjects = _.filter(resultsObjects, (o) => {
             return o.network == key;
         });
         let userReservesOriginalTokensAddresses: string[] = [];
-        let userReservesTypes: UserReserveType[] = []; //true if the currently checked reserve is collateral, false if it's debt
+        let userReservesTypes: UserReserveType[] = [];
         let userReservesCheckTokensAddresses: string[] = [];
         let usersAddresses: string[] = [];
 
         for (let i = 0; i < userAddressesObjects.length; i++) {
             const userAddressObject = userAddressesObjects[i];
+
             //get user configuration in string format e.g. 100010001100 (it's stored in DB as a string)
-            const userConfiguration = userAddressObject.userconfiguration;
             const userAssets = this.getUserAssetsFromUserConfiguration(
-                userConfiguration,
+                userAddressObject.userConfiguration,
                 aaveNetworkInfo.network
             );
             const userReservesAddresses = _.uniq(
@@ -930,27 +938,38 @@ class Engine {
                 }
 
                 if (isUserReserveDebt) {
-                    //add the stable and variable debt token addresses to the list of addresses to check balanceOf in case
-                    //the user has the reserve as debt
-                    userReservesCheckTokensAddresses.push(
-                        reserve.stabledebttokenaddress
-                    );
-                    usersAddresses.push(userAddressObject.address);
-                    userReservesTypes.push(UserReserveType.StableDebt);
-                    userReservesOriginalTokensAddresses.push(
-                        userReservesAddress
-                    );
+                    if (
+                        reserve.stabledebttokenaddress &&
+                        reserve.stabledebttokenaddress != Constants.ZERO_ADDRESS
+                    ) {
+                        //add the stable and variable debt token addresses to the list of addresses to check balanceOf in case
+                        //the user has the reserve as debt
+                        userReservesCheckTokensAddresses.push(
+                            reserve.stabledebttokenaddress
+                        );
+                        usersAddresses.push(userAddressObject.address);
+                        userReservesTypes.push(UserReserveType.StableDebt);
+                        userReservesOriginalTokensAddresses.push(
+                            userReservesAddress
+                        );
+                    }
 
                     /////////////////////////////
 
-                    userReservesCheckTokensAddresses.push(
-                        reserve.variabledebttokenaddress
-                    );
-                    usersAddresses.push(userAddressObject.address);
-                    userReservesTypes.push(UserReserveType.VariableDebt);
-                    userReservesOriginalTokensAddresses.push(
-                        userReservesAddress
-                    );
+                    if (
+                        reserve.variabledebttokenaddress &&
+                        reserve.variabledebttokenaddress !=
+                            Constants.ZERO_ADDRESS
+                    ) {
+                        userReservesCheckTokensAddresses.push(
+                            reserve.variabledebttokenaddress
+                        );
+                        usersAddresses.push(userAddressObject.address);
+                        userReservesTypes.push(UserReserveType.VariableDebt);
+                        userReservesOriginalTokensAddresses.push(
+                            userReservesAddress
+                        );
+                    }
                 }
             }
         }
@@ -963,79 +982,90 @@ class Engine {
             aaveNetworkInfo.network
         );
 
-        let userReservesObjects: any = {
-            Collateral: [],
-            StableDebt: [],
-            VariableDebt: [],
-        };
+        const balanceOfResultsChunks = _.chunk(balanceOfResults, 1000);
+        for (let j = 0; j < balanceOfResultsChunks.length; j++) {
+            const balanceOfResultsChunk: any = balanceOfResultsChunks[j];
+            let userReservesObjects: any = {
+                Collateral: [],
+                StableDebt: [],
+                VariableDebt: [],
+            };
+            let sqlQueries: string[] = [];
+            if (balanceOfResultsChunk.length > 0) {
+                for (let i = 0; i < balanceOfResultsChunk.length; i++) {
+                    const userReserveBalance =
+                        balanceOfResultsChunk[i][0].toString();
+                    const userReserveAddress =
+                        userReservesOriginalTokensAddresses[i];
+                    const userReserveType = userReservesTypes[i]?.toString();
+                    const userAddress = usersAddresses[i];
 
-        let sqlQueries: string[] = [];
-
-        if (balanceOfResults.length > 0) {
-            for (let i = 0; i < balanceOfResults.length; i++) {
-                const userReserveBalance = balanceOfResults[i][0].toString();
-                const userReserveAddress =
-                    userReservesOriginalTokensAddresses[i];
-                const userReserveType = userReservesTypes[i]?.toString();
-                const userAddress = usersAddresses[i];
-
-                //add the reserve to the list of reserves to update in DB
-                userReservesObjects[userReserveType].push({
-                    address: userReserveAddress,
-                    balance: userReserveBalance,
-                    userAddress: userAddress,
-                });
-            }
-
-            for (const userReserveObjectKey of Object.keys(
-                userReservesObjects
-            )) {
-                const userReserveTypeObjects =
-                    userReservesObjects[userReserveObjectKey];
-                if (userReserveTypeObjects.length == 0) continue;
-
-                let tokenColumnName = "atoken";
-                if (
-                    userReserveObjectKey ==
-                    UserReserveType.StableDebt.toString()
-                ) {
-                    tokenColumnName = "stabledebttoken";
-                } else if (
-                    userReserveObjectKey ==
-                    UserReserveType.VariableDebt.toString()
-                ) {
-                    tokenColumnName = "variabledebttoken";
+                    //add the reserve to the list of reserves to update in DB
+                    userReservesObjects[userReserveType].push({
+                        address: userReserveAddress,
+                        balance: userReserveBalance,
+                        userAddress: userAddress,
+                    });
                 }
 
-                let sqlQuery = `
+                for (const userReserveObjectKey of Object.keys(
+                    userReservesObjects
+                )) {
+                    const userReserveTypeObjects =
+                        userReservesObjects[userReserveObjectKey];
+                    if (userReserveTypeObjects.length == 0) continue;
+
+                    let tokenColumnName = "atoken";
+                    if (
+                        userReserveObjectKey ==
+                        UserReserveType.StableDebt.toString()
+                    ) {
+                        tokenColumnName = "stabledebttoken";
+                    } else if (
+                        userReserveObjectKey ==
+                        UserReserveType.VariableDebt.toString()
+                    ) {
+                        tokenColumnName = "variabledebttoken";
+                    }
+
+                    let sqlQuery = `
+                        DELETE FROM usersreserves WHERE address IN (${_.uniq(
+                            _.map(
+                                userReserveTypeObjects,
+                                (o) => `'${o.userAddress}'`
+                            )
+                        ).join(",")}) AND network = '${key}';
+                                
                         MERGE INTO usersreserves AS target
                         USING (VALUES 
                             ${_.map(
                                 userReserveTypeObjects,
                                 (o) =>
-                                    `('${o.userAddress}', '${key}', '${o.balance}')`
+                                    `('${o.userAddress}', '${o.address}', '${key}', '${o.balance}')`
                             ).join(",")}
-                        ) AS source (address, network, ${tokenColumnName})
-                        ON (target.address = source.address AND target.network = source.network)
+                        ) AS source (address, tokenaddress, network, ${tokenColumnName})
+                        ON (target.address = source.address AND target.tokenaddress = source.tokenaddress AND target.network = source.network)
                         WHEN MATCHED THEN
                         UPDATE SET                        
                             ${tokenColumnName} = source.${tokenColumnName}                     
                             WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, network, ${tokenColumnName})
-                        VALUES (source.address, source.network, source.${tokenColumnName});
+                        INSERT (address, tokenaddress, network, ${tokenColumnName})
+                        VALUES (source.address, source.tokenaddress, source.network, source.${tokenColumnName});
                             `;
 
-                sqlQueries.push(sqlQuery);
-            }
+                    sqlQueries.push(sqlQuery);
+                }
 
-            if (sqlQueries.length > 0) {
-                const sqlQuery = sqlQueries.join(" ");
-                await sqlManager.execQuery(sqlQuery);
-            } else {
-                //we should actually never come here, but just in case
-                throw new Error(
-                    "reservesSQLList is empty despite reservesDbUpdate being not empty"
-                );
+                if (sqlQueries.length > 0) {
+                    for (const sqlQuery of sqlQueries) {
+                        await sqlManager.execQuery(sqlQuery);
+                    }
+                } else {
+                    //we should actually never come here, but just in case
+                    throw new Error(
+                        "reservesSQLList is empty despite reservesDbUpdate being not empty"
+                    );
+                }
             }
         }
     }
@@ -1075,7 +1105,7 @@ class Engine {
             return;
         }
 
-        for (const aaveNetworkInfo of Constants.AAVE_CHAINS_INFOS) {
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             if (network && network != aaveNetworkInfo.network) continue;
             const key = this.getAaveNetworkString(aaveNetworkInfo);
             const addressesDb = _.filter(
@@ -1326,7 +1356,15 @@ class Engine {
     //#region Testing methods
 
     async doTest(network: Network | string | null = null) {
-        console.log("hello");
+        await this.initializeAlchemy();
+        await this.initializeReserves();
+
+        const users = ["0xe24f48680a17bf0060b79b1902708d4f7083b31c"];
+        const data = await this.getHealthFactorAndConfigurationForAddresses(
+            users,
+            Network.ARB_MAINNET
+        );
+        console.log(data);
     }
 
     //#endregion Testing methods

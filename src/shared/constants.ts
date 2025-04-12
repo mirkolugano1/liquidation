@@ -12,7 +12,7 @@ class Constants {
 
     private constructor() {}
 
-    AAVE_CHAINS_INFOS: any[] = [
+    AAVE_NETWORKS_INFOS: any[] = [
         {
             network: Network.ARB_MAINNET,
             addresses: {
@@ -25,6 +25,8 @@ class Constants {
     ];
 
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
+
+    ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
     ABIS: any = {
         MULTICALL3_ABI: [
