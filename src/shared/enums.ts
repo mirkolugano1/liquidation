@@ -14,7 +14,7 @@ export enum OutputType {
 }
 
 export enum UserReserveType {
-    Collateral,
-    Debt,
-    CollateralAndDebt,
+    Collateral = "Collateral",
+    StableDebt = "StableDebt",
+    VariableDebt = "VariableDebt",
 }

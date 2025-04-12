@@ -103,24 +103,6 @@ class Logger {
         this.outputType = OutputType.HTML;
     }
 
-    /**
-     * deletes old entries from the logs table older than 2 days
-     * so that the table does not grow indefinitely
-     *
-     * @param context the InvocationContext of the function app (for Application Insights logging)
-     */
-    async deleteOldTableLogs(context: InvocationContext) {
-        this.initialize(
-            "function:deleteOldTableLogs",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-        this.log("Started function deleteOldTableLogs");
-        const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETDATE())`;
-        await sqlManager.execQuery(query);
-        this.log("Ended function deleteOldTableLogs");
-    }
-
     async getLogLevels() {
         const query = `SELECT DISTINCT loglevel FROM dbo.logs`;
         const data = await sqlManager.execQuery(query);

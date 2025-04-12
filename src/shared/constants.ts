@@ -1,3 +1,5 @@
+import { Network } from "alchemy-sdk";
+
 class Constants {
     private static instance: Constants;
 
@@ -12,10 +14,9 @@ class Constants {
 
     AAVE_CHAINS_INFOS: any[] = [
         {
-            chain: "arb",
-            chainEnv: "mainnet",
+            network: Network.ARB_MAINNET,
             addresses: {
-                //this will be filled up at startup with the other useful addresses
+                //this will be filled up at startup from the initializeAlchemy() method with the other useful addresses
                 //fetching the other addresses from the pool address provider
                 poolAddressesProvider:
                     "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",

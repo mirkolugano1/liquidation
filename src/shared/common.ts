@@ -17,6 +17,7 @@ class Common {
         "ALCHEMYKEYENCRYPTED",
         "PRIVATEKEYENCRYPTED",
         "CLOUDSTORAGEKEYENCRYPTED",
+        "COMMUNICATIONSERVICECONNECTIONSTRINGENCRYPTED",
     ];
 
     public async getAppSetting(key: string) {

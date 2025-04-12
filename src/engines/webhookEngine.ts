@@ -6,7 +6,7 @@ import logger from "../shared/logger";
 class WebhookEngine {
     //#region variables
 
-    //these are in the form of {chain: [address1, address2, ...]}
+    //these are in the form of {network: [address1, address2, ...]}
     addresses: any = {};
     isInitialized: boolean = false;
     batchAddressesListSql: any = {};
@@ -35,34 +35,7 @@ class WebhookEngine {
         return WebhookEngine.instance;
     }
 
-    //#region Alchemy Webhook
-
-    manageVariable(req: any) {
-        const key = req.query.key;
-        if (!key) throw new Error("Missing required parameter: key");
-
-        let method = req.query.method;
-        if (!method) method = "get";
-        if (method === "set") {
-            let value: any = req.query.value;
-            if (!value) throw new Error("Missing required parameter: value");
-            switch (key) {
-                case "batchAddressesTreshold":
-                    value = parseInt(req.query.value);
-                    this.batchAddressesTreshold = value;
-                    break;
-                default:
-                    throw new Error("Cannot set this variable: " + key);
-            }
-            return `Variable ${key} set to ${req.query.value}`;
-        } else {
-            if ((this as any).hasOwnProperty(key)) {
-                return (this as any)[key];
-            } else {
-                return "Key not found";
-            }
-        }
-    }
+    //#region Initialization
 
     async initialize() {
         if (this.isInitialized) return;
@@ -76,57 +49,46 @@ class WebhookEngine {
         );
 
         for (const address of initAddresses) {
-            if (!this.addresses.hasOwnProperty(address.chain))
-                this.addresses[address.chain] = [];
-            this.addresses[address.chain].push(address.address);
+            if (!this.addresses.hasOwnProperty(address.network))
+                this.addresses[address.network] = [];
+            this.addresses[address.network].push(address.address);
         }
 
         this.isInitialized = true;
     }
 
+    //#endregion Initialization
+
+    //#region normalizeAddress
+
+    normalizeAddress(address: string) {
+        if (!address) return "";
+        const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
+        const firstNonZeroIndex = addressWithoutPrefix.search(/[^0]/); // Find the index of the first non-zero character
+        const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end
+        return "0x" + normalized.padStart(40, "0"); // Ensure the address is 40 characters long by padding with zeros if necessary
+    }
+
+    //#endregion normalizeAddress
+
+    //#region Alchemy Webhook "processAaveEvent"
+
     async processAaveEvent(req: any, res: any) {
         if (!this.isInitialized) return;
         let block = req.body.event?.data?.block;
-        let chain = req.query.chain ?? "eth";
-        let chainEnv = req.query.chainEnv;
-        await this.processBlock(block, chain, chainEnv);
+        let network = req.query.network ?? "eth-mainnet";
+        await this.processBlock(block, network);
     }
 
-    async processBlock(
-        block: any,
-        chain: string,
-        chainEnv: string = "mainnet"
-    ) {
-        const key = `${chain}-${chainEnv}`;
+    async processBlock(block: any, network: string) {
+        const key = network;
         for (let log of block.logs) {
             let topics = log.topics;
             let eventHash = topics[0];
             let addressesToAdd: string[] = [];
             let from = log.transaction?.from?.address;
 
-            //#################
-            //TEST TO BE DELETED
-            //#################
-            /*
-            if (
-                eventHash !=
-                "0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f"
-            )
-                return;
-                */
-            //#################
-            //END TEST TO BE DELETED
-            //#################
-
             switch (eventHash) {
-                //AnswerUpdated (from price feed contracts)
-                case "0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f":
-                    console.log("AnswerUpdated event detected");
-                    console.log(topics);
-                    console.log(log.data);
-                    console.log(log.transaction?.from?.address);
-                    return;
-
                 //Deposit
                 case "0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951":
                     const decodedLogDeposit = this.ifaceDeposit.parseLog(log);
@@ -183,7 +145,7 @@ class WebhookEngine {
                     (address) => this.normalizeAddress(address)
                 );
 
-                //initialize the batchAddressesListSql array for this chain
+                //initialize the batchAddressesListSql array for this network
                 //if it doesn't exist yet
                 if (!this.batchAddressesListSql.hasOwnProperty(key)) {
                     this.batchAddressesListSql[key] = [];
@@ -224,7 +186,7 @@ class WebhookEngine {
                     }
 
                     //if there are addresses with healthFactor < 5 and userConfiguration != 0
-                    //add them to the batchAddressesListSql array for this chain
+                    //add them to the batchAddressesListSql array for this network
                     //to be monitored and saved in the database
                     if (addressesListSql.length > 0) {
                         if (!this.batchAddressesListSql.hasOwnProperty(key)) {
@@ -250,11 +212,11 @@ class WebhookEngine {
                             MERGE INTO addresses AS target
                             USING (VALUES 
                                 ${this.batchAddressesListSql[key].join(",")}
-                            ) AS source (address, chain, healthFactor, userConfiguration)
-                            ON (target.address = source.address AND target.chain = source.chain)
+                            ) AS source (address, network, healthFactor, userConfiguration)
+                            ON (target.address = source.address AND target.network = source.network)
                             WHEN NOT MATCHED BY TARGET THEN
-                                INSERT (address, chain, healthFactor, userConfiguration)
-                                VALUES (source.address, source.chain, source.healthFactor, source.userConfiguration);
+                                INSERT (address, network, healthFactor, userConfiguration)
+                                VALUES (source.address, source.network, source.healthFactor, source.userConfiguration);
                         `;
 
                             await sqlManager.execQuery(query);
@@ -277,14 +239,6 @@ class WebhookEngine {
                 }
             }
         }
-    }
-
-    normalizeAddress(address: string) {
-        if (!address) return "";
-        const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
-        const firstNonZeroIndex = addressWithoutPrefix.search(/[^0]/); // Find the index of the first non-zero character
-        const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end
-        return "0x" + normalized.padStart(40, "0"); // Ensure the address is 40 characters long by padding with zeros if necessary
     }
 
     //#endregion Alchemy Webhook

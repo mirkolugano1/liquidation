@@ -4,16 +4,21 @@ import {
     EmailRecipients,
 } from "@azure/communication-email";
 import common from "../shared/common";
+import encryption from "../shared/encryption";
 
 class EmailManager {
     private static instance: EmailManager;
     private client: EmailClient | null = null;
     private constructor() {}
 
-    async initializeClient() {
+    private async initializeClient() {
         if (this.client) return;
-        const connectionString =
-            process.env.AZURE_COMMUNICATION_SERVICE_CONNECTION_STRING;
+        const connectionStringEncrypted = await common.getAppSetting(
+            "COMMUNICATIONSERVICECONNECTIONSTRINGENCRYPTED"
+        );
+        const connectionString = await encryption.decrypt(
+            connectionStringEncrypted
+        );
         if (!connectionString) {
             throw new Error(
                 "Azure Communication Service connection string is not set."
@@ -22,9 +27,16 @@ class EmailManager {
         this.client = new EmailClient(connectionString);
     }
 
-    async sendLogEmail(subject: string, body: string) {
+    async sendLogEmail(
+        subject: string,
+        body: string,
+        waitForConfirmation: boolean = false
+    ) {
+        const emailFromAddress = await common.getAppSetting(
+            "EMAIL_FROM_ADDRESS"
+        );
         const emailLogAddress = await common.getAppSetting("EMAIL_LOG_ADDRESS");
-        const sender = emailLogAddress;
+        const sender = emailFromAddress;
         const recipients = {
             to: [
                 {
@@ -32,14 +44,21 @@ class EmailManager {
                 },
             ],
         };
-        await this.sendEmail(sender, recipients, subject, body);
+        await this._sendEmail(
+            sender,
+            recipients,
+            subject,
+            body,
+            waitForConfirmation
+        );
     }
 
-    async sendEmail(
+    private async _sendEmail(
         sender: string,
         recipients: EmailRecipients,
         subject: string,
-        body: string
+        body: string,
+        waitForConfirmation: boolean = false
     ) {
         if (!this.client) await this.initializeClient();
         const emailMessage: EmailMessage = {
@@ -50,7 +69,11 @@ class EmailManager {
                 plainText: body,
             },
         };
-        await this.client?.beginSend(emailMessage);
+        const poller = await this.client?.beginSend(emailMessage);
+        if (waitForConfirmation) {
+            const response = await poller?.pollUntilDone();
+            console.log(`Email sent, message ID: ${response?.id}`);
+        }
     }
 
     public static getInstance(): EmailManager {

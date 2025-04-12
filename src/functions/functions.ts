@@ -1,32 +1,24 @@
-import healthFactorCheckEngine from "../engines/healthFactorCheckEngine";
+import engine from "../engines/engine";
 import { app } from "@azure/functions";
-import logger from "../shared/logger";
-
-app.timer("testFunction", {
-    schedule: "0 0 * * *", // Cron expression for every x hours
-    handler: async (myTimer, context) => {
-        await healthFactorCheckEngine.testFunction(context);
-    },
-});
 
 app.timer("deleteOldTableLogsFunction", {
     schedule: "5 0 * * *", // Cron expression for every day at midnight
     handler: async (myTimer, context) => {
-        await logger.deleteOldTableLogs(context);
+        await engine.deleteOldTableLogs(context);
     },
 });
 
 app.timer("updateReservesData", {
     schedule: "10 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await healthFactorCheckEngine.updateReservesData(context);
+        await engine.updateReservesData(context);
     },
 });
 
-app.timer("updateHealthFactorAndUserConfiguration", {
+app.timer("updateHealthFactorAndUserConfigurationAndUserReserves", {
     schedule: "15 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await healthFactorCheckEngine.updateHealthFactorAndUserConfiguration(
+        await engine.updateHealthFactorAndUserConfigurationAndUserReserves(
             context
         );
     },
@@ -35,6 +27,6 @@ app.timer("updateHealthFactorAndUserConfiguration", {
 app.timer("updateTokensPrices", {
     schedule: "20 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await healthFactorCheckEngine.updateTokensPrices(context);
+        await engine.updateTokensPrices(context);
     },
 });
