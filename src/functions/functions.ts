@@ -15,12 +15,10 @@ app.timer("updateReservesData", {
     },
 });
 
-app.timer("updateHealthFactorAndUserConfigurationAndUserReserves", {
+app.timer("updateUserAccountDataAndUserReserves", {
     schedule: "15 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await engine.updateHealthFactorAndUserConfigurationAndUserReserves(
-            context
-        );
+        await engine.updateUserAccountDataAndUserReserves(context);
     },
 });
 

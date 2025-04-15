@@ -24,10 +24,45 @@ class Engine {
 
     //#region Initialization
 
+    async initializeUsersReserves(network: Network | null = null) {
+        if (!this.aave) throw new Error("Aave object not initialized");
+        const _key = network ? this.getAaveNetworkString(network) : null;
+        let query = `SELECT * FROM usersreserves`;
+        if (_key) query += ` WHERE network = '${_key}'`;
+        const dbUsersReserves = await sqlManager.execQuery(query);
+        if (!dbUsersReserves || dbUsersReserves.length == 0) {
+            await logger.log(
+                "No reserves found in DB. Please run the updateReservesData function first.",
+                "functionAppExecution"
+            );
+            return;
+        }
+
+        let usersReserves: any = {};
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            const key = this.getAaveNetworkString(aaveNetworkInfo);
+            if (_key && key != _key) continue;
+
+            const networkUsersReserves = _.filter(dbUsersReserves, {
+                network: key,
+            });
+            for (let networkUserReserves of networkUsersReserves) {
+                if (!usersReserves[networkUserReserves.address])
+                    usersReserves[networkUserReserves.address] = {};
+                usersReserves[networkUserReserves.address][
+                    networkUserReserves.tokenaddress
+                ] = networkUserReserves;
+            }
+            this.aave[key] = _.assign(aaveNetworkInfo, {
+                usersReserves: usersReserves,
+            });
+        }
+    }
+
     async initializeReserves(network: Network | null = null) {
         if (!this.aave) throw new Error("Aave object not initialized");
         const _key = network ? this.getAaveNetworkString(network) : null;
-        let query = `SELECT * FROM reserves`;
+        let query = `SELECT * FROM reserves ORDER BY sorting`;
         if (_key) query += ` WHERE network = '${_key}'`;
         const dbReserves = await sqlManager.execQuery(query);
         if (!dbReserves || dbReserves.length == 0) {
@@ -118,6 +153,36 @@ class Engine {
     //#endregion Variables
 
     //#region Helper methods
+
+    calculateTotalDebtBaseForAddress(address: string, network: Network) {
+        const networkInfo = this.getAaveNetworkInfo(network);
+        const reserves = _.values(networkInfo.reserves);
+        const userReserves = networkInfo.usersReserves[address];
+        if (!userReserves || userReserves.length == 0) return 0;
+
+        let debts = _.map(reserves, (reserve) => {
+            const userReserve = _.find(userReserves, (o) => {
+                return o.tokenaddress == reserve.address;
+            });
+            if (!userReserve) return null;
+            return {
+                price: reserve.price,
+                address: reserve.address,
+                balance:
+                    userReserve.currentvariabledebt +
+                    userReserve.currentstabledebt,
+                decimals: reserve.decimals,
+            };
+        });
+
+        debts = _.reject(debts, (o: any) => o.balance == 0);
+        if (!debts || debts.length == 0) return 0;
+        return debts.reduce((total: any, debt: any) => {
+            const { price, address, balance, decimals } = debt;
+            const baseAmount = (balance * price) / 10 ** decimals;
+            return total + baseAmount;
+        }, 0);
+    }
 
     getAaveNetworkString(aaveNetworkInfo: any) {
         return aaveNetworkInfo.hasOwnProperty("network")
@@ -215,7 +280,7 @@ class Engine {
         return userAssets;
     }
 
-    async getHealthFactorAndConfigurationForAddresses(
+    async getUserAccountDataForAddresses(
         _addresses: string[],
         network: Network
     ) {
@@ -236,13 +301,19 @@ class Engine {
         //check immediately after retrieving userAccountData if the health factor is less than 1, liquidate concerned addresses
         //immediately without waiting for the userConfiguration
         let liquidateHealthFactorAddresses: string[] = [];
-        let healthFactors: any[] = [];
+        let userAccountObjects: any[] = [];
         for (let i = 0; i < _addresses.length; i++) {
             const address = _addresses[i];
             const healthFactor = this.getHealthFactorFromUserAccountData(
                 userAccountData[i]
             );
-            healthFactors.push(healthFactor);
+            const totalCollateralBase = userAccountData[i][0].toString();
+            const totalDebtBase = userAccountData[i][1].toString();
+            userAccountObjects.push({
+                healthFactor: healthFactor,
+                totalCollateralBase: totalCollateralBase,
+                totalDebtBase: totalDebtBase,
+            });
             if (healthFactor < 1) {
                 liquidateHealthFactorAddresses.push(address);
             }
@@ -263,9 +334,6 @@ class Engine {
 
         for (let i = 0; i < _addresses.length; i++) {
             const address = _addresses[i];
-            const healthFactor = this.getHealthFactorFromUserAccountData(
-                userAccountData[i]
-            );
             let userConfigurationInt = parseInt(
                 userConfiguration[i].toString()
             );
@@ -275,8 +343,8 @@ class Engine {
                     common.intToBinary(userConfigurationInt);
 
                 results.push({
+                    ...userAccountObjects[i],
                     address: address,
-                    healthFactor: healthFactor,
                     userConfiguration: userConfigurationBinary,
                     network: this.getAaveNetworkString(network),
                 });
@@ -451,7 +519,9 @@ class Engine {
                           )
                         : contractInterface.encodeFunctionData(
                               methodNames[index],
-                              [paramAddresses[index]]
+                              Array.isArray(paramAddresses[index])
+                                  ? paramAddresses[index]
+                                  : [paramAddresses[index]]
                           );
                 return {
                     target: targetAddress,
@@ -535,18 +605,15 @@ class Engine {
         );
     }
 
-    async checkLiquidateAddresses(
-        liquidateHealthFactorAddresses: string[],
-        network: Network
-    ) {
-        if (liquidateHealthFactorAddresses.length > 0) {
+    async checkLiquidateAddresses(addresses: string[], network: Network) {
+        if (addresses.length > 0) {
             //TODO check if there are profitable liquidation opportunities
             const profitableLiquidationAddresses = [];
 
             if (profitableLiquidationAddresses.length > 0) {
                 await emailManager.sendLogEmail(
                     "Liquidation triggered",
-                    "Addresses: " + liquidateHealthFactorAddresses.join(", ")
+                    "Addresses: " + addresses.join(", ")
                 );
                 //TODO MIRKO implement liquidation logic
                 // const aaveNetworkInfo = this.getAaveNetworkInfo(network);
@@ -564,8 +631,9 @@ class Engine {
     //#region Scheduled azure functions
 
     /**
+     * This method should be scheduled to run every day at midnight, since data does should change very often
+     *
      * Periodically update the reserves data in the DB
-     * so that we don't need to fetch it from the blockchain every time
      *
      * @param context the InvocationContext of the function app on azure (for Application Insights)
      */
@@ -615,10 +683,10 @@ class Engine {
             for (let i = 0; i < reserveTokenAddresses.length; i++) {
                 allReserveTokens[i].atokenaddress =
                     reserveTokenAddresses[i][0].toString();
-                allReserveTokens[i].variabledebttokenaddress =
-                    reserveTokenAddresses[i][2].toString();
                 allReserveTokens[i].stabledebttokenaddress =
                     reserveTokenAddresses[i][1].toString();
+                allReserveTokens[i].variabledebttokenaddress =
+                    reserveTokenAddresses[i][2].toString();
             }
 
             const allReserveTokensAddresses = _.map(
@@ -706,36 +774,39 @@ class Engine {
 
             //prepare query to update reserves list in DB
             //and update DB
-            let reservesSQLList: string[] = _.map(allReserveTokens, (o) => {
-                return `('${o.address}', '${key}', '${o.symbol}', ${
-                    o.decimals
-                }, '${o.reserveliquidationthreshold}', '${
-                    o.reserveliquidationbonus
-                }', '${o.reservefactor}', ${
-                    o.usageascollateralenabled
-                }, ${sqlManager.getBitFromBoolean(
-                    o.borrowingenabled
-                )}, ${sqlManager.getBitFromBoolean(
-                    o.stableborrowrateenabled
-                )}, ${sqlManager.getBitFromBoolean(
-                    o.isactive
-                )}, ${sqlManager.getBitFromBoolean(o.isfrozen)}, '${
-                    o.liquidityindex
-                }', '${o.variableborrowindex}', '${o.liquidityrate}', '${
-                    o.variableborrowrate
-                }', '${o.lastupdatetimestamp}', '${o.atokenaddress}','${
-                    o.variabledebttokenaddress
-                }', '${o.stabledebttokenaddress}', '${o.totalstabledebt}', '${
-                    o.totalvariabledebt
-                }', '${o.ltv}')`;
-            });
+            let reservesSQLList: string[] = _.map(
+                allReserveTokens,
+                (o, index) => {
+                    return `('${o.address}', '${key}', '${o.symbol}', ${
+                        o.decimals
+                    }, '${o.reserveliquidationthreshold}', '${
+                        o.reserveliquidationbonus
+                    }', '${o.reservefactor}', ${
+                        o.usageascollateralenabled
+                    }, ${sqlManager.getBitFromBoolean(
+                        o.borrowingenabled
+                    )}, ${sqlManager.getBitFromBoolean(
+                        o.stableborrowrateenabled
+                    )}, ${sqlManager.getBitFromBoolean(
+                        o.isactive
+                    )}, ${sqlManager.getBitFromBoolean(o.isfrozen)}, '${
+                        o.liquidityindex
+                    }', '${o.variableborrowindex}', '${o.liquidityrate}', '${
+                        o.variableborrowrate
+                    }', '${o.lastupdatetimestamp}', '${o.atokenaddress}','${
+                        o.variabledebttokenaddress
+                    }', '${o.stabledebttokenaddress}', '${
+                        o.totalstabledebt
+                    }', '${o.totalvariabledebt}', '${o.ltv}', ${index})`;
+                }
+            );
 
             if (reservesSQLList.length > 0) {
                 const sqlQuery = `
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv)
+                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting)
                     ON (target.address = source.address AND target.network = source.network)
                     WHEN MATCHED THEN
                     UPDATE SET                        
@@ -759,10 +830,11 @@ class Engine {
                         stabledebttokenaddress = source.stabledebttokenaddress,
                         totalstabledebt = source.totalstabledebt,
                         totalvariabledebt = source.totalvariabledebt,
-                        ltv = source.ltv
+                        ltv = source.ltv,
+                        sorting = source.sorting
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv)
-                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv);
+                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting)
+                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv, source.sorting);
                 `;
 
                 //console.log(sqlQuery);
@@ -774,28 +846,27 @@ class Engine {
     }
 
     /**
-     * This method is used to periodically check the health factor and userConfiguration of the addresses that are stored in the DB,
-     * so that the data in the DB is always up to date, up to the interval of the cron job that calls this method.
-     * After the check, the method updates the health factor and userConfiguration in the DB.
-     * If the health factor is greater than 2, the address is deleted from the DB.
-     * If the health factor is less than 2, the address is kept in the DB and the userConfiguration is updated.
-     * Then also the user reserves are updated in the DB.
-     * The method is meant to be called periodically, e.g. every 5 minutes, to keep the data in the DB up to date.
-     * The method does NOT contains an infinite loop. It is meant to be scheduled by a cron job or similar.
+     * This method should be scheduled to run every 2-3 hours
+     *
+     * Periodically fetches
+     * - userAccountData
+     * - userConfiguration
+     * - debt tokens amounts
+     * for all addresses in the DB with health factor < 2
      */
-    async updateHealthFactorAndUserConfigurationAndUserReserves(
+    async updateUserAccountDataAndUserReserves(
         context: InvocationContext | null = null
     ) {
         //#region initialization
 
         logger.initialize(
-            "function:updateHealthFactorAndUserConfigurationAndUserReserves",
+            "function:updateHealthFactorAndUserReserves",
             LoggingFramework.ApplicationInsights,
             context
         );
 
         await logger.log(
-            "Start updateHealthFactorAndUserConfigurationAndUserReserves",
+            "Start updateHealthFactorAndUserReserves",
             "functionAppExecution"
         );
 
@@ -811,12 +882,15 @@ class Engine {
             );
             const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
-            const results =
-                await this.getHealthFactorAndConfigurationForAddresses(
-                    _addresses,
-                    aaveNetworkInfo.network
-                );
+            const results = await this.getUserAccountDataForAddresses(
+                _addresses,
+                aaveNetworkInfo.network
+            );
 
+            //Save data to the DB:
+            //NOTE: it is not necessary to save the totaldebtbase to the DB, since
+            //it will be calculated anyway from the usersreserves data.
+            //I leave it here anyway for now, since it is not a big deal to save it
             let deleteAddresses: string[] = [];
             const chunks = _.chunk(results, 1000);
             for (let i = 0; i < chunks.length; i++) {
@@ -830,27 +904,35 @@ class Engine {
                     healthfactor = CASE
                         {0}
                     ELSE healthfactor
-                    END,
-                    userconfiguration = CASE
+                    END,                                        
+                    totalcollateralbase = CASE
                         {1}
-                    ELSE userconfiguration
+                    ELSE totalcollateralbase
+                    END,
+                    totaldebtbase = CASE
+                        {2}
+                    ELSE totaldebtbase
                     END
-                WHERE address IN ({2}) AND network = '${key}';
+                WHERE address IN ({3}) AND network = '${key}';
             `
                         : "";
 
                 let arr0 = [];
                 let arr1 = [];
                 let arr2 = [];
+                let arr3 = [];
                 for (let i = 0; i < chunk.length; i++) {
                     if (chunk[i].healthFactor < 2) {
                         arr0.push(
                             `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
                         );
                         arr1.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].userConfiguration}'`
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
                         );
-                        arr2.push(`'${chunk[i].address}'`);
+                        arr2.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
+                        );
+                        arr3.push(`'${chunk[i].address}'`);
                     } else {
                         deleteAddresses.push(chunk[i].address);
                     }
@@ -858,7 +940,8 @@ class Engine {
 
                 query = query.replace("{0}", arr0.join(" "));
                 query = query.replace("{1}", arr1.join(" "));
-                query = query.replace("{2}", arr2.join(","));
+                query = query.replace("{2}", arr2.join(" "));
+                query = query.replace("{3}", arr3.join(","));
 
                 if (query) await sqlManager.execQuery(query);
             }
@@ -881,7 +964,7 @@ class Engine {
         }
 
         await logger.log(
-            "End updateHealthFactorAndUserConfigurationAndUserReserves",
+            "End updateHealthFactorAndUserReserves",
             "functionAppExecution"
         );
     }
@@ -891,182 +974,101 @@ class Engine {
         const userAddressesObjects = _.filter(resultsObjects, (o) => {
             return o.network == key;
         });
-        let userReservesOriginalTokensAddresses: string[] = [];
-        let userReservesTypes: UserReserveType[] = [];
-        let userReservesCheckTokensAddresses: string[] = [];
-        let usersAddresses: string[] = [];
 
+        let multicallUserReserveDataParameters: any[] = [];
+        const reservesAddresses = _.keys(aaveNetworkInfo.reserves);
         for (let i = 0; i < userAddressesObjects.length; i++) {
             const userAddressObject = userAddressesObjects[i];
 
-            //get user configuration in string format e.g. 100010001100 (it's stored in DB as a string)
-            const userAssets = this.getUserAssetsFromUserConfiguration(
-                userAddressObject.userConfiguration,
-                aaveNetworkInfo.network
-            );
-            const userReservesAddresses = _.uniq(
-                _.union(userAssets.debt, userAssets.collateral)
-            );
-
-            //if user has no reserves, continue
-            if (userReservesAddresses.length == 0) continue;
-
-            for (let j = 0; j < userReservesAddresses.length; j++) {
-                const userReservesAddress = userReservesAddresses[j];
-                const isUserReserveCollateral = _.includes(
-                    userAssets.collateral,
-                    userReservesAddress
-                );
-                const isUserReserveDebt = _.includes(
-                    userAssets.debt,
-                    userReservesAddress
-                );
-
-                const reserve = aaveNetworkInfo.reserves[userReservesAddress];
-
-                if (isUserReserveCollateral) {
-                    //add aToken address to the list of addresses to check balanceOf in case
-                    //the user has the reserve as collateral
-                    userReservesCheckTokensAddresses.push(
-                        reserve.atokenaddress
-                    );
-                    usersAddresses.push(userAddressObject.address);
-                    userReservesTypes.push(UserReserveType.Collateral);
-                    userReservesOriginalTokensAddresses.push(
-                        userReservesAddress
-                    );
-                }
-
-                if (isUserReserveDebt) {
-                    if (
-                        reserve.stabledebttokenaddress &&
-                        reserve.stabledebttokenaddress != Constants.ZERO_ADDRESS
-                    ) {
-                        //add the stable and variable debt token addresses to the list of addresses to check balanceOf in case
-                        //the user has the reserve as debt
-                        userReservesCheckTokensAddresses.push(
-                            reserve.stabledebttokenaddress
-                        );
-                        usersAddresses.push(userAddressObject.address);
-                        userReservesTypes.push(UserReserveType.StableDebt);
-                        userReservesOriginalTokensAddresses.push(
-                            userReservesAddress
-                        );
-                    }
-
-                    /////////////////////////////
-
-                    if (
-                        reserve.variabledebttokenaddress &&
-                        reserve.variabledebttokenaddress !=
-                            Constants.ZERO_ADDRESS
-                    ) {
-                        userReservesCheckTokensAddresses.push(
-                            reserve.variabledebttokenaddress
-                        );
-                        usersAddresses.push(userAddressObject.address);
-                        userReservesTypes.push(UserReserveType.VariableDebt);
-                        userReservesOriginalTokensAddresses.push(
-                            userReservesAddress
-                        );
-                    }
-                }
+            for (let j = 0; j < reservesAddresses.length; j++) {
+                const reserveAddress = reservesAddresses[j];
+                multicallUserReserveDataParameters.push([
+                    reserveAddress,
+                    userAddressObject.address,
+                ]);
             }
         }
 
-        const balanceOfResults = await this.multicall(
-            userReservesCheckTokensAddresses,
-            usersAddresses,
-            "TOKEN_ABI",
-            "balanceOf",
+        const results = await this.multicall(
+            aaveNetworkInfo.addresses.poolDataProvider,
+            multicallUserReserveDataParameters,
+            "POOL_DATA_PROVIDER_ABI",
+            "getUserReserveData",
             aaveNetworkInfo.network
         );
 
-        const balanceOfResultsChunks = _.chunk(balanceOfResults, 1000);
-        for (let j = 0; j < balanceOfResultsChunks.length; j++) {
-            const balanceOfResultsChunk: any = balanceOfResultsChunks[j];
-            let userReservesObjects: any = {
-                Collateral: [],
-                StableDebt: [],
-                VariableDebt: [],
-            };
-            let sqlQueries: string[] = [];
-            if (balanceOfResultsChunk.length > 0) {
-                for (let i = 0; i < balanceOfResultsChunk.length; i++) {
-                    const userReserveBalance =
-                        balanceOfResultsChunk[i][0].toString();
-                    const userReserveAddress =
-                        userReservesOriginalTokensAddresses[i];
-                    const userReserveType = userReservesTypes[i]?.toString();
-                    const userAddress = usersAddresses[i];
+        let sqlQueries: string[] = [];
+        const userReserveDataChunks = _.chunk(results, 1000);
+        for (let j = 0; j < userReserveDataChunks.length; j++) {
+            const userReserveDataChunk: any = userReserveDataChunks[j];
 
-                    //add the reserve to the list of reserves to update in DB
-                    userReservesObjects[userReserveType].push({
-                        address: userReserveAddress,
-                        balance: userReserveBalance,
-                        userAddress: userAddress,
-                    });
-                }
-
-                for (const userReserveObjectKey of Object.keys(
-                    userReservesObjects
-                )) {
-                    const userReserveTypeObjects =
-                        userReservesObjects[userReserveObjectKey];
-                    if (userReserveTypeObjects.length == 0) continue;
-
-                    let tokenColumnName = "atoken";
-                    if (
-                        userReserveObjectKey ==
-                        UserReserveType.StableDebt.toString()
-                    ) {
-                        tokenColumnName = "stabledebttoken";
-                    } else if (
-                        userReserveObjectKey ==
-                        UserReserveType.VariableDebt.toString()
-                    ) {
-                        tokenColumnName = "variabledebttoken";
+            if (userReserveDataChunk.length > 0) {
+                let userReservesObjects: any[] = _.map(
+                    userReserveDataChunk,
+                    (userReserveData, i) => {
+                        const userAddress =
+                            multicallUserReserveDataParameters[i][1].toString();
+                        const reserveAddress =
+                            multicallUserReserveDataParameters[i][0].toString();
+                        return {
+                            tokenAddress: reserveAddress,
+                            userAddress: userAddress,
+                            currentATokenBalance: userReserveData[0],
+                            currentStableDebt: userReserveData[1],
+                            currentVariableDebt: userReserveData[2],
+                            principalStableDebt: userReserveData[3],
+                            scaledVariableDebt: userReserveData[4],
+                            stableBorrowRate: userReserveData[5],
+                            liquidityRate: userReserveData[6],
+                            stableRateLastUpdated:
+                                userReserveData[7].toString(),
+                            usageAsCollateralEnabled:
+                                sqlManager.getBitFromBoolean(
+                                    userReserveData[8].toString()
+                                ),
+                        };
                     }
+                );
 
-                    let sqlQuery = `
-                        DELETE FROM usersreserves WHERE address IN (${_.uniq(
-                            _.map(
-                                userReserveTypeObjects,
-                                (o) => `'${o.userAddress}'`
-                            )
-                        ).join(",")}) AND network = '${key}';
-                                
+                let sqlQuery = `                        
                         MERGE INTO usersreserves AS target
                         USING (VALUES 
                             ${_.map(
-                                userReserveTypeObjects,
+                                userReservesObjects,
                                 (o) =>
-                                    `('${o.userAddress}', '${o.address}', '${key}', '${o.balance}')`
+                                    `('${o.userAddress}', '${o.tokenAddress}', '${key}', '${o.currentATokenBalance}', '${o.currentStableDebt}', '${o.currentVariableDebt}', '${o.principalStableDebt}', '${o.scaledVariableDebt}', '${o.stableBorrowRate}', '${o.liquidityRate}', '${o.stableRateLastUpdated}', ${o.usageAsCollateralEnabled})`
                             ).join(",")}
-                        ) AS source (address, tokenaddress, network, ${tokenColumnName})
+                        ) AS source (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled)
                         ON (target.address = source.address AND target.tokenaddress = source.tokenaddress AND target.network = source.network)
                         WHEN MATCHED THEN
                         UPDATE SET                        
-                            ${tokenColumnName} = source.${tokenColumnName}                     
+                            currentatokenbalance = source.currentatokenbalance,
+                            currentstabledebt = source.currentstabledebt,
+                            currentvariabledebt = source.currentvariabledebt,
+                            principalstabledebt = source.principalstabledebt,
+                            scaledvariabledebt = source.scaledvariabledebt,
+                            stableborrowrate = source.stableborrowrate,
+                            liquidityrate = source.liquidityrate,
+                            stableratelastupdated = source.stableratelastupdated,
+                            usageascollateralenabled = source.usageascollateralenabled                                      
                             WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, tokenaddress, network, ${tokenColumnName})
-                        VALUES (source.address, source.tokenaddress, source.network, source.${tokenColumnName});
+                        INSERT (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled)
+                        VALUES (source.address, source.tokenaddress, source.network, source.currentatokenbalance, source.currentstabledebt, source.currentvariabledebt, source.principalstabledebt, source.scaledvariabledebt, source.stableborrowrate, source.liquidityrate, source.stableratelastupdated, source.usageascollateralenabled);
                             `;
 
-                    sqlQueries.push(sqlQuery);
-                }
-
-                if (sqlQueries.length > 0) {
-                    for (const sqlQuery of sqlQueries) {
-                        await sqlManager.execQuery(sqlQuery);
-                    }
-                } else {
-                    //we should actually never come here, but just in case
-                    throw new Error(
-                        "reservesSQLList is empty despite reservesDbUpdate being not empty"
-                    );
-                }
+                sqlQueries.push(sqlQuery);
             }
+        }
+
+        if (sqlQueries.length > 0) {
+            for (const sqlQuery of sqlQueries) {
+                await sqlManager.execQuery(sqlQuery);
+            }
+        } else {
+            //we should actually never come here, but just in case
+            throw new Error(
+                "No user reserves data found for the given addresses"
+            );
         }
     }
 
@@ -1288,10 +1290,9 @@ class Engine {
 
                     //Trigger liquidation
                     if (addressesToLiquidate.length > 0) {
-                        //TODO MIRKO liquidate the addresses
-                        await logger.log(
-                            "Addresses to liquidate: " +
-                                JSON.stringify(addressesToLiquidate)
+                        this.checkLiquidateAddresses(
+                            addressesToLiquidate,
+                            aaveNetworkInfo.network
                         );
                     } else {
                         await logger.log(
@@ -1355,16 +1356,81 @@ class Engine {
 
     //#region Testing methods
 
-    async doTest(network: Network | string | null = null) {
+    async doTest() {
         await this.initializeAlchemy();
         await this.initializeReserves();
+        await this.initializeUsersReserves();
 
+        /*
+        await this.updateReservesData();
+        await this.updateUserAccountDataAndUserReserves();
+        */
+        /*
         const users = ["0xe24f48680a17bf0060b79b1902708d4f7083b31c"];
-        const data = await this.getHealthFactorAndConfigurationForAddresses(
+        const data = await this.getUserAccountDataForAddresses(
             users,
             Network.ARB_MAINNET
         );
-        console.log(data);
+        */
+        const network: Network = Network.ARB_MAINNET;
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+
+        const totalDebtCalculated = this.calculateTotalDebtBaseForAddress(
+            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55",
+            network
+        );
+
+        console.log(totalDebtCalculated);
+
+        const poolDataProviderContract = this.getContract(
+            aaveNetworkInfo.addresses.poolDataProvider,
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
+            network
+        );
+
+        const poolContract = this.getContract(
+            aaveNetworkInfo.addresses.pool,
+            Constants.ABIS.POOL_ABI,
+            network
+        );
+
+        const userAccountData = await poolContract.getUserAccountData(
+            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55"
+        );
+        console.log(userAccountData);
+
+        /*
+        let reservesKeys = _.keys(aaveNetworkInfo.reserves);
+        let multicallUserReserveDataParameters: any[] = [];
+        multicallUserReserveDataParameters.push([
+            reservesKeys[0],
+            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55",
+        ]);
+
+        const results = await this.multicall(
+            aaveNetworkInfo.addresses.poolDataProvider,
+            multicallUserReserveDataParameters,
+            "POOL_DATA_PROVIDER_ABI",
+            "getUserReserveData",
+            aaveNetworkInfo.network
+        );
+
+        console.log(results);
+
+        const addresses = [
+            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55",
+
+            "0x803e113d2c53e3cd8777e52b027920315ed1b5e0",
+            "0xbbc233f5422bbeb0be4d5fc51f324aeb4a028eb1",
+            "0x21c7ff5562979c4ee7db6adec86cb3765083002a",
+            "0x767522b55c5760ae16173b620fdf20186e883486",
+            "0x5dbb8becb93e9ec3ada7c70f522aa798bb7fd882",
+            "0x76328f7620f4de1d19bbbd29db34c79d663a5217",
+            "0xc1cf20874d72fe452fd5982917fe0ab209305121",
+            "0x0604e652a188931e245717d45feb26f583b92908",
+            "0x280a9ee48968d3b2b7fab15c8ee09d7205675f76",
+        ];
+        */
     }
 
     //#endregion Testing methods
