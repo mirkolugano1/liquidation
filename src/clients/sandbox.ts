@@ -7,8 +7,8 @@ dotenv.config();
 //aa
 async function main() {
     try {
-        await engine.updateUserAccountDataAndUserReserves();
-        //await engine.doTest();
+        //await engine.updateUserAccountDataAndUserReserves();
+        await engine.doTest();
     } catch (error) {
         console.error("Error in main function:", error);
     }

@@ -24,6 +24,8 @@ class Constants {
         },
     ];
 
+    CHUNK_SIZE = 500;
+
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
 
     ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -93,6 +95,14 @@ class Constants {
 
         PRICE_FEED_ABI: [
             "event AnswerUpdated(int256 indexed current, uint256 indexed roundId, uint256 updatedAt)",
+        ],
+
+        BORROW_EVENT_ABI: [
+            "event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint256 borrowRateMode, uint256 borrowRate, uint16 indexed referral)",
+        ],
+
+        DEPOSIT_EVENT_ABI: [
+            "event Deposit(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referral)",
         ],
 
         AGGREGATOR_V3_INTERFACE_ABI: [

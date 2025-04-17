@@ -1,5 +1,6 @@
 import engine from "../engines/engine";
 import { app } from "@azure/functions";
+import sqlManager from "../managers/sqlManager";
 
 app.timer("deleteOldTableLogsFunction", {
     schedule: "5 0 * * *", // Cron expression for every day at midnight
@@ -27,4 +28,10 @@ app.timer("updateTokensPrices", {
     handler: async (myTimer, context) => {
         await engine.updateTokensPrices(context);
     },
+});
+
+process.on("SIGINT", async () => {
+    console.log("Closing SQL connection pool...");
+    await sqlManager.closePool();
+    process.exit(0);
 });

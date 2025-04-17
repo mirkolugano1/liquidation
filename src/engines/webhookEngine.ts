@@ -2,6 +2,7 @@ import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
 import { ethers } from "ethers";
 import logger from "../shared/logger";
+import Constants from "../shared/constants";
 
 class WebhookEngine {
     //#region variables
@@ -14,14 +15,7 @@ class WebhookEngine {
     batchAddressesTreshold: number = 25;
 
     ifaceBorrow: any;
-    borrowEventAbi: string[] = [
-        "event Borrow(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint256 borrowRateMode, uint256 borrowRate, uint16 indexed referral)",
-    ];
-
     ifaceDeposit: any;
-    depositEventAbi: string[] = [
-        "event Deposit(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referral)",
-    ];
 
     //#endregion variables
 
@@ -40,8 +34,12 @@ class WebhookEngine {
     async initialize() {
         if (this.isInitialized) return;
 
-        this.ifaceBorrow = new ethers.Interface(this.borrowEventAbi);
-        this.ifaceDeposit = new ethers.Interface(this.depositEventAbi);
+        this.ifaceBorrow = new ethers.Interface(
+            Constants.ABIS.BORROW_EVENT_ABI
+        );
+        this.ifaceDeposit = new ethers.Interface(
+            Constants.ABIS.DEPOSIT_EVENT_ABI
+        );
 
         const initAddresses = _.map(
             await sqlManager.execQuery("SELECT * FROM addresses"),
@@ -180,12 +178,12 @@ class WebhookEngine {
 
                     for (const address of uniqueAddresses) {
                         addressesListSql.push(
-                            `('${address}', '${key}', null, null)`
+                            `('${address}', '${key}', null, GETDATE())`
                         );
                         addressesList.push(address);
                     }
 
-                    //if there are addresses with healthFactor < 5 and userConfiguration != 0
+                    //if there are addresses with healthFactor < 2
                     //add them to the batchAddressesListSql array for this network
                     //to be monitored and saved in the database
                     if (addressesListSql.length > 0) {
@@ -212,11 +210,11 @@ class WebhookEngine {
                             MERGE INTO addresses AS target
                             USING (VALUES 
                                 ${this.batchAddressesListSql[key].join(",")}
-                            ) AS source (address, network, healthFactor, userConfiguration)
+                            ) AS source (address, network, healthFactor, addedon)
                             ON (target.address = source.address AND target.network = source.network)
                             WHEN NOT MATCHED BY TARGET THEN
-                                INSERT (address, network, healthFactor, userConfiguration)
-                                VALUES (source.address, source.network, source.healthFactor, source.userConfiguration);
+                                INSERT (address, network, healthFactor, addedon)
+                                VALUES (source.address, source.network, source.healthFactor, source.addedon);
                         `;
 
                             await sqlManager.execQuery(query);

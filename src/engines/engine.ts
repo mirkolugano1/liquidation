@@ -244,40 +244,22 @@ class Engine {
         return ["", ""];
     }
 
-    getHealthFactorOffChain(address: string) {
-        //TODO MIRKO get health factor from DB for the address
-        const healthFactor = 1.5;
+    getHealthFactorOffChain(
+        totalCollateralBase: number | Big,
+        totalDebtBase: number | Big,
+        currentLiquidationThreshold: number | Big
+    ) {
+        if (totalDebtBase == 0) return 0;
+        const totalCollateralBaseBig = new Big(totalCollateralBase);
+        const totalDebtBaseBig = new Big(totalDebtBase);
+        const currentLiquidationThresholdBig = new Big(
+            currentLiquidationThreshold
+        ).div(10 ** 4);
+        const healthFactor = totalCollateralBaseBig
+            .times(currentLiquidationThresholdBig)
+            .div(totalDebtBaseBig)
+            .toNumber();
         return healthFactor;
-    }
-
-    getUserAssetsFromUserConfiguration(
-        userConfiguration: string,
-        network: Network
-    ): { debt: string[]; collateral: string[] } {
-        if (!userConfiguration || !network)
-            throw new Error("UserConfiguration and Network must be defined");
-
-        let userAssets: any = {
-            debt: [],
-            collateral: [],
-        };
-        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-        let i = userConfiguration.length - 1;
-
-        //loop through reserves
-        for (let reserveAddress of Object.keys(aaveNetworkInfo.reserves)) {
-            if (userConfiguration[i] == "1") {
-                userAssets.debt.push(reserveAddress);
-            }
-
-            if (i > 0 && userConfiguration[i - 1] == "1") {
-                userAssets.collateral.push(reserveAddress);
-            }
-
-            i = i - 2;
-        }
-
-        return userAssets;
     }
 
     async getUserAccountDataForAddresses(
@@ -285,9 +267,6 @@ class Engine {
         network: Network
     ) {
         if (!_addresses || _addresses.length == 0) return [];
-
-        let results: any[] = [];
-
         const networkInfo = await this.getAaveNetworkInfo(network);
 
         const userAccountData = await this.multicall(
@@ -299,7 +278,6 @@ class Engine {
         );
 
         //check immediately after retrieving userAccountData if the health factor is less than 1, liquidate concerned addresses
-        //immediately without waiting for the userConfiguration
         let liquidateHealthFactorAddresses: string[] = [];
         let userAccountObjects: any[] = [];
         for (let i = 0; i < _addresses.length; i++) {
@@ -309,8 +287,13 @@ class Engine {
             );
             const totalCollateralBase = userAccountData[i][0].toString();
             const totalDebtBase = userAccountData[i][1].toString();
+            const currentLiquidationThreshold =
+                userAccountData[i][3].toString();
             userAccountObjects.push({
+                address: address,
+                network: network,
                 healthFactor: healthFactor,
+                currentLiquidationThreshold: currentLiquidationThreshold,
                 totalCollateralBase: totalCollateralBase,
                 totalDebtBase: totalDebtBase,
             });
@@ -324,34 +307,7 @@ class Engine {
             network
         );
 
-        const userConfiguration = await this.multicall(
-            networkInfo.addresses.pool,
-            _addresses,
-            "POOL_ABI",
-            "getUserConfiguration",
-            network
-        );
-
-        for (let i = 0; i < _addresses.length; i++) {
-            const address = _addresses[i];
-            let userConfigurationInt = parseInt(
-                userConfiguration[i].toString()
-            );
-
-            if (!Number.isNaN(userConfigurationInt)) {
-                const userConfigurationBinary =
-                    common.intToBinary(userConfigurationInt);
-
-                results.push({
-                    ...userAccountObjects[i],
-                    address: address,
-                    userConfiguration: userConfigurationBinary,
-                    network: this.getAaveNetworkString(network),
-                });
-            }
-        }
-
-        return results;
+        return userAccountObjects;
     }
 
     async multicallEstimateGas(
@@ -536,12 +492,11 @@ class Engine {
         }
 
         // Split into chunks of 1000 or fewer calls
-        const CHUNK_SIZE = 1000;
-        const callBatches = _.chunk(calls, CHUNK_SIZE);
+        const callBatches = _.chunk(calls, Constants.CHUNK_SIZE);
 
         // Create a tracking array to map chunk results back to original indices
         const callIndices = Array.from({ length: calls.length }, (_, i) => i);
-        const indexBatches = _.chunk(callIndices, CHUNK_SIZE);
+        const indexBatches = _.chunk(callIndices, Constants.CHUNK_SIZE);
 
         // Execute each chunk
         const chunkPromises = callBatches.map(async (callBatch) => {
@@ -605,11 +560,25 @@ class Engine {
         );
     }
 
-    async checkLiquidateAddresses(addresses: string[], network: Network) {
+    async checkLiquidateAddresses(
+        addresses: string[],
+        network: Network,
+        userAssets: any = null
+    ) {
         if (addresses.length > 0) {
             //TODO check if there are profitable liquidation opportunities
             const profitableLiquidationAddresses = [];
-
+            const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+            const reserves = aaveNetworkInfo.reserves;
+            const userReserves = aaveNetworkInfo.usersReserves;
+            /*
+            //decide which asset pair to liquidate for the user based on the userAssets collateral and debt properties
+            const assetsToLiquidate: string[] =
+                await this.decideWhichAssetPairToLiquidate(
+                    addresses[0],
+                    userReserves[addresses[0]]
+                );
+*/
             if (profitableLiquidationAddresses.length > 0) {
                 await emailManager.sendLogEmail(
                     "Liquidation triggered",
@@ -648,7 +617,6 @@ class Engine {
 
         await logger.log("Start updateReservesData", "functionAppExecution");
         await this.initializeAlchemy();
-        await this.initializeReserves();
 
         //#endregion initialization
 
@@ -752,25 +720,21 @@ class Engine {
 
             //check if there are reserves in the DB which are not in the reservesList
             //and in case delete them from the DB
-            const currentDbReservesAddresses = _.map(
-                aaveNetworkInfo.reserves,
-                (o) => o.address
-            );
             const fetchedReservesAddresses = _.map(
                 allReserveTokens,
                 (o) => o.address
             );
 
-            const removedReservesAddresses = _.difference(
-                currentDbReservesAddresses,
-                fetchedReservesAddresses
-            );
-            if (removedReservesAddresses.length > 0) {
-                const sqlQuery = `DELETE FROM reserves WHERE address IN ('${removedReservesAddresses.join(
-                    "','"
-                )}') AND network = '${key}';`;
-                await sqlManager.execQuery(sqlQuery);
-            }
+            //delete reserves and usersreserves data where token address is not in the reserves list
+            const sqlQueryDelete = `DELETE FROM usersreserves WHERE tokenaddress NOT IN ('${fetchedReservesAddresses.join(
+                "','"
+            )}') AND network = '${key}';`;
+            await sqlManager.execQuery(sqlQueryDelete);
+
+            const sqlQuery = `DELETE FROM reserves WHERE address NOT IN ('${fetchedReservesAddresses.join(
+                "','"
+            )}') AND network = '${key}';`;
+            await sqlManager.execQuery(sqlQuery);
 
             //prepare query to update reserves list in DB
             //and update DB
@@ -850,8 +814,7 @@ class Engine {
      *
      * Periodically fetches
      * - userAccountData
-     * - userConfiguration
-     * - debt tokens amounts
+     * - userReserves (for each user, for each token)
      * for all addresses in the DB with health factor < 2
      */
     async updateUserAccountDataAndUserReserves(
@@ -860,7 +823,7 @@ class Engine {
         //#region initialization
 
         logger.initialize(
-            "function:updateHealthFactorAndUserReserves",
+            "function:updateHealthFactrAndUserReserves",
             LoggingFramework.ApplicationInsights,
             context
         );
@@ -877,90 +840,122 @@ class Engine {
 
         for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             const key = this.getAaveNetworkString(aaveNetworkInfo);
-            const dbAddressesArr = await sqlManager.execQuery(
-                `SELECT * FROM addresses where network = '${key}';`
-            );
-            const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+            let dbAddressesArr: any[];
+            let offset = 0;
+            do {
+                dbAddressesArr = await sqlManager.execQuery(
+                    `SELECT TOP 20 * FROM addresses WHERE network = '${key}'
+                     ORDER BY addedon OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
+                `
+                );
+                if (dbAddressesArr.length == 0) break;
+                console.log(`Updated ${offset} addresses`);
+                offset += Constants.CHUNK_SIZE;
+                console.log(`Updating next ${Constants.CHUNK_SIZE} addresses`);
 
-            const results = await this.getUserAccountDataForAddresses(
-                _addresses,
-                aaveNetworkInfo.network
-            );
+                if (offset > 1000) break;
 
-            //Save data to the DB:
-            //NOTE: it is not necessary to save the totaldebtbase to the DB, since
-            //it will be calculated anyway from the usersreserves data.
-            //I leave it here anyway for now, since it is not a big deal to save it
-            let deleteAddresses: string[] = [];
-            const chunks = _.chunk(results, 1000);
-            for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
+                const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
-                let query =
-                    chunk.length > 0
-                        ? `
+                //update all reserves for all users. I do it before getting the userAccountData,
+                //because if there are users with hf < 1 I have to check their tokens balances
+                //to calculate liquidation profitability
+                await this.updateUsersReservesData(
+                    dbAddressesArr,
+                    aaveNetworkInfo
+                );
+
+                const results = await this.getUserAccountDataForAddresses(
+                    _addresses,
+                    aaveNetworkInfo.network
+                );
+
+                //Save data to the DB:
+                //NOTE: it is not necessary to save the totaldebtbase to the DB, since
+                //it will be calculated anyway from the usersreserves data.
+                //I leave it here anyway for now, since it is not a big deal to save it
+                let deleteAddresses: string[] = [];
+                const chunks = _.chunk(results, Constants.CHUNK_SIZE);
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+
+                    let query =
+                        chunk.length > 0
+                            ? `
                 UPDATE addresses 
                 SET 
                     healthfactor = CASE
                         {0}
                     ELSE healthfactor
                     END,                                        
-                    totalcollateralbase = CASE
+                    currentliquidationthreshold = CASE
                         {1}
+                    ELSE currentliquidationthreshold
+                    END,
+                    totalcollateralbase = CASE
+                        {2}
                     ELSE totalcollateralbase
                     END,
                     totaldebtbase = CASE
-                        {2}
+                        {3}
                     ELSE totaldebtbase
                     END
-                WHERE address IN ({3}) AND network = '${key}';
+                WHERE address IN ({4}) AND network = '${key}';
             `
-                        : "";
+                            : "";
 
-                let arr0 = [];
-                let arr1 = [];
-                let arr2 = [];
-                let arr3 = [];
-                for (let i = 0; i < chunk.length; i++) {
-                    if (chunk[i].healthFactor < 2) {
-                        arr0.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
-                        );
-                        arr1.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
-                        );
-                        arr2.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
-                        );
-                        arr3.push(`'${chunk[i].address}'`);
-                    } else {
-                        deleteAddresses.push(chunk[i].address);
+                    let arr0 = [];
+                    let arr1 = [];
+                    let arr2 = [];
+                    let arr3 = [];
+                    let arr4 = [];
+                    for (let i = 0; i < chunk.length; i++) {
+                        if (chunk[i].healthFactor < 2) {
+                            arr0.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
+                            );
+                            arr1.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
+                            );
+                            arr2.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
+                            );
+                            arr3.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
+                            );
+                            arr4.push(`'${chunk[i].address}'`);
+                        } else {
+                            deleteAddresses.push(chunk[i].address);
+                        }
+                    }
+
+                    query = query.replace("{0}", arr0.join(" "));
+                    query = query.replace("{1}", arr1.join(" "));
+                    query = query.replace("{2}", arr2.join(" "));
+                    query = query.replace("{3}", arr3.join(" "));
+                    query = query.replace("{4}", arr4.join(","));
+
+                    if (query) await sqlManager.execQuery(query);
+                }
+
+                if (deleteAddresses.length > 0) {
+                    const chunks = _.chunk(
+                        deleteAddresses,
+                        Constants.CHUNK_SIZE
+                    );
+                    for (let i = 0; i < chunks.length; i++) {
+                        const sqlQuery = `
+                    DELETE FROM addresses WHERE address IN ('${chunks[i].join(
+                        "','"
+                    )}') AND network = '${key}';
+                    DELETE FROM usersreserves WHERE address IN ('${chunks[
+                        i
+                    ].join("','")}') AND network = '${key}';
+                    `;
+                        await sqlManager.execQuery(sqlQuery);
                     }
                 }
-
-                query = query.replace("{0}", arr0.join(" "));
-                query = query.replace("{1}", arr1.join(" "));
-                query = query.replace("{2}", arr2.join(" "));
-                query = query.replace("{3}", arr3.join(","));
-
-                if (query) await sqlManager.execQuery(query);
-            }
-
-            if (deleteAddresses.length > 0) {
-                const chunks = _.chunk(deleteAddresses, 1000);
-                for (let i = 0; i < chunks.length; i++) {
-                    const sqlQuery = `DELETE FROM addresses WHERE address IN ('${chunks[
-                        i
-                    ].join("','")}') AND network = '${key}';`;
-                    await sqlManager.execQuery(sqlQuery);
-                }
-            }
-
-            const resultsExceptDeleteds = _.reject(results, (o: any) => {
-                return _.includes(deleteAddresses, o.address);
-            });
-
-            await this.updateUsersData(resultsExceptDeleteds, aaveNetworkInfo);
+            } while (dbAddressesArr.length > 0);
         }
 
         await logger.log(
@@ -969,14 +964,16 @@ class Engine {
         );
     }
 
-    async updateUsersData(resultsObjects: any[], aaveNetworkInfo: any) {
+    async updateUsersReservesData(
+        userAddressesObjects: any[],
+        aaveNetworkInfo: any
+    ) {
         const key = this.getAaveNetworkString(aaveNetworkInfo);
-        const userAddressesObjects = _.filter(resultsObjects, (o) => {
-            return o.network == key;
-        });
 
         let multicallUserReserveDataParameters: any[] = [];
         const reservesAddresses = _.keys(aaveNetworkInfo.reserves);
+
+        //load usersreserves data for each user for each reserve
         for (let i = 0; i < userAddressesObjects.length; i++) {
             const userAddressObject = userAddressesObjects[i];
 
@@ -998,7 +995,7 @@ class Engine {
         );
 
         let sqlQueries: string[] = [];
-        const userReserveDataChunks = _.chunk(results, 1000);
+        const userReserveDataChunks = _.chunk(results, Constants.CHUNK_SIZE);
         for (let j = 0; j < userReserveDataChunks.length; j++) {
             const userReserveDataChunk: any = userReserveDataChunks[j];
 
@@ -1059,6 +1056,9 @@ class Engine {
                 sqlQueries.push(sqlQuery);
             }
         }
+
+        //TODO evtl even before updating the database, check which users have HF < 1 and
+        //check if liquidation is profitable
 
         if (sqlQueries.length > 0) {
             for (const sqlQuery of sqlQueries) {
@@ -1199,19 +1199,11 @@ class Engine {
 
                 //loop through loaded addresses from DB
                 for (const addressRecord of addressesDb) {
-                    //get user configuration in string format e.g. 100010001100 (it's stored in DB as a string)
-                    const userConfiguration = addressRecord.userconfiguration;
-
-                    let i = userConfiguration.length - 1;
-
                     //loop through reserves
                     for (let reserveChangedCheck of reservesChangedCheck) {
                         //if reserve price has not changed, we skip it
                         if (reserveChangedCheck.check != "none") {
-                            if (
-                                userConfiguration[i] == "1" &&
-                                reserveChangedCheck.check == "debt"
-                            ) {
+                            if (reserveChangedCheck.check == "debt") {
                                 if (
                                     !userAssets.hasOwnProperty(
                                         addressRecord.address
@@ -1229,8 +1221,6 @@ class Engine {
                                     reserveChangedCheck.reserve
                                 );
                             } else if (
-                                i > 0 &&
-                                userConfiguration[i - 1] == "1" &&
                                 reserveChangedCheck.check == "collateral"
                             ) {
                                 if (
@@ -1253,53 +1243,17 @@ class Engine {
                                 ].collateral.push(reserveChangedCheck.reserve);
                             }
                         }
-                        i = i - 2;
                     }
                 }
 
                 //get list of addresses for which to check health factor from the userAssets object
                 const addressesToCheck = Object.keys(userAssets);
 
-                //check the health factor for the addresses that have the changed reserves either as collateral or as debt
-                if (addressesToCheck.length > 0) {
-                    let addressesToLiquidate: any[] = [];
-
-                    //iterate through the results and check the health factor of corresponding address
-                    for (let i = 0; i < addressesToCheck.length; i++) {
-                        //get address and health factor
-                        const address = addressesToCheck[i];
-                        const healthFactor =
-                            this.getHealthFactorOffChain(address);
-
-                        //if health factor is below 1, we add the address to the list of addresses to liquidate
-                        if (healthFactor < 1) {
-                            //decide which asset pair to liquidate for the user based on the userAssets collateral and debt properties
-                            const assetsToLiquidate: string[] =
-                                await this.decideWhichAssetPairToLiquidate(
-                                    address,
-                                    userAssets[address]
-                                );
-
-                            //add the address to the list of addresses to liquidate
-                            addressesToLiquidate.push({
-                                address: address,
-                                assets: assetsToLiquidate,
-                            });
-                        }
-                    }
-
-                    //Trigger liquidation
-                    if (addressesToLiquidate.length > 0) {
-                        this.checkLiquidateAddresses(
-                            addressesToLiquidate,
-                            aaveNetworkInfo.network
-                        );
-                    } else {
-                        await logger.log(
-                            `No addresses to liquidate, out of ${addressesToLiquidate.length} addresses`
-                        );
-                    }
-                }
+                this.checkLiquidateAddresses(
+                    addressesToCheck,
+                    aaveNetworkInfo.network,
+                    userAssets
+                );
             } else {
                 await logger.log("No price changes detected");
             }
@@ -1357,30 +1311,105 @@ class Engine {
     //#region Testing methods
 
     async doTest() {
+        /*
+        await this.updateReservesData();
+        await this.updateTokensPrices();
+        */
+        //await this.updateUserAccountDataAndUserReserves();
+
         await this.initializeAlchemy();
         await this.initializeReserves();
         await this.initializeUsersReserves();
 
-        /*
-        await this.updateReservesData();
-        await this.updateUserAccountDataAndUserReserves();
-        */
-        /*
-        const users = ["0xe24f48680a17bf0060b79b1902708d4f7083b31c"];
-        const data = await this.getUserAccountDataForAddresses(
-            users,
-            Network.ARB_MAINNET
+        const network: Network = Network.ARB_MAINNET;
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+
+        const sql =
+            "SELECT top 20 * FROM dbo.addresses where address = '0x7a0e03c6860947525a3c9dbe24a10452ffc9f269' ORDER BY addedon;";
+        const result: any = await sqlManager.execQuery(sql);
+
+        const ur = aaveNetworkInfo.usersReserves[result[0].address];
+        const urt = Object.keys(ur);
+        for (const reserveKey in urt) {
+            const reserve = ur[urt[reserveKey]];
+            if (
+                reserve.currentstabledebt > 0 ||
+                reserve.currentvariabledebt > 0
+            ) {
+                console.log("User reserve data: ", reserve);
+            }
+        }
+
+        const tdb = this.calculateTotalDebtBaseForAddress(
+            result[0].address,
+            network
         );
-        */
+
+        const poolDataProviderContract = this.getContract(
+            aaveNetworkInfo.addresses.poolDataProvider,
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
+            network
+        );
+
+        for (const reserve in aaveNetworkInfo.reserves) {
+            const reserveAddress = aaveNetworkInfo.reserves[reserve].address;
+            const userReserveData =
+                await poolDataProviderContract.getUserReserveData(
+                    reserveAddress,
+                    result[0].address
+                );
+            if (userReserveData[1] > 0 || userReserveData[2] > 0)
+                console.log("User reserve data: ", userReserveData);
+        }
+
+        const poolContract = this.getContract(
+            aaveNetworkInfo.addresses.pool,
+            Constants.ABIS.POOL_ABI,
+            network
+        );
+
+        const userAccountData = await poolContract.getUserAccountData(
+            result[0].address
+        );
+
+        console.log(
+            "total debt base from user account data: ",
+            userAccountData[1]
+        );
+
+        const totalCollateralBase = result[0].totalcollateralbase;
+        const currentLiquidationThreshold = userAccountData[3];
+        const totalDebtBase = result[0].totaldebtbase;
+        const healthFactor = result[0].healthfactor;
+
+        const calculatedHealthFactor = this.getHealthFactorOffChain(
+            totalCollateralBase,
+            totalDebtBase,
+            currentLiquidationThreshold
+        );
+        console.log("Calculated HF: ", calculatedHealthFactor);
+        console.log("HF from DB: ", healthFactor);
+
+        const hfFromChain = await this.getHealthFactorFromUserAccountData(
+            userAccountData
+        );
+        console.log("HF from chain: ", hfFromChain);
+        /*
         const network: Network = Network.ARB_MAINNET;
         const aaveNetworkInfo = this.getAaveNetworkInfo(network);
 
         const totalDebtCalculated = this.calculateTotalDebtBaseForAddress(
-            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55",
+            address,
             network
         );
 
         console.log(totalDebtCalculated);
+
+        const hfCalculated =
+            (result.totalcollateralbase * result.currentliquidationthreshold) /
+            result.totaldebtbase;
+        console.log("HF calculated: ", hfCalculated);
+        console.log("HF from DB: ", result.healthfactor);
 
         const poolDataProviderContract = this.getContract(
             aaveNetworkInfo.addresses.poolDataProvider,
@@ -1394,12 +1423,14 @@ class Engine {
             network
         );
 
-        const userAccountData = await poolContract.getUserAccountData(
-            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55"
-        );
-        console.log(userAccountData);
+        const userAccountData = await poolContract.getUserAccountData(address);
+        //console.log(userAccountData);
 
-        /*
+        const hfFromChain =
+            this.getHealthFactorFromUserAccountData(userAccountData);
+        console.log("HF from chain: ", hfFromChain);
+
+        
         let reservesKeys = _.keys(aaveNetworkInfo.reserves);
         let multicallUserReserveDataParameters: any[] = [];
         multicallUserReserveDataParameters.push([

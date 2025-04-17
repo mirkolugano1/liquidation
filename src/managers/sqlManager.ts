@@ -10,6 +10,7 @@ class SqlManager {
     private databaseName: string = "liquidation";
     private sqlServerName: string = "liquidation.database.windows.net";
     private config: any;
+    private pool: sql.ConnectionPool | null = null;
 
     public static getInstance(): SqlManager {
         if (!SqlManager.instance) {
@@ -18,7 +19,7 @@ class SqlManager {
         return SqlManager.instance;
     }
 
-    async initialize() {
+    private async initialize() {
         const encryptedSqlPassword = await common.getAppSetting(
             "SQLPASSWORDENCRYPTED"
         );
@@ -38,6 +39,23 @@ class SqlManager {
                 trustServerCertificate: false,
             },
         };
+
+        // Create a single connection pool
+        this.pool = new sql.ConnectionPool(this.config);
+
+        // Connect and handle errors
+        this.pool.on("error", (err) => {
+            console.error("SQL Pool Error:", err);
+        });
+
+        await this.pool.connect();
+    }
+
+    private async getPool() {
+        if (!this.pool || !this.pool.connected) {
+            await this.initialize();
+        }
+        return this.pool;
     }
 
     getBitFromBoolean(value: boolean): number {
@@ -45,16 +63,14 @@ class SqlManager {
     }
 
     async execQuery(query: string, parameters: Record<string, any> = {}) {
-        if (!this.config) await this.initialize();
-        let pool;
-        try {
-            pool = await sql.connect(this.config);
+        const pool = await this.getPool();
+        if (!pool) throw new Error("No connection pool available.");
 
+        try {
             const request = pool.request();
 
             // Add all parameters
             Object.entries(parameters).forEach(([paramName, paramValue]) => {
-                // Automatically determine parameter type based on value type
                 if (paramValue === null) {
                     request.input(paramName, paramValue);
                 } else if (typeof paramValue === "number") {
@@ -68,15 +84,22 @@ class SqlManager {
                 } else if (paramValue instanceof Date) {
                     request.input(paramName, sql.DateTime, paramValue);
                 } else {
-                    // Default to NVarChar for strings and other types
                     request.input(paramName, sql.NVarChar, paramValue);
                 }
             });
 
             const result = await request.query(query);
             return result?.recordset;
-        } finally {
-            if (pool) await pool.close();
+        } catch (error) {
+            console.error("SQL Query Error:", error);
+            throw error;
+        }
+    }
+
+    async closePool() {
+        if (this.pool) {
+            await this.pool.close();
+            this.pool = null;
         }
     }
 }
