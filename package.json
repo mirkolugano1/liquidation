@@ -6,6 +6,7 @@
         "@azure/keyvault-keys": "^4.9.0",
         "@azure/keyvault-secrets": "^4.9.0",
         "@azure/opentelemetry-instrumentation-azure-sdk": "^1.0.0-beta.8",
+        "@azure/service-bus": "^7.9.5",
         "@azure/storage-blob": "^12.26.0",
         "@opentelemetry/node": "^0.24.0",
         "@opentelemetry/tracing": "^0.24.0",

@@ -4,7 +4,7 @@ import {
     EmailRecipients,
 } from "@azure/communication-email";
 import common from "../shared/common";
-import encryption from "../shared/encryption";
+import encryption from "./encryptionManager";
 
 class EmailManager {
     private static instance: EmailManager;

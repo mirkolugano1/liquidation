@@ -1,12 +1,12 @@
 import crypto from "crypto";
-import common from "./common";
+import common from "../shared/common";
 
 import { SecretClient } from "@azure/keyvault-secrets";
 import { DefaultAzureCredential } from "@azure/identity";
 import { CryptographyClient } from "@azure/keyvault-keys";
 
-class Encryption {
-    private static instance: Encryption;
+class EncryptionManager {
+    private static instance: EncryptionManager;
 
     private encryptionPassword: string = "";
     private secretClient: any;
@@ -22,11 +22,11 @@ class Encryption {
         );
     }
 
-    public static getInstance(): Encryption {
-        if (!Encryption.instance) {
-            Encryption.instance = new Encryption();
+    public static getInstance(): EncryptionManager {
+        if (!EncryptionManager.instance) {
+            EncryptionManager.instance = new EncryptionManager();
         }
-        return Encryption.instance;
+        return EncryptionManager.instance;
     }
 
     async ensureEncryptionPassword() {
@@ -104,9 +104,10 @@ class Encryption {
         return decrypted.toString("utf8");
     }
 
-    async getSecretFromKeyVault(key: string) {
+    async getSecretFromKeyVault(key: string, allowNull: boolean = false) {
         try {
             const secret = await this.secretClient.getSecret(key);
+            if (!secret && !allowNull) return null;
             return secret?.value; // Return the secret value if needed
         } catch (error) {
             console.error("Error retrieving secret:", error);
@@ -120,4 +121,4 @@ class Encryption {
     }
 }
 
-export default Encryption.getInstance();
+export default EncryptionManager.getInstance();

@@ -1,5 +1,5 @@
 import _ from "lodash";
-import encryption from "./encryption";
+import encryption from "../managers/encryptionManager";
 import Big from "big.js";
 
 class Common {
@@ -10,23 +10,12 @@ class Common {
             process.env.LIQUIDATIONENVIRONMENT?.toLowerCase() == "prod";
     }
 
-    keyVaultEntries: string[] = [
-        "SQLUSERENCRYPTED",
-        "SQLPASSWORDENCRYPTED",
-        "ENCRYPTIONPWD",
-        "ALCHEMYKEYENCRYPTED",
-        "PRIVATEKEYENCRYPTED",
-        "CLOUDSTORAGEKEYENCRYPTED",
-        "COMMUNICATIONSERVICECONNECTIONSTRINGENCRYPTED",
-    ];
-
     public async getAppSetting(key: string) {
-        if (_.includes(this.keyVaultEntries, key)) {
-            return await encryption.getSecretFromKeyVault(key);
-        }
-
         if (!process.env.hasOwnProperty(key)) {
-            throw new Error("Missing required environment variable " + key);
+            const value = await encryption.getSecretFromKeyVault(key, true);
+            if (value) return value;
+            else
+                throw new Error("Missing required environment variable " + key);
         }
         return process.env[key];
     }

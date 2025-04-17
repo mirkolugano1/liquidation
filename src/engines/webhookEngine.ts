@@ -3,6 +3,7 @@ import sqlManager from "../managers/sqlManager";
 import { ethers } from "ethers";
 import logger from "../shared/logger";
 import Constants from "../shared/constants";
+import serviceBusManager from "../managers/serviceBusManager";
 
 class WebhookEngine {
     //#region variables
@@ -33,6 +34,10 @@ class WebhookEngine {
 
     async initialize() {
         if (this.isInitialized) return;
+
+        await serviceBusManager.listenToMessages(async (message: any) => {
+            console.log(message);
+        });
 
         this.ifaceBorrow = new ethers.Interface(
             Constants.ABIS.BORROW_EVENT_ABI

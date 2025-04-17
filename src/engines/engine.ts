@@ -1,6 +1,6 @@
 import common from "../shared/common";
-import _ from "lodash";
-import encryption from "../shared/encryption";
+import _, { chunk } from "lodash";
+import encryption from "../managers/encryptionManager";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
@@ -10,6 +10,7 @@ import { LoggingFramework, UserReserveType } from "../shared/enums";
 import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
 import emailManager from "../managers/emailManager";
+import serviceBusManager from "../managers/serviceBusManager";
 
 class Engine {
     private static instance: Engine;
@@ -1311,6 +1312,28 @@ class Engine {
     //#region Testing methods
 
     async doTest() {
+        let addresses = [];
+        for (let i = 0; i < 2000; i++) {
+            addresses.push("0x7a0e03c6860947525a3c9dbe24a10452ffc9f269");
+        }
+
+        await serviceBusManager.listenToMessages(async (message: any) => {
+            console.log(
+                message.applicationProperties.chunks,
+                message.applicationProperties.chunkIndex,
+                message.subject,
+                message.applicationProperties.testProperty.substring(0, 20)
+            );
+        });
+        await serviceBusManager.sendMessageToQueue(
+            "testSubject",
+            {
+                testProperty: addresses,
+            },
+            "testProperty"
+        );
+        await common.sleep(10000);
+        return;
         /*
         await this.updateReservesData();
         await this.updateTokensPrices();
