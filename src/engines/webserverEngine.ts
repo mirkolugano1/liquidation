@@ -5,7 +5,7 @@ import logger from "../shared/logger";
 import Constants from "../shared/constants";
 import serviceBusManager from "../managers/serviceBusManager";
 
-class WebhookEngine {
+class WebserverEngine {
     //#region variables
 
     //these are in the form of {network: [address1, address2, ...]}
@@ -20,14 +20,14 @@ class WebhookEngine {
 
     //#endregion variables
 
-    private static instance: WebhookEngine;
+    private static instance: WebserverEngine;
     private constructor() {}
 
-    public static getInstance(): WebhookEngine {
-        if (!WebhookEngine.instance) {
-            WebhookEngine.instance = new WebhookEngine();
+    public static getInstance(): WebserverEngine {
+        if (!WebserverEngine.instance) {
+            WebserverEngine.instance = new WebserverEngine();
         }
-        return WebhookEngine.instance;
+        return WebserverEngine.instance;
     }
 
     //#region Initialization
@@ -229,7 +229,7 @@ class WebhookEngine {
                                     JSON.stringify(
                                         this.batchAddressesList[key]
                                     ),
-                                "webhookEngineProcessBlock"
+                                "WebserverEngineProcessBlock"
                             );
 
                             this.batchAddressesListSql[key] = [];
@@ -247,4 +247,4 @@ class WebhookEngine {
     //#endregion Alchemy Webhook
 }
 
-export default WebhookEngine.getInstance();
+export default WebserverEngine.getInstance();
