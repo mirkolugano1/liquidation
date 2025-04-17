@@ -1,12 +1,12 @@
 import common from "../shared/common";
-import _, { chunk } from "lodash";
+import _ from "lodash";
 import encryption from "../managers/encryptionManager";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
-import { LoggingFramework, UserReserveType } from "../shared/enums";
+import { LoggingFramework } from "../shared/enums";
 import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
 import emailManager from "../managers/emailManager";
