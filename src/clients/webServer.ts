@@ -2,6 +2,7 @@ import webserverEngine from "../engines/webserverEngine";
 import dotenv from "dotenv";
 import express from "express";
 import logger from "../shared/logger";
+import engine from "../engines/engine";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -33,4 +34,5 @@ app.listen(port, "0.0.0.0", async () => {
     console.log("Web server is up. Initializing engine...");
     await webserverEngine.initialize();
     console.log("Engine Initialized. Ready to receive requests...");
+    engine.setCloseEvent();
 });

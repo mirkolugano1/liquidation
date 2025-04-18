@@ -1,6 +1,11 @@
 import common from "../shared/common";
 import encryption from "./encryptionManager";
-import { ServiceBusClient, ServiceBusMessage } from "@azure/service-bus";
+import {
+    ServiceBusClient,
+    ServiceBusMessage,
+    ServiceBusReceiver,
+    ServiceBusSender,
+} from "@azure/service-bus";
 
 import dotenv from "dotenv";
 import logger from "../shared/logger";
@@ -11,7 +16,8 @@ dotenv.config();
 class ServiceBusManager {
     private static instance: ServiceBusManager;
     private serviceBusClient: ServiceBusClient | null = null;
-    private serviceBusReceiver: any = null;
+    private serviceBusReceiver: ServiceBusReceiver | null = null;
+    private serviceBusSender: ServiceBusSender | null = null;
     private queueName: string = "liquidationqueue";
 
     public static getInstance(): ServiceBusManager {
@@ -36,6 +42,29 @@ class ServiceBusManager {
         this.serviceBusClient = new ServiceBusClient(connectionString);
     }
 
+    async initializeSender() {
+        if (this.serviceBusSender) return;
+        await this.initialize();
+        this.serviceBusSender = this.serviceBusClient!.createSender(
+            this.queueName
+        );
+    }
+
+    async close() {
+        if (this.serviceBusSender) {
+            await this.serviceBusSender.close();
+            this.serviceBusSender = null;
+        }
+        if (this.serviceBusReceiver) {
+            await this.serviceBusReceiver.close();
+            this.serviceBusReceiver = null;
+        }
+        if (this.serviceBusClient) {
+            await this.serviceBusClient.close();
+            this.serviceBusClient = null;
+        }
+    }
+
     async initializeReceiver() {
         if (this.serviceBusReceiver) return;
         await this.initialize();
@@ -49,8 +78,9 @@ class ServiceBusManager {
 
     async listenToMessages(processMessageCallback: any = null) {
         await this.initializeReceiver();
-        this.serviceBusReceiver.subscribe({
+        this.serviceBusReceiver!.subscribe({
             processMessage: async (message: ServiceBusMessage) => {
+                console.log("Received message:");
                 if (processMessageCallback)
                     await processMessageCallback(message);
             },
@@ -63,39 +93,15 @@ class ServiceBusManager {
     async sendMessageToQueue(
         subject: string,
         properties: any,
-        chunkPropertyName: string | null = null,
         body: string | null = null
     ) {
-        await this.initialize();
-        const sender = this.serviceBusClient!.createSender(this.queueName);
-        if (chunkPropertyName) {
-            const cleanedProperties = _.omit(properties, chunkPropertyName);
-            const chunks = _.chunk(
-                properties[chunkPropertyName],
-                Constants.CHUNK_SIZE / 2
-            );
-            for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-                const message = {
-                    body: body,
-                    applicationProperties: {
-                        ...cleanedProperties,
-                        [chunkPropertyName]: chunk.join(","),
-                        chunks: chunks.length,
-                        chunkIndex: i,
-                    },
-                    subject: subject,
-                };
-                await sender.sendMessages(message);
-            }
-        } else {
-            const message = {
-                body: body,
-                applicationProperties: properties,
-                subject: subject,
-            };
-            await sender.sendMessages(message);
-        }
+        await this.initializeSender();
+        const message = {
+            body: body,
+            applicationProperties: properties,
+            subject: subject,
+        };
+        await this.serviceBusSender!.sendMessages(message);
     }
 }
 

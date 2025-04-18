@@ -155,6 +155,15 @@ class Engine {
 
     //#region Helper methods
 
+    setCloseEvent() {
+        process.on("SIGINT", async () => {
+            console.log("Closing...");
+            await sqlManager.closePool();
+            await serviceBusManager.close();
+            process.exit(0);
+        });
+    }
+
     calculateTotalDebtBaseForAddress(address: string, network: Network) {
         const networkInfo = this.getAaveNetworkInfo(network);
         const reserves = _.values(networkInfo.reserves);
@@ -762,7 +771,9 @@ class Engine {
                         o.variabledebttokenaddress
                     }', '${o.stabledebttokenaddress}', '${
                         o.totalstabledebt
-                    }', '${o.totalvariabledebt}', '${o.ltv}', ${index})`;
+                    }', '${o.totalvariabledebt}', '${
+                        o.ltv
+                    }', ${index}, GETUTCDATE())`;
                 }
             );
 
@@ -771,7 +782,7 @@ class Engine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting)
+                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
                     ON (target.address = source.address AND target.network = source.network)
                     WHEN MATCHED THEN
                     UPDATE SET                        
@@ -796,18 +807,16 @@ class Engine {
                         totalstabledebt = source.totalstabledebt,
                         totalvariabledebt = source.totalvariabledebt,
                         ltv = source.ltv,
-                        sorting = source.sorting
+                        sorting = source.sorting,
+                        modifiedon = source.modifiedon
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting)
-                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv, source.sorting);
+                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
+                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv, source.sorting, source.modifiedon);
                 `;
 
-                //console.log(sqlQuery);
                 await sqlManager.execQuery(sqlQuery);
             }
         }
-
-        await logger.log("Ended updateReservesData", "functionAppExecution");
     }
 
     /**
@@ -845,17 +854,12 @@ class Engine {
             let offset = 0;
             do {
                 dbAddressesArr = await sqlManager.execQuery(
-                    `SELECT TOP 20 * FROM addresses WHERE network = '${key}'
+                    `SELECT * FROM addresses WHERE network = '${key}'
                      ORDER BY addedon OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
                 `
                 );
                 if (dbAddressesArr.length == 0) break;
-                console.log(`Updated ${offset} addresses`);
                 offset += Constants.CHUNK_SIZE;
-                console.log(`Updating next ${Constants.CHUNK_SIZE} addresses`);
-
-                if (offset > 1000) break;
-
                 const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
                 //update all reserves for all users. I do it before getting the userAccountData,
@@ -885,6 +889,7 @@ class Engine {
                             ? `
                 UPDATE addresses 
                 SET 
+                    modifiedon = GETUTCDATE(),
                     healthfactor = CASE
                         {0}
                     ELSE healthfactor
@@ -1034,9 +1039,9 @@ class Engine {
                             ${_.map(
                                 userReservesObjects,
                                 (o) =>
-                                    `('${o.userAddress}', '${o.tokenAddress}', '${key}', '${o.currentATokenBalance}', '${o.currentStableDebt}', '${o.currentVariableDebt}', '${o.principalStableDebt}', '${o.scaledVariableDebt}', '${o.stableBorrowRate}', '${o.liquidityRate}', '${o.stableRateLastUpdated}', ${o.usageAsCollateralEnabled})`
+                                    `('${o.userAddress}', '${o.tokenAddress}', '${key}', '${o.currentATokenBalance}', '${o.currentStableDebt}', '${o.currentVariableDebt}', '${o.principalStableDebt}', '${o.scaledVariableDebt}', '${o.stableBorrowRate}', '${o.liquidityRate}', '${o.stableRateLastUpdated}', ${o.usageAsCollateralEnabled}, GETUTCDATE())`
                             ).join(",")}
-                        ) AS source (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled)
+                        ) AS source (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled, modifiedon)
                         ON (target.address = source.address AND target.tokenaddress = source.tokenaddress AND target.network = source.network)
                         WHEN MATCHED THEN
                         UPDATE SET                        
@@ -1048,10 +1053,11 @@ class Engine {
                             stableborrowrate = source.stableborrowrate,
                             liquidityrate = source.liquidityrate,
                             stableratelastupdated = source.stableratelastupdated,
-                            usageascollateralenabled = source.usageascollateralenabled                                      
+                            usageascollateralenabled = source.usageascollateralenabled,
+                            modifiedon = source.modifiedon
                             WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled)
-                        VALUES (source.address, source.tokenaddress, source.network, source.currentatokenbalance, source.currentstabledebt, source.currentvariabledebt, source.principalstabledebt, source.scaledvariabledebt, source.stableborrowrate, source.liquidityrate, source.stableratelastupdated, source.usageascollateralenabled);
+                        INSERT (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled, modifiedon)
+                        VALUES (source.address, source.tokenaddress, source.network, source.currentatokenbalance, source.currentstabledebt, source.currentvariabledebt, source.principalstabledebt, source.scaledvariabledebt, source.stableborrowrate, source.liquidityrate, source.stableratelastupdated, source.usageascollateralenabled, source.modifiedon);
                             `;
 
                 sqlQueries.push(sqlQuery);
@@ -1100,7 +1106,7 @@ class Engine {
         await this.initializeReserves(network);
         //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
         const allAddressesDb = await sqlManager.execQuery(
-            `SELECT * FROM addresses WHERE healthfactor < 2;`
+            `SELECT * FROM addresses WHERE healthfactor < 2 ORDER BY healthfactor;`
         );
 
         if (allAddressesDb.length == 0) {
@@ -1261,7 +1267,7 @@ class Engine {
 
             if (reservesDbUpdate.length > 0) {
                 let reservesSQLList: string[] = _.map(reservesDbUpdate, (o) => {
-                    return `('${o.address}', '${key}', ${o.price})`;
+                    return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
                 });
 
                 if (reservesSQLList.length > 0) {
@@ -1269,10 +1275,11 @@ class Engine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, network, price)
+                    ) AS source (address, network, price, pricemodifiedon)
                     ON (target.address = source.address AND target.network = source.network)
                     WHEN MATCHED THEN
-                    UPDATE SET                        
+                    UPDATE SET                    
+                        pricemodifiedon = source.pricemodifiedon,    
                         price = source.price;                        
                         `;
 
@@ -1285,8 +1292,6 @@ class Engine {
                 }
             }
         }
-
-        await logger.log("End updateTokensPrices");
     }
 
     /**
@@ -1302,7 +1307,7 @@ class Engine {
             context
         );
         await logger.log("Started function deleteOldTableLogs");
-        const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETDATE())`;
+        const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE())`;
         await sqlManager.execQuery(query);
         await logger.log("Ended function deleteOldTableLogs");
     }
@@ -1313,26 +1318,21 @@ class Engine {
 
     async doTest() {
         let addresses = [];
-        for (let i = 0; i < 2000; i++) {
+        for (let i = 0; i < 1000; i++) {
             addresses.push("0x7a0e03c6860947525a3c9dbe24a10452ffc9f269");
         }
 
         await serviceBusManager.listenToMessages(async (message: any) => {
-            console.log(
-                message.applicationProperties.chunks,
-                message.applicationProperties.chunkIndex,
-                message.subject,
-                message.applicationProperties.testProperty.substring(0, 20)
-            );
+            console.log(message.applicationProperties);
         });
-        await serviceBusManager.sendMessageToQueue(
-            "testSubject",
-            {
-                testProperty: addresses,
-            },
-            "testProperty"
-        );
-        await common.sleep(10000);
+
+        for (let i = 0; i < 4; i++) {
+            await serviceBusManager.sendMessageToQueue("testSubject", {
+                otherProperty: "otherProperty" + i,
+            });
+            await common.sleep(1000);
+        }
+        await common.sleep(100000);
         return;
         /*
         await this.updateReservesData();

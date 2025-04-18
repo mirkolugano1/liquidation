@@ -30,10 +30,10 @@ class Logger {
             .setup()
             .setAutoDependencyCorrelation(true)
             .setAutoCollectRequests(true)
-            .setAutoCollectPerformance(true, true)
+            .setAutoCollectPerformance(false, false)
             .setAutoCollectExceptions(true)
             .setAutoCollectDependencies(true)
-            .setAutoCollectConsole(true)
+            .setAutoCollectConsole(false)
             .setUseDiskRetryCaching(true)
             .setSendLiveMetrics(false)
             .start();
@@ -193,52 +193,42 @@ class Logger {
         logLevel: string = "info",
         logType: LogType = LogType.Trace
     ) {
-        if (typeof log !== "string") {
-            log = JSON.stringify(log);
-        }
         const date = new Date();
+
+        // Prepare AI parameters
         const aiParameters = {
-            log: log,
+            log: typeof log === "string" ? log : JSON.stringify(log),
             env: process.env.LIQUIDATIONENVIRONMENT,
             clientAppName: this.clientAppName,
         };
 
-        let dbParameters: any = Object.assign(
-            {
-                logLevel: logLevel,
-                timestamp: date.toISOString(),
-            },
-            aiParameters
-        );
+        // Prepare DB parameters
+        const dbParameters = {
+            logLevel: logLevel,
+            timestamp: date.toISOString(),
+            log: typeof log === "string" ? log : log, // Keep raw log if it's an object
+            env: aiParameters.env,
+            clientAppName: aiParameters.clientAppName,
+        };
 
-        console.log("Logger", dbParameters);
+        // Avoid multi-line logs in console
+        console.log("Logger", JSON.stringify(dbParameters));
 
+        // Application Insights logging
         if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
-            if (!this.applicationInsightsClient)
+            if (!this.applicationInsightsClient) {
                 throw new Error("Application Insights client not initialized");
+            }
 
             if (this.context) {
-                switch (logLevel) {
-                    case "error":
-                        this.context.error(log);
-                        break;
-                    case "warning":
-                        this.context.warn(log);
-                        break;
-                    case "info":
-                        this.context.info(log);
-                        break;
-                    case "debug":
-                        this.context.debug(log);
-                        break;
-                    case "trace":
-                        this.context.trace(log);
-                        break;
-                    default:
-                        this.context.log(log);
-                        break;
-                }
+                // Use context logging for Azure Functions
+                this.context.log({
+                    log,
+                    logLevel,
+                    env: aiParameters.env,
+                });
             } else {
+                // Use trackTrace or trackEvent for Application Insights
                 if (logType === LogType.Event) {
                     this.applicationInsightsClient.trackEvent({
                         name: logLevel,
@@ -246,13 +236,18 @@ class Logger {
                     });
                 } else {
                     this.applicationInsightsClient.trackTrace({
-                        message: logLevel,
+                        message:
+                            typeof log === "string" ? log : JSON.stringify(log),
                         properties: aiParameters,
                     });
                 }
             }
         } else {
-            const query = `INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname) VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)`;
+            // Database logging
+            const query = `
+            INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname)
+            VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)
+        `;
             await sqlManager.execQuery(query, dbParameters);
         }
     }
