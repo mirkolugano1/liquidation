@@ -3,10 +3,10 @@ import { app } from "@azure/functions";
 import sqlManager from "../managers/sqlManager";
 import serviceBusManager from "../managers/serviceBusManager";
 
-app.timer("deleteOldTableLogsFunction", {
+app.timer("deleteOldTablesEntriesFunction", {
     schedule: "5 0 * * *", // Cron expression for every day at midnight
     handler: async (myTimer, context) => {
-        await engine.deleteOldTableLogs(context);
+        await engine.deleteOldTablesEntries(context);
     },
 });
 

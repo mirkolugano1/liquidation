@@ -1,5 +1,6 @@
 import common from "../shared/common";
 import _ from "lodash";
+import moment from "moment";
 import encryption from "../managers/encryptionManager";
 import sqlManager from "../managers/sqlManager";
 import { ethers, formatUnits } from "ethers";
@@ -10,7 +11,7 @@ import { LoggingFramework } from "../shared/enums";
 import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
 import emailManager from "../managers/emailManager";
-import serviceBusManager from "../managers/serviceBusManager";
+import axios from "axios";
 
 class Engine {
     private static instance: Engine;
@@ -24,6 +25,39 @@ class Engine {
     }
 
     //#region Initialization
+
+    async initializeWebServer() {
+        if (this.isWebServerInitialized) return;
+
+        this.webappUrl = await common.getAppSetting("WEBAPPURL");
+
+        this.ifaceBorrow = new ethers.Interface(
+            Constants.ABIS.BORROW_EVENT_ABI
+        );
+        this.ifaceDeposit = new ethers.Interface(
+            Constants.ABIS.DEPOSIT_EVENT_ABI
+        );
+
+        await this.initializeAlchemy();
+        await this.initializeAddresses();
+        await this.initializeReserves();
+        await this.initializeUsersReserves();
+
+        this.isWebServerInitialized = true;
+    }
+
+    async initializeAddresses() {
+        const initAddresses = _.map(
+            await sqlManager.execQuery("SELECT * FROM addresses"),
+            "address"
+        );
+
+        for (const address of initAddresses) {
+            if (!this.aave[address.network].hasOwnProperty("addresses"))
+                this.aave[address.network] = [];
+            this.aave[address.network].push(address.address);
+        }
+    }
 
     async initializeUsersReserves(network: Network | null = null) {
         if (!this.aave) throw new Error("Aave object not initialized");
@@ -151,15 +185,29 @@ class Engine {
     aave: any;
     contractInterfaces: any = {};
 
+    webappUrl: string = "";
+    isWebServerInitialized: boolean = false;
+    batchAddressesTreshold: number = 25;
+
+    ifaceBorrow: any;
+    ifaceDeposit: any;
+
     //#endregion Variables
 
     //#region Helper methods
+
+    normalizeAddress(address: string) {
+        if (!address) return "";
+        const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
+        const firstNonZeroIndex = addressWithoutPrefix.search(/[^0]/); // Find the index of the first non-zero character
+        const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end
+        return "0x" + normalized.padStart(40, "0"); // Ensure the address is 40 characters long by padding with zeros if necessary
+    }
 
     setCloseEvent() {
         process.on("SIGINT", async () => {
             console.log("Closing...");
             await sqlManager.closePool();
-            await serviceBusManager.close();
             process.exit(0);
         });
     }
@@ -199,6 +247,295 @@ class Engine {
             ? aaveNetworkInfo.network.toString()
             : aaveNetworkInfo.toString();
     }
+
+    async saveChanges(type: string, network: string, changes: any = null) {
+        const timestamp = moment.utc().format("YYYY-MM-DD HH:mm:ss");
+        const query = `INSERT INTO changes (network, timestamp, data, type) VALUES ('${network}', '${timestamp}', '${JSON.stringify(
+            changes
+        )}', '${type}')`;
+        await sqlManager.execQuery(query);
+
+        //notify the webapp about the changes
+        await this.callLoadChanges(timestamp, network);
+    }
+
+    async callLoadChanges(timestamp: string, network: string) {
+        try {
+            await axios.get(
+                `${this.webappUrl}/loadChanges?timestamp=${timestamp}&network=${network}`
+            );
+        } catch (error) {
+            await logger.log(`Error calling loadChanges: ${error}`, "error");
+        }
+    }
+
+    async loadChanges(req: any) {
+        const timestamp = req.query?.timestamp;
+        let network = req.query.network ?? "eth-mainnet";
+
+        const changes = await sqlManager.execQuery(`
+            SELECT * FROM changes WHERE network = '${network}' AND timestamp >= '${timestamp}' ORDER BY timestamp DESC`);
+
+        let alreadyUpdatedReserves = false;
+        let alreadyUpdatedUsersReserves = false;
+        let alreadyUpdatedPrices = false;
+        if (changes.length > 0) {
+            for (const change of changes) {
+                switch (change.type) {
+                    case "updateReserves":
+                        if (alreadyUpdatedReserves) continue;
+                        await this.initializeReserves(network);
+                        alreadyUpdatedReserves = true;
+                        break;
+                    case "updateUsersReserves":
+                        if (alreadyUpdatedUsersReserves) continue;
+                        await this.initializeUsersReserves(network);
+                        alreadyUpdatedUsersReserves = true;
+                        break;
+                    case "updatePrices":
+                        if (alreadyUpdatedPrices) continue;
+                        await this.updatePrices(change, network);
+                        alreadyUpdatedPrices = true;
+                    default:
+                        break;
+                }
+            }
+        }
+    }
+
+    updatePrices(reservesChangedCheck: any, network: string) {
+        const networkInfo = this.aave[network];
+        const addressesDb = this.aave[network].addresses;
+
+        //define object (map) of user assets that have the changed reserves either as collateral or as debt
+        //userAssets: {address: {collateral: [reserves], debt: [reserves]}}
+        let userAssets: any = {};
+
+        //loop through loaded addresses from DB
+        for (const addressRecord of addressesDb) {
+            //loop through reserves
+            for (let reserveChangedCheck of reservesChangedCheck) {
+                //if reserve price has not changed, we skip it
+                if (reserveChangedCheck.check != "none") {
+                    if (reserveChangedCheck.check == "debt") {
+                        if (!userAssets.hasOwnProperty(addressRecord.address))
+                            userAssets[addressRecord.address] = {};
+                        if (
+                            !userAssets[addressRecord.address].hasOwnProperty(
+                                "debt"
+                            )
+                        )
+                            userAssets[addressRecord.address].debt = [];
+
+                        userAssets[addressRecord.address].debt.push(
+                            reserveChangedCheck.reserve
+                        );
+                    } else if (reserveChangedCheck.check == "collateral") {
+                        if (!userAssets.hasOwnProperty(addressRecord.address))
+                            userAssets[addressRecord.address] = {};
+                        if (
+                            !userAssets[addressRecord.address].hasOwnProperty(
+                                "collateral"
+                            )
+                        )
+                            userAssets[addressRecord.address].collateral = [];
+
+                        userAssets[addressRecord.address].collateral.push(
+                            reserveChangedCheck.reserve
+                        );
+                    }
+                }
+            }
+        }
+
+        //get list of addresses for which to check health factor from the userAssets object
+        const addressesToCheck = Object.keys(userAssets);
+
+        this.checkLiquidateAddresses(
+            addressesToCheck,
+            networkInfo.network,
+            userAssets
+        );
+    }
+
+    //#region Alchemy Webhook "processAaveEvent"
+
+    async processAaveEvent(req: any, res: any) {
+        if (!this.isWebServerInitialized) return;
+        let block = req.body.event?.data?.block;
+        let network = req.query.network ?? "eth-mainnet";
+        await this.processBlock(block, network);
+    }
+
+    async processBlock(block: any, network: string) {
+        const key = network;
+        for (let log of block.logs) {
+            let topics = log.topics;
+            let eventHash = topics[0];
+            let addressesToAdd: string[] = [];
+            let from = log.transaction?.from?.address;
+
+            switch (eventHash) {
+                //Deposit
+                case "0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951":
+                    const decodedLogDeposit = this.ifaceDeposit.parseLog(log);
+                    const userDeposit = decodedLogDeposit.args.user;
+                    if (userDeposit) addressesToAdd.push(userDeposit);
+                    if (log.topics.length > 3)
+                        addressesToAdd.push(log.topics[3]); //onBehalfOf The beneficiary of the deposit, receiving the aTokens
+                    break;
+
+                //Borrow
+                case "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b":
+                    const decodedLogBorrow = this.ifaceBorrow.parseLog(log);
+                    const userBorrow = decodedLogBorrow.args.user;
+                    if (userBorrow) addressesToAdd.push(userBorrow);
+                    break;
+
+                //Repay
+                case "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051":
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The beneficiary of the repayment, getting his debt reduced
+                    if (log.topics.length > 3)
+                        addressesToAdd.push(log.topics[3]); //repayer The address of the user initiating the repay(), providing the funds
+                    break;
+
+                case "0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61": //Supply
+                case "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd": //ReserveUsedAsCollateralDisabled
+                case "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2": //ReserveUsedAsCollateralEnabled
+                case "0x9f439ae0c81e41a04d3fdfe07aed54e6a179fb0db15be7702eb66fa8ef6f5300": //RebalanceStableBorrowRate
+                case "0xea368a40e9570069bb8e6511d668293ad2e1f03b0d982431fd223de9f3b70ca6": //Swap
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The address of the user
+                    break;
+
+                //Withdraw
+                case "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7":
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The address initiating the withdrawal, owner of aTokens
+                    if (log.topics.length > 3)
+                        addressesToAdd.push(log.topics[3]); //to Address that will receive the underlying
+                    break;
+
+                default:
+                    return;
+            }
+
+            if (addressesToAdd.length > 0) {
+                //the "from" address is the one that initiated the transaction
+                //and should be added only if it was part of one of the relevant events
+                if (from) addressesToAdd.push(from);
+
+                //normalize addresses
+                let normalizedAddressesToAdd = _.map(
+                    addressesToAdd,
+                    (address) => this.normalizeAddress(address)
+                );
+
+                //initialize the batchAddressesListSql array for this network
+                //if it doesn't exist yet
+                if (!this.aave[key].hasOwnProperty("batchAddressesListSql")) {
+                    this.aave[key].batchAddressesListSql = [];
+                }
+                if (!this.aave[key].hasOwnProperty("batchAddressesList")) {
+                    this.aave[key].batchAddressesList[key] = [];
+                }
+
+                //Remove empty addresses or addresses already present in the DB or in the
+                //current batch of addresses to be saved
+                const uniqueAddresses: string[] = _.reject(
+                    _.uniq(normalizedAddressesToAdd),
+                    (normalizedAddress) => {
+                        return (
+                            _.isEmpty(normalizedAddress) ||
+                            _.includes(
+                                this.aave[key].addresses,
+                                normalizedAddress
+                            ) ||
+                            _.includes(
+                                this.aave[key].batchAddressesList,
+                                normalizedAddress
+                            )
+                        );
+                    }
+                );
+
+                //if there are any unique addresses to add, get their health factor and user configuration
+                if (uniqueAddresses.length > 0) {
+                    let addressesListSql: string[] = [];
+                    let addressesList: string[] = [];
+
+                    for (const address of uniqueAddresses) {
+                        addressesListSql.push(
+                            `('${address}', '${key}', null, GETDATE())`
+                        );
+                        addressesList.push(address);
+                    }
+
+                    //if there are addresses with healthFactor < 2
+                    //add them to the batchAddressesListSql array for this network
+                    //to be monitored and saved in the database
+                    if (addressesListSql.length > 0) {
+                        if (
+                            !this.aave[key].hasOwnProperty(
+                                "batchAddressesListSql"
+                            )
+                        ) {
+                            this.aave[key].batchAddressesListSql = [];
+                        }
+                        if (!this.aave[key].hasOwnProperty("addresses"))
+                            this.aave[key].addresses = [];
+
+                        this.aave[key].batchAddressesListSql = _.union(
+                            this.aave[key].batchAddressesListSql,
+                            addressesListSql
+                        );
+                        this.aave[key].batchAddressesList = _.union(
+                            this.aave[key].batchAddressesList,
+                            addressesList
+                        );
+
+                        if (
+                            this.aave[key].batchAddressesListSql.length >=
+                            this.batchAddressesTreshold
+                        ) {
+                            let query = `
+                            MERGE INTO addresses AS target
+                            USING (VALUES 
+                                ${this.aave[key].batchAddressesList.join(",")}
+                            ) AS source (address, network, healthFactor, addedon)
+                            ON (target.address = source.address AND target.network = source.network)
+                            WHEN NOT MATCHED BY TARGET THEN
+                                INSERT (address, network, healthFactor, addedon)
+                                VALUES (source.address, source.network, source.healthFactor, source.addedon);
+                        `;
+
+                            await sqlManager.execQuery(query);
+
+                            await logger.log(
+                                "Addresses added to the database: " +
+                                    JSON.stringify(
+                                        this.aave[key].batchAddressesList
+                                    ),
+                                "WebserverEngineProcessBlock"
+                            );
+
+                            this.aave[key].batchAddressesListSql = [];
+                            this.aave[key].batchAddressesList = [];
+                            this.aave[key].addresses = _.uniq(
+                                _.union(
+                                    this.aave[key].addresses,
+                                    uniqueAddresses
+                                )
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    //#endregion Alchemy Webhook
 
     /**
      * TODO Decide which asset pair to liquidate for a given user
@@ -815,6 +1152,8 @@ class Engine {
                 `;
 
                 await sqlManager.execQuery(sqlQuery);
+
+                await this.saveChanges("updateReserves", key);
             }
         }
     }
@@ -962,6 +1301,8 @@ class Engine {
                     }
                 }
             } while (dbAddressesArr.length > 0);
+
+            await this.saveChanges("updateUsersReserves", key);
         }
 
         await logger.log(
@@ -1198,73 +1539,6 @@ class Engine {
                 });
             }
 
-            //filter the addresses from the DB that have the changed reserves either as collateral or as debt
-            if (shouldPerformCheck) {
-                //define object (map) of user assets that have the changed reserves either as collateral or as debt
-                //userAssets: {address: {collateral: [reserves], debt: [reserves]}}
-                let userAssets: any = {};
-
-                //loop through loaded addresses from DB
-                for (const addressRecord of addressesDb) {
-                    //loop through reserves
-                    for (let reserveChangedCheck of reservesChangedCheck) {
-                        //if reserve price has not changed, we skip it
-                        if (reserveChangedCheck.check != "none") {
-                            if (reserveChangedCheck.check == "debt") {
-                                if (
-                                    !userAssets.hasOwnProperty(
-                                        addressRecord.address
-                                    )
-                                )
-                                    userAssets[addressRecord.address] = {};
-                                if (
-                                    !userAssets[
-                                        addressRecord.address
-                                    ].hasOwnProperty("debt")
-                                )
-                                    userAssets[addressRecord.address].debt = [];
-
-                                userAssets[addressRecord.address].debt.push(
-                                    reserveChangedCheck.reserve
-                                );
-                            } else if (
-                                reserveChangedCheck.check == "collateral"
-                            ) {
-                                if (
-                                    !userAssets.hasOwnProperty(
-                                        addressRecord.address
-                                    )
-                                )
-                                    userAssets[addressRecord.address] = {};
-                                if (
-                                    !userAssets[
-                                        addressRecord.address
-                                    ].hasOwnProperty("collateral")
-                                )
-                                    userAssets[
-                                        addressRecord.address
-                                    ].collateral = [];
-
-                                userAssets[
-                                    addressRecord.address
-                                ].collateral.push(reserveChangedCheck.reserve);
-                            }
-                        }
-                    }
-                }
-
-                //get list of addresses for which to check health factor from the userAssets object
-                const addressesToCheck = Object.keys(userAssets);
-
-                this.checkLiquidateAddresses(
-                    addressesToCheck,
-                    aaveNetworkInfo.network,
-                    userAssets
-                );
-            } else {
-                await logger.log("No price changes detected");
-            }
-
             if (reservesDbUpdate.length > 0) {
                 let reservesSQLList: string[] = _.map(reservesDbUpdate, (o) => {
                     return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
@@ -1284,6 +1558,12 @@ class Engine {
                         `;
 
                     await sqlManager.execQuery(sqlQuery);
+
+                    await this.saveChanges(
+                        "updatePrices",
+                        key,
+                        reservesDbUpdate
+                    );
                 } else {
                     //we should actually never come here, but just in case
                     throw new Error(
@@ -1300,193 +1580,26 @@ class Engine {
      *
      * @param context the InvocationContext of the function app (for Application Insights logging)
      */
-    async deleteOldTableLogs(context: InvocationContext) {
+    async deleteOldTablesEntries(context: InvocationContext) {
         logger.initialize(
-            "function:deleteOldTableLogs",
+            "function:deleteOldTablesEntries",
             LoggingFramework.ApplicationInsights,
             context
         );
-        await logger.log("Started function deleteOldTableLogs");
-        const query = `DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE())`;
+        await logger.log("Started function deleteOldTablesEntries");
+        const query = `
+            DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());
+            DELETE FROM dbo.changes WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());
+        `;
         await sqlManager.execQuery(query);
-        await logger.log("Ended function deleteOldTableLogs");
+        await logger.log("Ended function deleteOldTablesEntries");
     }
 
     //#endregion Scheduled azure functions
 
     //#region Testing methods
 
-    async doTest() {
-        let addresses = [];
-        for (let i = 0; i < 1000; i++) {
-            addresses.push("0x7a0e03c6860947525a3c9dbe24a10452ffc9f269");
-        }
-
-        await serviceBusManager.listenToMessages(async (message: any) => {
-            console.log(message.applicationProperties);
-        });
-
-        for (let i = 0; i < 4; i++) {
-            await serviceBusManager.sendMessageToQueue("testSubject", {
-                otherProperty: "otherProperty" + i,
-            });
-            await common.sleep(1000);
-        }
-        await common.sleep(100000);
-        return;
-        /*
-        await this.updateReservesData();
-        await this.updateTokensPrices();
-        */
-        //await this.updateUserAccountDataAndUserReserves();
-
-        await this.initializeAlchemy();
-        await this.initializeReserves();
-        await this.initializeUsersReserves();
-
-        const network: Network = Network.ARB_MAINNET;
-        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-
-        const sql =
-            "SELECT top 20 * FROM dbo.addresses where address = '0x7a0e03c6860947525a3c9dbe24a10452ffc9f269' ORDER BY addedon;";
-        const result: any = await sqlManager.execQuery(sql);
-
-        const ur = aaveNetworkInfo.usersReserves[result[0].address];
-        const urt = Object.keys(ur);
-        for (const reserveKey in urt) {
-            const reserve = ur[urt[reserveKey]];
-            if (
-                reserve.currentstabledebt > 0 ||
-                reserve.currentvariabledebt > 0
-            ) {
-                console.log("User reserve data: ", reserve);
-            }
-        }
-
-        const tdb = this.calculateTotalDebtBaseForAddress(
-            result[0].address,
-            network
-        );
-
-        const poolDataProviderContract = this.getContract(
-            aaveNetworkInfo.addresses.poolDataProvider,
-            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
-            network
-        );
-
-        for (const reserve in aaveNetworkInfo.reserves) {
-            const reserveAddress = aaveNetworkInfo.reserves[reserve].address;
-            const userReserveData =
-                await poolDataProviderContract.getUserReserveData(
-                    reserveAddress,
-                    result[0].address
-                );
-            if (userReserveData[1] > 0 || userReserveData[2] > 0)
-                console.log("User reserve data: ", userReserveData);
-        }
-
-        const poolContract = this.getContract(
-            aaveNetworkInfo.addresses.pool,
-            Constants.ABIS.POOL_ABI,
-            network
-        );
-
-        const userAccountData = await poolContract.getUserAccountData(
-            result[0].address
-        );
-
-        console.log(
-            "total debt base from user account data: ",
-            userAccountData[1]
-        );
-
-        const totalCollateralBase = result[0].totalcollateralbase;
-        const currentLiquidationThreshold = userAccountData[3];
-        const totalDebtBase = result[0].totaldebtbase;
-        const healthFactor = result[0].healthfactor;
-
-        const calculatedHealthFactor = this.getHealthFactorOffChain(
-            totalCollateralBase,
-            totalDebtBase,
-            currentLiquidationThreshold
-        );
-        console.log("Calculated HF: ", calculatedHealthFactor);
-        console.log("HF from DB: ", healthFactor);
-
-        const hfFromChain = await this.getHealthFactorFromUserAccountData(
-            userAccountData
-        );
-        console.log("HF from chain: ", hfFromChain);
-        /*
-        const network: Network = Network.ARB_MAINNET;
-        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-
-        const totalDebtCalculated = this.calculateTotalDebtBaseForAddress(
-            address,
-            network
-        );
-
-        console.log(totalDebtCalculated);
-
-        const hfCalculated =
-            (result.totalcollateralbase * result.currentliquidationthreshold) /
-            result.totaldebtbase;
-        console.log("HF calculated: ", hfCalculated);
-        console.log("HF from DB: ", result.healthfactor);
-
-        const poolDataProviderContract = this.getContract(
-            aaveNetworkInfo.addresses.poolDataProvider,
-            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
-            network
-        );
-
-        const poolContract = this.getContract(
-            aaveNetworkInfo.addresses.pool,
-            Constants.ABIS.POOL_ABI,
-            network
-        );
-
-        const userAccountData = await poolContract.getUserAccountData(address);
-        //console.log(userAccountData);
-
-        const hfFromChain =
-            this.getHealthFactorFromUserAccountData(userAccountData);
-        console.log("HF from chain: ", hfFromChain);
-
-        
-        let reservesKeys = _.keys(aaveNetworkInfo.reserves);
-        let multicallUserReserveDataParameters: any[] = [];
-        multicallUserReserveDataParameters.push([
-            reservesKeys[0],
-            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55",
-        ]);
-
-        const results = await this.multicall(
-            aaveNetworkInfo.addresses.poolDataProvider,
-            multicallUserReserveDataParameters,
-            "POOL_DATA_PROVIDER_ABI",
-            "getUserReserveData",
-            aaveNetworkInfo.network
-        );
-
-        console.log(results);
-
-        const addresses = [
-            "0x3a2f790e3ff03492e34bcd7ce557e76b0cc17d55",
-
-            "0x803e113d2c53e3cd8777e52b027920315ed1b5e0",
-            "0xbbc233f5422bbeb0be4d5fc51f324aeb4a028eb1",
-            "0x21c7ff5562979c4ee7db6adec86cb3765083002a",
-            "0x767522b55c5760ae16173b620fdf20186e883486",
-            "0x5dbb8becb93e9ec3ada7c70f522aa798bb7fd882",
-            "0x76328f7620f4de1d19bbbd29db34c79d663a5217",
-            "0xc1cf20874d72fe452fd5982917fe0ab209305121",
-            "0x0604e652a188931e245717d45feb26f583b92908",
-            "0x280a9ee48968d3b2b7fab15c8ee09d7205675f76",
-        ];
-        */
-    }
-
+    async doTest() {}
     //#endregion Testing methods
 }
 

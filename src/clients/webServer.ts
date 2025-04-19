@@ -1,4 +1,3 @@
-import webserverEngine from "../engines/webserverEngine";
 import dotenv from "dotenv";
 import express from "express";
 import logger from "../shared/logger";
@@ -26,13 +25,18 @@ app.get("/healthcheck", (req, res) => {
     res.status(200).send("Healthy");
 });
 
+app.get("/loadChanges", async (req, res) => {
+    await engine.loadChanges(req);
+    res.status(200);
+});
+
 app.post("/aaveEvent", async (req: any, res: any) => {
-    await webserverEngine.processAaveEvent(req, res);
+    await engine.processAaveEvent(req, res);
 });
 
 app.listen(port, "0.0.0.0", async () => {
     console.log("Web server is up. Initializing engine...");
-    await webserverEngine.initialize();
+    await engine.initializeWebServer();
     console.log("Engine Initialized. Ready to receive requests...");
     engine.setCloseEvent();
 });
