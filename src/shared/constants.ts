@@ -105,6 +105,30 @@ class Constants {
             "event Deposit(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint16 indexed referral)",
         ],
 
+        WITHDRAW_EVENT_ABI: [
+            "event Withdraw(address indexed reserve, address indexed user, address indexed to, uint256 amount)",
+        ],
+
+        REDEEM_EVENT_ABI: [
+            "event Redeem(address indexed reserve, address user, address indexed to, uint256 amount, uint256 index)",
+        ],
+
+        LIQUIDATION_CALL_EVENT_ABI: [
+            "event LiquidationCall(address indexed collateral, address indexed reserve, address indexed user, uint256 purchaseAmount, uint256 debtToCover, bool receiveAToken)",
+        ],
+
+        SUPPLY_EVENT_ABI: [
+            "event Supply(address indexed reserve, address user, address indexed onBehalfOf, uint256 amount, uint256 index, uint16 indexed referral)",
+        ],
+
+        REPAY_EVENT_ABI: [
+            "event Repay(address indexed reserve, address indexed user, address indexed repayer, uint256 amount, bool useATokens);",
+        ],
+
+        FLASHLOAN_EVENT_ABI: [
+            "event FlashLoan(address indexed target, address indexed initiator, address indexed asset, uint256 amount, uint256 premium, uint16 referralCode)",
+        ],
+
         AGGREGATOR_V3_INTERFACE_ABI: [
             // Function to get the latest price data
             {

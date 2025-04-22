@@ -29,13 +29,24 @@ class Engine {
     async initializeWebServer() {
         if (this.isWebServerInitialized) return;
 
-        this.webappUrl = await common.getAppSetting("WEBAPPURL");
-
         this.ifaceBorrow = new ethers.Interface(
             Constants.ABIS.BORROW_EVENT_ABI
         );
         this.ifaceDeposit = new ethers.Interface(
             Constants.ABIS.DEPOSIT_EVENT_ABI
+        );
+        this.ifaceSupply = new ethers.Interface(
+            Constants.ABIS.SUPPLY_EVENT_ABI
+        );
+        this.ifaceWithdraw = new ethers.Interface(
+            Constants.ABIS.WITHDRAW_EVENT_ABI
+        );
+        this.ifaceLiquidationCall = new ethers.Interface(
+            Constants.ABIS.LIQUIDATION_CALL_EVENT_ABI
+        );
+        this.ifaceRepay = new ethers.Interface(Constants.ABIS.REPAY_EVENT_ABI);
+        this.ifaceFlashLoan = new ethers.Interface(
+            Constants.ABIS.FLASHLOAN_EVENT_ABI
         );
 
         await this.initializeAlchemy();
@@ -46,16 +57,24 @@ class Engine {
         this.isWebServerInitialized = true;
     }
 
-    async initializeAddresses() {
-        const initAddresses = _.map(
-            await sqlManager.execQuery("SELECT * FROM addresses"),
-            "address"
-        );
+    async initializeWebServerUrl() {
+        if (this.webappUrl) return;
+        this.webappUrl = await common.getAppSetting("WEBAPPURL");
+    }
 
+    async initializeAddresses() {
+        const initAddresses = await sqlManager.execQuery(
+            "SELECT * FROM addresses"
+        );
         for (const address of initAddresses) {
             if (!this.aave[address.network].hasOwnProperty("addresses"))
-                this.aave[address.network] = [];
-            this.aave[address.network].push(address.address);
+                this.aave[address.network].addresses = [];
+            this.aave[address.network].addresses.push(address.address);
+
+            if (!this.aave[address.network].hasOwnProperty("addressesObjects"))
+                this.aave[address.network].addressesObjects = {};
+            this.aave[address.network].addressesObjects[address.address] =
+                address;
         }
     }
 
@@ -91,6 +110,23 @@ class Engine {
             this.aave[key] = _.assign(aaveNetworkInfo, {
                 usersReserves: usersReserves,
             });
+
+            //calculate "external" collateral for all users in case of credit delegation in order to
+            // take it into account when receiving events from Alchemy
+            for (let i = 0; i < this.aave[key].addresses.length; i++) {
+                const address = this.aave[key].addresses[i];
+                if (!this.aave[key].usersReserves[address]) continue;
+                const userReserves = this.aave[key].usersReserves[address];
+                const externalCollateral = userReserves.reduce(
+                    (total: any, userReserve: any) => {
+                        return total + userReserve.currentatokenbalance;
+                    },
+                    0
+                );
+
+                this.aave[key].addressesObjects[address].externalCollateral =
+                    externalCollateral;
+            }
         }
     }
 
@@ -191,6 +227,11 @@ class Engine {
 
     ifaceBorrow: any;
     ifaceDeposit: any;
+    ifaceSupply: any;
+    ifaceWithdraw: any;
+    ifaceLiquidationCall: any;
+    ifaceRepay: any;
+    ifaceFlashLoan: any;
 
     //#endregion Variables
 
@@ -212,7 +253,10 @@ class Engine {
         });
     }
 
-    calculateTotalDebtBaseForAddress(address: string, network: Network) {
+    calculateTotalDebtBaseForAddress(
+        address: string,
+        network: Network | string
+    ) {
         const networkInfo = this.getAaveNetworkInfo(network);
         const reserves = _.values(networkInfo.reserves);
         const userReserves = networkInfo.usersReserves[address];
@@ -242,6 +286,46 @@ class Engine {
         }, 0);
     }
 
+    calculateTotalCollateralBaseForAddress(
+        address: string,
+        network: Network | string
+    ) {
+        const networkInfo = this.getAaveNetworkInfo(network);
+        const reserves = _.values(networkInfo.reserves);
+        const userReserves = networkInfo.usersReserves[address];
+        if (!userReserves || userReserves.length == 0) return 0;
+
+        let collaterals = _.map(reserves, (reserve) => {
+            const userReserve = _.find(userReserves, (o) => {
+                return o.tokenaddress == reserve.address;
+            });
+            if (!userReserve) return null;
+            return {
+                price: reserve.price,
+                address: reserve.address,
+                balance: userReserve.currentatokenbalance,
+                usageAsCollateralEnabled: userReserve.usageascollateralenabled,
+                decimals: reserve.decimals,
+            };
+        });
+
+        collaterals = _.reject(
+            collaterals,
+            (o: any) => !o.usageascollateralenabled || o.balance == 0
+        );
+        if (!collaterals || collaterals.length == 0) return 0;
+        const externalCollateral =
+            networkInfo.addresses[address].externalCollateral ?? 0;
+        return (
+            externalCollateral +
+            collaterals.reduce((total: any, debt: any) => {
+                const { price, address, balance, decimals } = debt;
+                const baseAmount = (balance * price) / 10 ** decimals;
+                return total + baseAmount;
+            }, 0)
+        );
+    }
+
     getAaveNetworkString(aaveNetworkInfo: any) {
         return aaveNetworkInfo.hasOwnProperty("network")
             ? aaveNetworkInfo.network.toString()
@@ -249,6 +333,11 @@ class Engine {
     }
 
     async saveChanges(type: string, network: string, changes: any = null) {
+        await axios.get(
+            `${this.webappUrl}/refresh?type=${type}&network=${network}`
+        );
+        return;
+
         const timestamp = moment.utc().format("YYYY-MM-DD HH:mm:ss");
         const query = `INSERT INTO changes (network, timestamp, data, type) VALUES ('${network}', '${timestamp}', '${JSON.stringify(
             changes
@@ -260,6 +349,7 @@ class Engine {
     }
 
     async callLoadChanges(timestamp: string, network: string) {
+        await this.initializeWebServerUrl();
         try {
             await axios.get(
                 `${this.webappUrl}/loadChanges?timestamp=${timestamp}&network=${network}`
@@ -267,6 +357,31 @@ class Engine {
         } catch (error) {
             await logger.log(`Error calling loadChanges: ${error}`, "error");
         }
+    }
+
+    async refresh(req: any, res: any) {
+        const type = req.query.type;
+        const network = req.query.network ?? "eth-mainnet";
+        if (!type) {
+            res.status(400).send("No type provided");
+            return;
+        }
+
+        switch (type) {
+            case "updateReserves":
+                await this.initializeReserves(network);
+                break;
+            case "updateUsersReserves":
+                await this.initializeUsersReserves(network);
+                break;
+            default:
+                res.status(400).send("Invalid type provided");
+                return;
+        }
+
+        await this.checkLiquidateAddresses(network);
+
+        res.status(200).send("OK");
     }
 
     async loadChanges(req: any) {
@@ -351,11 +466,13 @@ class Engine {
         //get list of addresses for which to check health factor from the userAssets object
         const addressesToCheck = Object.keys(userAssets);
 
+        /*
         this.checkLiquidateAddresses(
             addressesToCheck,
             networkInfo.network,
             userAssets
         );
+        */
     }
 
     //#region Alchemy Webhook "processAaveEvent"
@@ -374,8 +491,93 @@ class Engine {
             let eventHash = topics[0];
             let addressesToAdd: string[] = [];
             let from = log.transaction?.from?.address;
+            const addressesObjectsAddresses = _.map(
+                this.aave[key].addressesObjects,
+                (o) => o.address
+            );
 
             switch (eventHash) {
+                case "0x9c369e2bdbd7c7a5b5c8c0b9e6f5f4b1a8dc9b3f2e5c123c3a9e3b4d3e0c4a9f": //SwapBorrowRateMode
+                    addressesToAdd.push(log.topics[2]);
+                    break;
+
+                case "0x121ca0f2b1a8b5c8c0b9e6f5f4b1a8dc9b3f2e5c123c3a9e3b4d3e0c4a9f8f9": //UserEModeSet
+                    addressesToAdd.push(log.topics[1]);
+                    break;
+
+                case "0xd3d8717c9c7a8b5c8c0b9e6f5f4b1a8dc9b3f2e5c123c3a9e3b4d3e0c4a9f8f9": //BackUnbacked
+                    addressesToAdd.push(log.topics[2]);
+                    break;
+
+                case "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9": //MintUnbacked
+                    addressesToAdd.push(log.topics[3]); //onBehalfOf The address of the user
+                    break;
+
+                case "0xe6cd5d3f2cfd1bf39c09a4afc6cfbfbce2a3c2c5c9d64e7464b3a8b5c2eecb1e": //FlashLoan
+                    const flashloanTarget = log.topics[1];
+                    if (flashloanTarget) addressesToAdd.push(flashloanTarget);
+                    const flashloanInitiator = log.topics[2];
+                    if (flashloanInitiator)
+                        addressesToAdd.push(flashloanInitiator);
+                    break;
+
+                case "0x9a2f48d3aa6146e0a0f4e8622b5ff4b9d90a3c4f5e9a3b69c8523e213f775bfe": //LiquidationCall
+                    const decodedLogLiquidationCall =
+                        this.ifaceLiquidationCall.parseLog(log);
+                    const userLiquidator =
+                        decodedLogLiquidationCall.args.liquidator;
+                    if (userLiquidator) addressesToAdd.push(userLiquidator);
+                    const userLiquidated = log.topics[3];
+                    addressesToAdd.push(userLiquidated); //liquidated user
+                    const liquidationCollateralAsset = log.topics[1];
+                    const liquidationDebtAsset = log.topics[2];
+                    const liquidatedCollateralAmount =
+                        decodedLogLiquidationCall.args
+                            .liquidatedCollateralAmount;
+                    const debtToCover =
+                        decodedLogLiquidationCall.args.debtToCover;
+                    const receiveAToken =
+                        decodedLogLiquidationCall.args.receiveAToken;
+
+                    if (addressesObjectsAddresses.includes(userLiquidated)) {
+                        //detract the liquidated collateral amount from the user's collateral
+                        this.aave[key].usersReserves[userLiquidated][
+                            liquidationCollateralAsset
+                        ].currentatokenbalance -= liquidatedCollateralAmount;
+
+                        //detract the debt to cover from the user's debt
+                        if (
+                            this.aave[key].usersReserves[userLiquidated][
+                                liquidationDebtAsset
+                            ].currentstabledebt >= debtToCover
+                        ) {
+                            this.aave[key].usersReserves[userLiquidated][
+                                liquidationDebtAsset
+                            ].currentstabledebt -= debtToCover;
+                        } else {
+                            this.aave[key].usersReserves[userLiquidated][
+                                liquidationDebtAsset
+                            ].currentvariabledebt -= debtToCover;
+                        }
+
+                        await this.updateUserConfiguration(userLiquidated, key);
+                    }
+
+                    if (addressesObjectsAddresses.includes(userLiquidator)) {
+                        if (receiveAToken) {
+                            //add the liquidated collateral amount to the liquidator's collateral
+                            this.aave[key].usersReserves[userLiquidator][
+                                liquidationCollateralAsset
+                            ].currentatokenbalance +=
+                                liquidatedCollateralAmount;
+                        }
+
+                        //not necessary to check for liquidation, since collateral has increased
+                        //not necessary to update userConfiguration. If reserve was already set as collateral,
+                        //this does not change anyway.
+                    }
+                    break;
+
                 //Deposit
                 case "0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951":
                     const decodedLogDeposit = this.ifaceDeposit.parseLog(log);
@@ -383,38 +585,242 @@ class Engine {
                     if (userDeposit) addressesToAdd.push(userDeposit);
                     if (log.topics.length > 3)
                         addressesToAdd.push(log.topics[3]); //onBehalfOf The beneficiary of the deposit, receiving the aTokens
+
+                    const depositReserve = log.topics[1];
+                    const depositAmount = decodedLogDeposit.args.amount;
+                    const depositOnBehalfOf = log.topics[3];
+                    if (
+                        addressesObjectsAddresses.includes(depositOnBehalfOf) &&
+                        this.isReserveUsedAsCollateral(
+                            this.aave[key].addressesObjects[depositOnBehalfOf]
+                                .userconfiguration,
+                            depositReserve,
+                            key
+                        )
+                    ) {
+                        this.aave[key].usersReserves[depositOnBehalfOf][
+                            depositReserve
+                        ].currentatokenbalance += depositAmount;
+                    }
                     break;
 
                 //Borrow
                 case "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b":
                     const decodedLogBorrow = this.ifaceBorrow.parseLog(log);
+                    const borrowOnBehalfOf = log.topics[3];
+                    const borrowReserve = log.topics[1];
+                    const borrowedAmount = decodedLogBorrow.args.amount;
+                    const borrowRateMode = decodedLogBorrow.args.borrowRateMode;
+
                     const userBorrow = decodedLogBorrow.args.user;
                     if (userBorrow) addressesToAdd.push(userBorrow);
+                    if (borrowOnBehalfOf && borrowOnBehalfOf != userBorrow) {
+                        addressesToAdd.push(borrowOnBehalfOf); //onBehalfOf The beneficiary of the borrow, receiving the aTokens
+                    }
+
+                    if (addressesObjectsAddresses.includes(borrowOnBehalfOf)) {
+                        if (borrowRateMode == 1) {
+                            this.aave[key].usersReserves[borrowOnBehalfOf][
+                                borrowReserve
+                            ].currentstabledebt += borrowedAmount;
+                        } else {
+                            this.aave[key].usersReserves[borrowOnBehalfOf][
+                                borrowReserve
+                            ].currentvariabledebt += borrowedAmount;
+                        }
+
+                        await this.checkLiquidateAddresses(
+                            borrowOnBehalfOf,
+                            key
+                        );
+                    }
+
                     break;
 
-                //Repay
-                case "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051":
+                case "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051": //Repay
                     if (log.topics.length > 2)
                         addressesToAdd.push(log.topics[2]); //user The beneficiary of the repayment, getting his debt reduced
                     if (log.topics.length > 3)
                         addressesToAdd.push(log.topics[3]); //repayer The address of the user initiating the repay(), providing the funds
+
+                    const repayReserve = log.topics[1];
+                    const decodedLogRepay = this.ifaceRepay.parseLog(log);
+                    const amountRepayed = decodedLogRepay.args.amount;
+                    const useATokens = decodedLogRepay.args.useATokens;
+
+                    //detract the amount repaid from the repayer's collateral
+                    if (
+                        addressesObjectsAddresses.includes(log.topics[3]) &&
+                        useATokens
+                    ) {
+                        this.aave[key].usersReserves[log.topics[3]][
+                            repayReserve
+                        ].currentatokenbalance -= amountRepayed;
+                    }
+
+                    //detract the repaid amount from the beneficiary's debt
+                    if (addressesObjectsAddresses.includes(log.topics[2])) {
+                        const address = log.topics[2];
+                        const repayUserReserve =
+                            this.aave[key].usersReserves[address][repayReserve];
+
+                        //I cannot know if the debt being repaid is stable or variable, since this info
+                        //is not present in the Repay event. So I check the amount of the variable debt and
+                        //evtl then even the stable debt, since in the end I am interested in the total debt
+                        if (
+                            repayUserReserve.currentstabledebt == 0 ||
+                            repayUserReserve.currentvariabledebt >=
+                                amountRepayed
+                        ) {
+                            this.aave[key].usersReserves[address][
+                                repayReserve
+                            ].currentvariabledebt -= amountRepayed;
+                        } else {
+                            this.aave[key].usersReserves[address][
+                                repayReserve
+                            ].currentstabledebt -= amountRepayed;
+                        }
+
+                        await this.checkLiquidateAddresses(address, key);
+                        await this.updateUserConfiguration(address, key);
+                    }
                     break;
 
                 case "0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61": //Supply
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The address of the user
+
+                    const decodedLogSupply = this.ifaceSupply.parseLog(log);
+                    const amount = decodedLogSupply.args.amount;
+                    const onBehalfOf = log.topics[3];
+                    const topicAddress = log.topics[2];
+                    let address = topicAddress; //the actual beneficiary of the supply
+                    if (onBehalfOf && onBehalfOf != topicAddress) {
+                        address = onBehalfOf; //the actual beneficiary of the supply
+                        addressesToAdd.push(onBehalfOf);
+                    }
+                    if (_.includes(addressesObjectsAddresses, address)) {
+                        const reserve = log.topics[1];
+                        const userConfiguration =
+                            this.aave[key].addressesObjects[address]
+                                .userconfiguration;
+                        if (
+                            this.isReserveUsedAsCollateral(
+                                userConfiguration,
+                                reserve,
+                                key
+                            )
+                        ) {
+                            this.aave[key].usersReserves[address][
+                                reserve
+                            ].currentatokenbalance += amount;
+
+                            if (
+                                this.aave[key].usersReserves[address][reserve]
+                                    .usageascollateralenabled
+                            ) {
+                                await this.checkLiquidateAddresses(
+                                    address,
+                                    key
+                                );
+                                await this.updateUserConfiguration(
+                                    address,
+                                    key
+                                );
+                            }
+                        }
+                    }
+
+                    break;
+
                 case "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd": //ReserveUsedAsCollateralDisabled
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The address of the user
+
+                    if (_.includes(addressesObjectsAddresses, log.topics[2])) {
+                        const address = log.topics[2];
+                        const reserve = log.topics[1];
+                        this.aave[key].usersReserves[address][
+                            reserve
+                        ].usageascollateralenabled = false;
+
+                        await this.checkLiquidateAddresses(network, address);
+
+                        const query = `UPDATE usersreserves SET usageascollateralenabled = 0 WHERE address = '${address}' AND tokenaddress = '${reserve}' AND network = '${key}'`;
+                        await sqlManager.execQuery(query);
+
+                        await this.updateUserConfiguration(address, key);
+                    }
+
+                    break;
+
                 case "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2": //ReserveUsedAsCollateralEnabled
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The address of the user
+
+                    if (_.includes(addressesObjectsAddresses, log.topics[2])) {
+                        const address = log.topics[2];
+                        const reserve = log.topics[1];
+                        this.aave[key].usersReserves[address][
+                            reserve
+                        ].usageascollateralenabled = true;
+
+                        await this.checkLiquidateAddresses(network, address);
+
+                        const query = `UPDATE usersreserves SET usageascollateralenabled = 1 WHERE address = '${address}' AND tokenaddress = '${reserve}' AND network = '${key}'`;
+                        await sqlManager.execQuery(query);
+
+                        await this.updateUserConfiguration(address, key);
+                    }
+
+                    break;
+
                 case "0x9f439ae0c81e41a04d3fdfe07aed54e6a179fb0db15be7702eb66fa8ef6f5300": //RebalanceStableBorrowRate
+                    if (log.topics.length > 2)
+                        addressesToAdd.push(log.topics[2]); //user The address of the user
+                    break;
+
                 case "0xea368a40e9570069bb8e6511d668293ad2e1f03b0d982431fd223de9f3b70ca6": //Swap
                     if (log.topics.length > 2)
                         addressesToAdd.push(log.topics[2]); //user The address of the user
                     break;
 
-                //Withdraw
-                case "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7":
+                case "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7": //Withdraw
                     if (log.topics.length > 2)
                         addressesToAdd.push(log.topics[2]); //user The address initiating the withdrawal, owner of aTokens
                     if (log.topics.length > 3)
                         addressesToAdd.push(log.topics[3]); //to Address that will receive the underlying
+
+                    const decodedLogWithdraw = this.ifaceWithdraw.parseLog(log);
+                    const amountWithdrawn = decodedLogWithdraw.args.amount;
+                    if (_.includes(addressesObjectsAddresses, log.topics[2])) {
+                        const reserve = log.topics[1];
+                        const userConfiguration =
+                            this.aave[key].addressesObjects[log.topics[2]]
+                                .userconfiguration;
+                        if (
+                            this.isReserveUsedAsCollateral(
+                                userConfiguration,
+                                reserve,
+                                key
+                            ) &&
+                            this.aave[key].usersReserves[log.topics[2]][reserve]
+                                .usageascollateralenabled
+                        ) {
+                            this.aave[key].usersReserves[log.topics[2]][
+                                reserve
+                            ].currentatokenbalance -= amountWithdrawn;
+
+                            await this.checkLiquidateAddresses(
+                                log.topics[2],
+                                key
+                            );
+                            await this.updateUserConfiguration(
+                                log.topics[2],
+                                key
+                            );
+                        }
+                    }
                     break;
 
                 default:
@@ -591,7 +997,7 @@ class Engine {
         return ["", ""];
     }
 
-    getHealthFactorOffChain(
+    calculateHealthFactorOffChain(
         totalCollateralBase: number | Big,
         totalDebtBase: number | Big,
         currentLiquidationThreshold: number | Big
@@ -625,7 +1031,6 @@ class Engine {
         );
 
         //check immediately after retrieving userAccountData if the health factor is less than 1, liquidate concerned addresses
-        let liquidateHealthFactorAddresses: string[] = [];
         let userAccountObjects: any[] = [];
         for (let i = 0; i < _addresses.length; i++) {
             const address = _addresses[i];
@@ -644,15 +1049,7 @@ class Engine {
                 totalCollateralBase: totalCollateralBase,
                 totalDebtBase: totalDebtBase,
             });
-            if (healthFactor < 1) {
-                liquidateHealthFactorAddresses.push(address);
-            }
         }
-
-        await this.checkLiquidateAddresses(
-            liquidateHealthFactorAddresses,
-            network
-        );
 
         return userAccountObjects;
     }
@@ -883,9 +1280,12 @@ class Engine {
         return allDecodedResults;
     }
 
-    getAaveNetworkInfo(network: Network) {
+    getAaveNetworkInfo(network: Network | string) {
         if (!network) throw new Error("No network provided");
-        const key = this.getAaveNetworkString(network);
+        const key =
+            typeof network == "string"
+                ? network
+                : this.getAaveNetworkString(network);
         let obj = this.aave[key];
         if (!obj) {
             throw new Error(`Aave network info not found for network ${key}`);
@@ -908,17 +1308,81 @@ class Engine {
     }
 
     async checkLiquidateAddresses(
-        addresses: string[],
-        network: Network,
-        userAssets: any = null
+        network: Network | string,
+        addresses: string | string[] | null = null
     ) {
-        if (addresses.length > 0) {
-            //TODO check if there are profitable liquidation opportunities
-            const profitableLiquidationAddresses = [];
+        if (!addresses) {
+            addresses = _.map(
+                this.aave[network].addressesObjects,
+                (o) => o.address
+            );
+        } else if (!Array.isArray(addresses)) addresses = [addresses];
+        const key = this.getAaveNetworkString(network);
+        let userAddressesObjects: any[] = [];
+        let usersReserves: any[] = [];
+        for (const address of addresses) {
+            const userAddressesObject =
+                this.aave[key].addressesObjects[address];
+            const userReserves = this.aave[key].usersReserves[address];
+            if (!userReserves || userReserves.length == 0) continue;
+            userAddressesObjects.push(userAddressesObject);
+            usersReserves.push(...userReserves);
+        }
+
+        await this.checkLiquidateAddressesFromInMemoryObjects(
+            network,
+            userAddressesObjects,
+            usersReserves
+        );
+    }
+
+    async checkLiquidateAddressesFromInMemoryObjects(
+        network: Network | string = "eth-mainnet",
+        userAddressesObjects: any[],
+        usersReserves: any[]
+    ) {
+        let liquidatableAddresses: any[] = [];
+        const key = this.getAaveNetworkString(network);
+        if (userAddressesObjects.length > 0) {
+            for (const userAddressObject of userAddressesObjects) {
+                this.aave[key].addressesObjects[
+                    userAddressObject.address
+                ].totalCollateralBase =
+                    this.calculateTotalCollateralBaseForAddress(
+                        userAddressObject.address,
+                        network
+                    );
+                this.aave[key].addressesObjects[
+                    userAddressObject.address
+                ].totalDebtBase = this.calculateTotalDebtBaseForAddress(
+                    userAddressObject.address,
+                    network
+                );
+                this.aave[key].addressesObjects[
+                    userAddressObject.address
+                ].healthFactor = this.calculateHealthFactorOffChain(
+                    this.aave[key].addressesObjects[userAddressObject.address]
+                        .totalCollateralBase,
+                    this.aave[key].addressesObjects[userAddressObject.address]
+                        .totalDebtBase,
+                    userAddressObject.currentLiquidationThreshold
+                );
+                if (
+                    this.aave[key].addressesObjects[userAddressObject.address]
+                        .healthFactor < 1
+                ) {
+                    liquidatableAddresses.push(userAddressObject.address);
+                }
+            }
+
+            if (liquidatableAddresses.length > 0) {
+                //TODO check if there are profitable liquidation opportunities
+                const profitableLiquidationAddresses = [];
+                /*
             const aaveNetworkInfo = this.getAaveNetworkInfo(network);
             const reserves = aaveNetworkInfo.reserves;
             const userReserves = aaveNetworkInfo.usersReserves;
-            /*
+            
             //decide which asset pair to liquidate for the user based on the userAssets collateral and debt properties
             const assetsToLiquidate: string[] =
                 await this.decideWhichAssetPairToLiquidate(
@@ -926,18 +1390,22 @@ class Engine {
                     userReserves[addresses[0]]
                 );
 */
-            if (profitableLiquidationAddresses.length > 0) {
-                await emailManager.sendLogEmail(
-                    "Liquidation triggered",
-                    "Addresses: " + addresses.join(", ")
-                );
-                //TODO MIRKO implement liquidation logic
-                // const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-                // const poolContract = this.getContract(
-                //     aaveNetworkInfo.addresses.pool,
-                //     Constants.ABIS.POOL_ABI,
-                //     network
-                // );
+                if (profitableLiquidationAddresses.length > 0) {
+                    await emailManager.sendLogEmail(
+                        "Liquidation triggered",
+                        "Addresses: " +
+                            _.map(userAddressesObjects, (o) => o.address).join(
+                                ", "
+                            )
+                    );
+                    //TODO MIRKO implement liquidation logic
+                    // const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+                    // const poolContract = this.getContract(
+                    //     aaveNetworkInfo.addresses.pool,
+                    //     Constants.ABIS.POOL_ABI,
+                    //     network
+                    // );
+                }
             }
         }
     }
@@ -1158,6 +1626,61 @@ class Engine {
         }
     }
 
+    async updateUserConfiguration(
+        addresses: string | string[],
+        network: Network | string
+    ) {
+        if (!Array.isArray(addresses)) addresses = [addresses];
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+        const userConfigurations = await this.multicall(
+            aaveNetworkInfo.addresses.poolDataProvider,
+            addresses,
+            "POOL_DATA_PROVIDER_ABI",
+            "getUserConfiguration",
+            aaveNetworkInfo.network
+        );
+        let ucQuery = `UPDATE addresses SET userconfiguration = CASE `;
+        for (let i = 0; i < userConfigurations.length; i++) {
+            const userAddress = addresses[i];
+            const userConfiguration = userConfigurations[i]?.toString(2);
+
+            this.aave[network].addressesObjects[userAddress].userconfiguration =
+                userConfiguration;
+
+            ucQuery += `WHEN address = '${userAddress}' THEN '${userConfiguration}' `;
+        }
+        ucQuery += `ELSE userconfiguration END WHERE address IN ('${addresses.join(
+            "','"
+        )}');`;
+        await sqlManager.execQuery(ucQuery);
+    }
+
+    isReserveUsedAsCollateral(
+        userConfiguration: string,
+        reserveAddress: string,
+        network: Network | string
+    ) {
+        // Find the index of the reserve in the reserves list
+        const reservesList = this.aave[network].reservesList;
+        const reserveIndex = reservesList.indexOf(reserveAddress.toLowerCase());
+        if (reserveIndex === -1) {
+            throw new Error("Reserve address not found in the reserves list.");
+        }
+
+        // Convert the userConfiguration to a BigInt for bitwise operations
+        const userConfigBigInt = BigInt(userConfiguration);
+
+        // Calculate the position of the collateral bit for the reserve
+        const collateralBitPosition = reserveIndex * 2; // Each reserve has 2 bits (collateral and borrow)
+
+        // Check if the collateral bit is set (1) or not (0)
+        const isCollateral =
+            (userConfigBigInt >> BigInt(collateralBitPosition)) & BigInt(1);
+
+        // Return true if the collateral bit is 1, false otherwise
+        return isCollateral === BigInt(1);
+    }
+
     /**
      * This method should be scheduled to run every 2-3 hours
      *
@@ -1201,17 +1724,34 @@ class Engine {
                 offset += Constants.CHUNK_SIZE;
                 const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
-                //update all reserves for all users. I do it before getting the userAccountData,
-                //because if there are users with hf < 1 I have to check their tokens balances
-                //to calculate liquidation profitability
-                await this.updateUsersReservesData(
-                    dbAddressesArr,
-                    aaveNetworkInfo
-                );
-
                 const results = await this.getUserAccountDataForAddresses(
                     _addresses,
                     aaveNetworkInfo.network
+                );
+
+                const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
+                    return o.healthFactor > 2;
+                });
+                const addressesUserAccountDataHFGreaterThan2 = _.map(
+                    userAccountDataHFGreaterThan2,
+                    (o) => o.address
+                );
+                const addressesUserAccountDataHFLowerThan2 = _.reject(
+                    dbAddressesArr,
+                    (o) =>
+                        addressesUserAccountDataHFGreaterThan2.includes(
+                            o.address
+                        )
+                );
+
+                await this.updateUserConfiguration(
+                    addressesUserAccountDataHFLowerThan2,
+                    aaveNetworkInfo
+                );
+
+                await this.updateUsersReservesData(
+                    addressesUserAccountDataHFLowerThan2,
+                    aaveNetworkInfo
                 );
 
                 //Save data to the DB:
@@ -1283,6 +1823,9 @@ class Engine {
                     if (query) await sqlManager.execQuery(query);
                 }
 
+                await this.saveChanges("updateUsersReserves", key);
+
+                //delete addresses from the DB where health factor is > 2
                 if (deleteAddresses.length > 0) {
                     const chunks = _.chunk(
                         deleteAddresses,
@@ -1301,8 +1844,6 @@ class Engine {
                     }
                 }
             } while (dbAddressesArr.length > 0);
-
-            await this.saveChanges("updateUsersReserves", key);
         }
 
         await logger.log(
@@ -1342,7 +1883,11 @@ class Engine {
         );
 
         let sqlQueries: string[] = [];
-        const userReserveDataChunks = _.chunk(results, Constants.CHUNK_SIZE);
+        const userReserveDataChunks = _.chunk(
+            results,
+            reservesAddresses.length * 10
+        );
+        const allUserReserveObjects: any[] = [];
         for (let j = 0; j < userReserveDataChunks.length; j++) {
             const userReserveDataChunk: any = userReserveDataChunks[j];
 
@@ -1373,6 +1918,8 @@ class Engine {
                         };
                     }
                 );
+
+                allUserReserveObjects.push(...userReservesObjects);
 
                 let sqlQuery = `                        
                         MERGE INTO usersreserves AS target
@@ -1405,8 +1952,28 @@ class Engine {
             }
         }
 
-        //TODO evtl even before updating the database, check which users have HF < 1 and
-        //check if liquidation is profitable
+        const allUserReserveObjectsAddresses = _.uniq(
+            _.map(allUserReserveObjects, (o) => o.userAddress)
+        );
+        const liquidatableUserAddressObjects = _.filter(
+            userAddressesObjects,
+            (o) =>
+                o.healthFactor < 1 &&
+                _.includes(allUserReserveObjectsAddresses, o.address)
+        );
+        const liquidatableUserAddressObjectsAddresses = _.map(
+            liquidatableUserAddressObjects,
+            (o) => o.address
+        );
+        const liquidatableUserReserves = _.filter(allUserReserveObjects, (o) =>
+            liquidatableUserAddressObjectsAddresses.includes(o.userAddress)
+        );
+
+        await this.checkLiquidateAddressesFromInMemoryObjects(
+            key,
+            liquidatableUserAddressObjects,
+            liquidatableUserReserves
+        );
 
         if (sqlQueries.length > 0) {
             for (const sqlQuery of sqlQueries) {
@@ -1559,11 +2126,7 @@ class Engine {
 
                     await sqlManager.execQuery(sqlQuery);
 
-                    await this.saveChanges(
-                        "updatePrices",
-                        key,
-                        reservesDbUpdate
-                    );
+                    await this.saveChanges("initializeReserves", key);
                 } else {
                     //we should actually never come here, but just in case
                     throw new Error(

@@ -30,6 +30,11 @@ app.get("/loadChanges", async (req, res) => {
     res.status(200);
 });
 
+app.get("/refresh", async (req, res) => {
+    await engine.refresh(req, res);
+    res.status(200);
+});
+
 app.post("/aaveEvent", async (req: any, res: any) => {
     await engine.processAaveEvent(req, res);
 });
