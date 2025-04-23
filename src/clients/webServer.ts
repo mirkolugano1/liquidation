@@ -15,6 +15,16 @@ app.get("/", (req: any, res: any) => {
     res.send("Web server is up.");
 });
 
+app.get("getVar", (req: any, res: any) => {
+    const key = req.query?.key;
+    const value = engine.getVar(key);
+    if (value) {
+        res.send(value);
+    } else {
+        res.status(404).send("Key not found");
+    }
+});
+
 app.get("/logs", async (req: any, res: any) => {
     const logLevel = req.query?.logLevel;
     const env = req.query?.env;

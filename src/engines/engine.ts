@@ -12,6 +12,7 @@ import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
 import emailManager from "../managers/emailManager";
 import axios from "axios";
+import { r } from "tar";
 
 class Engine {
     private static instance: Engine;
@@ -53,8 +54,21 @@ class Engine {
         await this.initializeAddresses();
         await this.initializeReserves();
         await this.initializeUsersReserves();
+        await this.initializeCloseFactor();
 
         this.isWebServerInitialized = true;
+    }
+
+    async initializeCloseFactor() {
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            const dataProviderContract = this.getContract(
+                aaveNetworkInfo.addresses.poolDataProvider,
+                Constants.ABIS.POOL_DATA_PROVIDER_ABI,
+                aaveNetworkInfo.network
+            );
+            const closeFactor = await dataProviderContract.getCloseFactor();
+            this.aave[aaveNetworkInfo.network].closeFactor = closeFactor;
+        }
     }
 
     async initializeWebServerUrl() {
@@ -237,6 +251,12 @@ class Engine {
 
     //#region Helper methods
 
+    getVar(key: string) {
+        let val = (this as any)[key];
+        if (typeof val == "string") return val;
+        else return JSON.stringify(val);
+    }
+
     normalizeAddress(address: string) {
         if (!address) return "";
         const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
@@ -368,6 +388,9 @@ class Engine {
         }
 
         switch (type) {
+            case "updateCloseFactor":
+                await this.initializeCloseFactor();
+                break;
             case "updateReserves":
                 await this.initializeReserves(network);
                 break;
@@ -1074,13 +1097,13 @@ class Engine {
 
     checkMulticallInputs(
         targetAddresses: string | string[],
-        paramAddresses: string | string[] | null,
+        params: string | string[] | null,
         contractABIsKeys: string | string[],
         methodNames: string | string[],
         network: Network
     ): [string[], string[], string[], string[]] {
         if (!network) throw new Error("No network provided");
-        if (!paramAddresses) paramAddresses = [];
+        if (!params) params = [];
 
         if (!targetAddresses || targetAddresses.length == 0)
             throw new Error("No targetAddresses provided");
@@ -1090,8 +1113,8 @@ class Engine {
 
         if (!Array.isArray(methodNames)) methodNames = [methodNames];
 
-        if (targetAddresses.length == 1 && paramAddresses.length > 1) {
-            for (let i = 1; i < paramAddresses.length; i++) {
+        if (targetAddresses.length == 1 && params.length > 1) {
+            for (let i = 1; i < params.length; i++) {
                 targetAddresses.push(targetAddresses[0]);
             }
         } else if (targetAddresses.length == 1 && methodNames.length > 1) {
@@ -1100,25 +1123,20 @@ class Engine {
             }
         }
 
-        if (!Array.isArray(paramAddresses)) paramAddresses = [paramAddresses];
+        if (!Array.isArray(params)) params = [params];
 
         if (
-            paramAddresses.length == 1 &&
+            params.length == 1 &&
             targetAddresses &&
             targetAddresses.length > 1
         ) {
             for (let i = 1; i < targetAddresses.length; i++) {
-                paramAddresses.push(paramAddresses[0]);
+                params.push(params[0]);
             }
         }
 
-        if (
-            paramAddresses.length > 0 &&
-            targetAddresses.length != paramAddresses.length
-        ) {
-            throw new Error(
-                "targetAddresses and paramAddresses length mismatch"
-            );
+        if (params.length > 0 && targetAddresses.length != params.length) {
+            throw new Error("targetAddresses and params length mismatch");
         }
 
         if (!methodNames || methodNames.length == 0)
@@ -1158,7 +1176,7 @@ class Engine {
             throw new Error("targetAddresses and contractABIs length mismatch");
         }
 
-        return [targetAddresses, paramAddresses, contractABIsKeys, methodNames];
+        return [targetAddresses, params, contractABIsKeys, methodNames];
     }
 
     getContractInterface(contractABI: any) {
@@ -1185,16 +1203,16 @@ class Engine {
      */
     async multicall(
         targetAddresses: string | string[],
-        paramAddresses: string | string[] | null,
+        params: any | null,
         contractABIsKeys: string | string[],
         methodNames: string | string[],
         network: Network,
         estimateGas: boolean = false
     ) {
-        [targetAddresses, paramAddresses, contractABIsKeys, methodNames] =
+        [targetAddresses, params, contractABIsKeys, methodNames] =
             this.checkMulticallInputs(
                 targetAddresses,
-                paramAddresses,
+                params,
                 contractABIsKeys,
                 methodNames,
                 network
@@ -1213,15 +1231,15 @@ class Engine {
                     Constants.ABIS[contractABIsKeys[index]]
                 );
                 const calldata =
-                    !paramAddresses || paramAddresses.length == 0
+                    !params || params.length == 0
                         ? contractInterface.encodeFunctionData(
                               methodNames[index]
                           )
                         : contractInterface.encodeFunctionData(
                               methodNames[index],
-                              Array.isArray(paramAddresses[index])
-                                  ? paramAddresses[index]
-                                  : [paramAddresses[index]]
+                              Array.isArray(params[index])
+                                  ? params[index]
+                                  : [params[index]]
                           );
                 return {
                     target: targetAddress,
@@ -1339,10 +1357,22 @@ class Engine {
     async checkLiquidateAddressesFromInMemoryObjects(
         network: Network | string = "eth-mainnet",
         userAddressesObjects: any[],
-        usersReserves: any[]
+        usersReserves: any[] | null = null
     ) {
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+        let userAddressesObjectsAddresses = _.map(
+            userAddressesObjects,
+            (o) => o.address
+        );
         let liquidatableAddresses: any[] = [];
         const key = this.getAaveNetworkString(network);
+
+        if (!usersReserves) {
+            usersReserves = _.map(this.aave[key].usersReserves, (o) =>
+                _.includes(userAddressesObjectsAddresses, o.address)
+            );
+        }
+
         if (userAddressesObjects.length > 0) {
             for (const userAddressObject of userAddressesObjects) {
                 this.aave[key].addressesObjects[
@@ -1376,38 +1406,174 @@ class Engine {
             }
 
             if (liquidatableAddresses.length > 0) {
-                //TODO check if there are profitable liquidation opportunities
-                const profitableLiquidationAddresses = [];
-                /*
-            const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-            const reserves = aaveNetworkInfo.reserves;
-            const userReserves = aaveNetworkInfo.usersReserves;
-            
-            //decide which asset pair to liquidate for the user based on the userAssets collateral and debt properties
-            const assetsToLiquidate: string[] =
-                await this.decideWhichAssetPairToLiquidate(
-                    addresses[0],
-                    userReserves[addresses[0]]
+                const liquidatableUserAddressObjects = _.filter(
+                    userAddressesObjects,
+                    (o) => _.includes(liquidatableAddresses, o.address)
                 );
-*/
-                if (profitableLiquidationAddresses.length > 0) {
-                    await emailManager.sendLogEmail(
-                        "Liquidation triggered",
-                        "Addresses: " +
-                            _.map(userAddressesObjects, (o) => o.address).join(
-                                ", "
-                            )
-                    );
-                    //TODO MIRKO implement liquidation logic
-                    // const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-                    // const poolContract = this.getContract(
-                    //     aaveNetworkInfo.addresses.pool,
-                    //     Constants.ABIS.POOL_ABI,
-                    //     network
-                    // );
+
+                let profitableLiquidations: any[] = [];
+                for (const liquidatableUserAddressObject of liquidatableUserAddressObjects) {
+                    const userReserves =
+                        this.aave[key].usersReserves[
+                            liquidatableUserAddressObject.address
+                        ];
+                    if (!userReserves || userReserves.length == 0) continue;
+
+                    let potentialProfitableLiquidation: any = {
+                        profit: 0,
+                    };
+                    for (const userReserve of userReserves) {
+                        if (
+                            userReserve.usageascollateralenabled &&
+                            this.isReserveUsedAsCollateral(
+                                liquidatableUserAddressObject.userconfiguration,
+                                userReserve.tokenaddress,
+                                network
+                            ) &&
+                            userReserve.currentatokenbalance > 0
+                        ) {
+                            for (const debtUserReserve of userReserves) {
+                                if (
+                                    userReserve.tokenaddress !=
+                                        debtUserReserve.tokenaddress &&
+                                    (debtUserReserve.currentstabledebt > 0 ||
+                                        debtUserReserve.variabledebt > 0)
+                                ) {
+                                    //we are in a collateral / debt pair whose balance is both > 0.
+                                    //calculate potential profit of liquidation for this asset pair
+                                    const [debtToCover, profitInUSD] =
+                                        this.calculateNetLiquidationReward(
+                                            userReserve,
+                                            debtUserReserve,
+                                            network
+                                        );
+
+                                    const profitInUSDNumber =
+                                        profitInUSD.toNumber();
+                                    if (
+                                        profitInUSDNumber >
+                                        potentialProfitableLiquidation.profit
+                                    ) {
+                                        potentialProfitableLiquidation = {
+                                            profit: profitInUSDNumber,
+                                            collateralAsset:
+                                                userReserve.tokenaddress,
+                                            debtAsset:
+                                                debtUserReserve.tokenaddress,
+                                            address:
+                                                liquidatableUserAddressObject.address,
+                                            debtToCover: debtToCover,
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    if (potentialProfitableLiquidation.profit > 0)
+                        profitableLiquidations.push(
+                            potentialProfitableLiquidation
+                        );
+                }
+
+                if (profitableLiquidations.length > 0) {
+                    const liquidationsEnabled = false;
+                    if (liquidationsEnabled) {
+                        const liquidationsParameters = _.map(
+                            profitableLiquidations,
+                            (o) => {
+                                return [
+                                    o.collateralAsset,
+                                    o.debtAsset,
+                                    o.address,
+                                    o.debtToCover,
+                                    true, //receive aTokens
+                                ];
+                            }
+                        );
+                        await this.multicall(
+                            aaveNetworkInfo.addresses.pool,
+                            liquidationsParameters,
+                            "POOL_ABI",
+                            "liquidationCall",
+                            key
+                        );
+                    } else {
+                        await emailManager.sendLogEmail(
+                            "Liquidation triggered",
+                            "Data: " + JSON.stringify(profitableLiquidations)
+                        );
+                    }
                 }
             }
         }
+    }
+
+    calculateNetLiquidationReward(
+        collateralAssetObject: any,
+        debtAssetObject: any,
+        network: Network | string
+    ) {
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+        const debtAmountTotal: Big = new Big(
+            debtAssetObject.currentstabledebt ?? 0
+        ).add(new Big(debtAssetObject.currentvariabledebt ?? 0));
+        const liquidatableDebtAmount: Big = debtAmountTotal
+            .mul(aaveNetworkInfo.closeFactor)
+            .div(10000);
+
+        const debtTokenAddress = debtAssetObject.tokenaddress;
+        const collateralTokenAddress = collateralAssetObject.tokenaddress;
+        const debtTokenReserve = aaveNetworkInfo.reserves[debtTokenAddress];
+        const collateralTokenReserve =
+            aaveNetworkInfo.reserves[collateralTokenAddress];
+        const debtDecimals = debtTokenReserve.decimals;
+        const collateralDecimals = collateralTokenReserve.decimals;
+        const liquidationProtocolFee =
+            collateralTokenReserve.liquidationProtocolFee;
+        const liquidationBonus = collateralTokenReserve.liquidationBonus;
+        const debtPrice = new Big(debtTokenReserve.price);
+        const collateralPrice = new Big(collateralTokenReserve.price);
+
+        // 1. Calculate the base collateral amount (without bonus)
+        const baseCollateral = liquidatableDebtAmount
+            .mul(debtPrice)
+            .mul(10 ** collateralDecimals)
+            .div(collateralPrice.mul(10 ** debtDecimals));
+
+        // 2. Calculate the bonus amount
+        const bonusAmount = baseCollateral
+            .mul(liquidationBonus - 10000) // Subtract 100% to get just the bonus portion
+            .div(10000);
+
+        // 3. Calculate the protocol fee (applied only to the bonus portion)
+        const protocolFeeAmount = bonusAmount
+            .mul(liquidationProtocolFee)
+            .div(10000);
+
+        // 4. Calculate the total collateral received after protocol fee (in native units)
+        const totalCollateralReceived = baseCollateral
+            .add(bonusAmount)
+            .sub(protocolFeeAmount);
+
+        // 5. Convert collateral value to USD
+        const collateralValueUSD = totalCollateralReceived
+            .mul(collateralPrice)
+            .div(10 ** collateralDecimals);
+
+        // 6. Convert debt to USD for profit calculation
+        const debtValueUSD = liquidatableDebtAmount
+            .mul(debtPrice)
+            .div(10 ** debtDecimals);
+
+        // 7. Calculate profit in USD
+        const profitUSD = collateralValueUSD.sub(debtValueUSD);
+
+        // Return: [debtToCover in native units, profit in USD]
+        return [
+            liquidatableDebtAmount, // Amount of debt tokens to repay (native units)
+            profitUSD, // Profit in USD
+        ];
     }
 
     //#endregion Helper methods
@@ -1416,9 +1582,7 @@ class Engine {
 
     /**
      * This method should be scheduled to run every day at midnight, since data does should change very often
-     *
      * Periodically update the reserves data in the DB
-     *
      * @param context the InvocationContext of the function app on azure (for Application Insights)
      */
     async updateReservesData(context: InvocationContext | null = null) {
@@ -1510,6 +1674,15 @@ class Engine {
                 aaveNetworkInfo.network
             );
 
+            //update reserves liquidationprotocolfee
+            const liquidationProtocolFees = await this.multicall(
+                aaveNetworkInfo.addresses.poolDataProvider,
+                allReserveTokensAddresses,
+                "POOL_DATA_PROVIDER_ABI",
+                "getLiquidationProtocolFee",
+                aaveNetworkInfo.network
+            );
+
             for (let i = 0; i < reservesConfigData1.length; i++) {
                 allReserveTokens[i].decimals = reservesConfigData1[i][0];
                 allReserveTokens[i].ltv = reservesConfigData1[i][1].toString();
@@ -1531,6 +1704,8 @@ class Engine {
                 allReserveTokens[i].isfrozen = sqlManager.getBitFromBoolean(
                     reservesConfigData1[i][9]
                 );
+                allReserveTokens[i].liquidationprotocolfee =
+                    liquidationProtocolFees[i][0].toString();
             }
 
             //check if there are reserves in the DB which are not in the reservesList
@@ -1569,10 +1744,12 @@ class Engine {
                     )}, ${sqlManager.getBitFromBoolean(
                         o.isactive
                     )}, ${sqlManager.getBitFromBoolean(o.isfrozen)}, '${
-                        o.liquidityindex
-                    }', '${o.variableborrowindex}', '${o.liquidityrate}', '${
-                        o.variableborrowrate
-                    }', '${o.lastupdatetimestamp}', '${o.atokenaddress}','${
+                        o.liquidationprotocolfee
+                    }', '${o.liquidityindex}', '${o.variableborrowindex}', '${
+                        o.liquidityrate
+                    }', '${o.variableborrowrate}', '${
+                        o.lastupdatetimestamp
+                    }', '${o.atokenaddress}','${
                         o.variabledebttokenaddress
                     }', '${o.stabledebttokenaddress}', '${
                         o.totalstabledebt
@@ -1587,7 +1764,7 @@ class Engine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
+                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidationprotocolfee, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
                     ON (target.address = source.address AND target.network = source.network)
                     WHEN MATCHED THEN
                     UPDATE SET                        
@@ -1601,6 +1778,7 @@ class Engine {
                         stableborrowrateenabled = source.stableborrowrateenabled,
                         isactive = source.isactive,
                         isfrozen = source.isfrozen,
+                        liquidationprotocolfee = source.liquidationprotocolfee,
                         liquidityindex = source.liquidityindex,
                         variableborrowindex = source.variableborrowindex,
                         liquidityrate = source.liquidityrate,
@@ -1615,8 +1793,8 @@ class Engine {
                         sorting = source.sorting,
                         modifiedon = source.modifiedon
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
-                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv, source.sorting, source.modifiedon);
+                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidationprotocolfee, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
+                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidationprotocolfee, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv, source.sorting, source.modifiedon);
                 `;
 
                 await sqlManager.execQuery(sqlQuery);
@@ -1985,6 +2163,25 @@ class Engine {
                 "No user reserves data found for the given addresses"
             );
         }
+    }
+
+    async updateCloseFactor(
+        context: InvocationContext | null = null,
+        network: Network | null = null
+    ) {
+        logger.initialize(
+            "function:updateCloseFactor",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+        await this.initializeAlchemy();
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            await this.saveChanges(
+                "updateCloseFactor",
+                aaveNetworkInfo.network
+            );
+        }
+        await logger.log("End updateCloseFactor", "functionAppExecution");
     }
 
     /**
