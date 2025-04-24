@@ -21,6 +21,7 @@ class Constants {
                 poolAddressesProvider:
                     "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
             },
+            averageLiquidationGasUnits: 170000,
         },
     ];
 
@@ -126,7 +127,7 @@ class Constants {
         ],
 
         FLASHLOAN_EVENT_ABI: [
-            "event FlashLoan(address indexed target, address indexed initiator, address indexed asset, uint256 amount, uint256 premium, uint16 referralCode)",
+            "event FlashLoan(address indexed target, address indexed initiator, address indexed asset, uint256 amount, uint256 interestRateMode, uint256 premium, uint16 referralCode)",
         ],
 
         AGGREGATOR_V3_INTERFACE_ABI: [

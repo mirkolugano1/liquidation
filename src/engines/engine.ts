@@ -68,6 +68,9 @@ class Engine {
             );
             const closeFactor = await dataProviderContract.getCloseFactor();
             this.aave[aaveNetworkInfo.network].closeFactor = closeFactor;
+
+            const gasPrice = await dataProviderContract.getGasPrice();
+            this.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
         }
     }
 
@@ -142,6 +145,12 @@ class Engine {
                     externalCollateral;
             }
         }
+    }
+
+    async updateGasPrice(network: Network) {
+        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
+        const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
+        this.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
     }
 
     async initializeReserves(network: Network | null = null) {
@@ -430,72 +439,11 @@ class Engine {
                         await this.initializeUsersReserves(network);
                         alreadyUpdatedUsersReserves = true;
                         break;
-                    case "updatePrices":
-                        if (alreadyUpdatedPrices) continue;
-                        await this.updatePrices(change, network);
-                        alreadyUpdatedPrices = true;
                     default:
                         break;
                 }
             }
         }
-    }
-
-    updatePrices(reservesChangedCheck: any, network: string) {
-        const networkInfo = this.aave[network];
-        const addressesDb = this.aave[network].addresses;
-
-        //define object (map) of user assets that have the changed reserves either as collateral or as debt
-        //userAssets: {address: {collateral: [reserves], debt: [reserves]}}
-        let userAssets: any = {};
-
-        //loop through loaded addresses from DB
-        for (const addressRecord of addressesDb) {
-            //loop through reserves
-            for (let reserveChangedCheck of reservesChangedCheck) {
-                //if reserve price has not changed, we skip it
-                if (reserveChangedCheck.check != "none") {
-                    if (reserveChangedCheck.check == "debt") {
-                        if (!userAssets.hasOwnProperty(addressRecord.address))
-                            userAssets[addressRecord.address] = {};
-                        if (
-                            !userAssets[addressRecord.address].hasOwnProperty(
-                                "debt"
-                            )
-                        )
-                            userAssets[addressRecord.address].debt = [];
-
-                        userAssets[addressRecord.address].debt.push(
-                            reserveChangedCheck.reserve
-                        );
-                    } else if (reserveChangedCheck.check == "collateral") {
-                        if (!userAssets.hasOwnProperty(addressRecord.address))
-                            userAssets[addressRecord.address] = {};
-                        if (
-                            !userAssets[addressRecord.address].hasOwnProperty(
-                                "collateral"
-                            )
-                        )
-                            userAssets[addressRecord.address].collateral = [];
-
-                        userAssets[addressRecord.address].collateral.push(
-                            reserveChangedCheck.reserve
-                        );
-                    }
-                }
-            }
-        }
-
-        //get list of addresses for which to check health factor from the userAssets object
-        const addressesToCheck = Object.keys(userAssets);
-
-        /*
-        this.checkLiquidateAddresses(
-            addressesToCheck,
-            networkInfo.network,
-            userAssets
-        );
-        */
     }
 
     //#region Alchemy Webhook "processAaveEvent"
@@ -1566,13 +1514,36 @@ class Engine {
             .mul(debtPrice)
             .div(10 ** debtDecimals);
 
-        // 7. Calculate profit in USD
-        const profitUSD = collateralValueUSD.sub(debtValueUSD);
+        // 6. Calculate gross profit in USD
+        const grossProfitUSD = collateralValueUSD.sub(debtValueUSD);
+
+        // 7. Calculate gas cost in USD with the appropriate multiplier
+        // Initial calculation with base fee
+        const wethReserve = _.find(_.values(aaveNetworkInfo.reserves), {
+            symbol: "WETH",
+        });
+        const ethPriceUSD = new Big(wethReserve.price).div(
+            10 ** wethReserve.decimals
+        );
+        const baseTxCostWei = new Big(
+            aaveNetworkInfo.averageLiquidationGasUnits
+        ).mul(aaveNetworkInfo.gasPrice);
+        const baseTxCostUSD = baseTxCostWei
+            .mul(ethPriceUSD)
+            .div(10 ** wethReserve.decimals);
+
+        // Apply fee tier based on gross profit
+        const gasFeeMultiplier = grossProfitUSD.gt(new Big(100)) ? 10000 : 5000;
+        const scaledGasMultiplier = new Big(gasFeeMultiplier).div(10000);
+        const actualTxCostUSD = baseTxCostUSD.mul(scaledGasMultiplier);
+
+        // 8. Calculate net profit in USD
+        const netProfitUSD = grossProfitUSD.sub(actualTxCostUSD);
 
         // Return: [debtToCover in native units, profit in USD]
         return [
             liquidatableDebtAmount, // Amount of debt tokens to repay (native units)
-            profitUSD, // Profit in USD
+            netProfitUSD, // Profit in USD
         ];
     }
 
@@ -2209,6 +2180,7 @@ class Engine {
 
         await this.initializeAlchemy();
         await this.initializeReserves(network);
+
         //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
         const allAddressesDb = await sqlManager.execQuery(
             `SELECT * FROM addresses WHERE healthfactor < 2 ORDER BY healthfactor;`
@@ -2221,6 +2193,10 @@ class Engine {
 
         for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             if (network && network != aaveNetworkInfo.network) continue;
+
+            //update gas price of network along with tokens prices
+            await this.updateGasPrice(aaveNetworkInfo.network);
+
             const key = this.getAaveNetworkString(aaveNetworkInfo);
             const addressesDb = _.filter(
                 allAddressesDb,
