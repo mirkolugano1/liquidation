@@ -35,11 +35,6 @@ app.get("/healthcheck", (req, res) => {
     res.status(200).send("Healthy");
 });
 
-app.get("/loadChanges", async (req, res) => {
-    await engine.loadChanges(req);
-    res.status(200);
-});
-
 app.get("/refresh", async (req, res) => {
     await engine.refresh(req, res);
     res.status(200);

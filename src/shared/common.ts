@@ -20,7 +20,7 @@ class Common {
         return process.env[key];
     }
 
-    convertUSDtoETH(
+    public convertUSDtoETH(
         tokenPriceInUSD: number | string | Big,
         ethPriceInUSD: number | string | Big
     ) {
@@ -63,6 +63,14 @@ class Common {
         return tokenPrice.mul(ethPrice).toNumber();
     }
 
+    public normalizeAddress(address: string) {
+        if (!address) return "";
+        const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
+        const firstNonZeroIndex = addressWithoutPrefix.search(/[^0]/); // Find the index of the first non-zero character
+        const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end
+        return "0x" + normalized.padStart(40, "0"); // Ensure the address is 40 characters long by padding with zeros if necessary
+    }
+
     public getJsonObjectFromArray(
         array: any[],
         key: string,
@@ -71,10 +79,6 @@ class Common {
         return Object.fromEntries(
             _.map(array, (item: any) => [item[key], value ? item[value] : item])
         );
-    }
-
-    public intToBinary(integerValue: any) {
-        return integerValue.toString(2);
     }
 
     public async sleep(ms: number) {

@@ -7,6 +7,8 @@ import { InvocationContext } from "@azure/functions";
 
 class Logger {
     private clientAppName: string = "";
+    private originalLoggingFramework: LoggingFramework =
+        LoggingFramework.ApplicationInsights;
     private loggingFramework: LoggingFramework =
         LoggingFramework.ApplicationInsights;
     private outputType: OutputType = OutputType.Console;
@@ -191,7 +193,8 @@ class Logger {
     async log(
         log: any,
         logLevel: string = "info",
-        logType: LogType = LogType.Trace
+        logType: LogType = LogType.Trace,
+        forceLoggingFramework: LoggingFramework | null = null
     ) {
         const date = new Date();
 
@@ -213,6 +216,11 @@ class Logger {
 
         // Avoid multi-line logs in console
         console.log("Logger", JSON.stringify(dbParameters));
+
+        if (forceLoggingFramework) {
+            this.originalLoggingFramework = this.loggingFramework;
+            this.loggingFramework = forceLoggingFramework;
+        }
 
         // Application Insights logging
         if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
@@ -249,6 +257,10 @@ class Logger {
             VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)
         `;
             await sqlManager.execQuery(query, dbParameters);
+        }
+
+        if (forceLoggingFramework) {
+            this.loggingFramework = this.originalLoggingFramework;
         }
     }
 
