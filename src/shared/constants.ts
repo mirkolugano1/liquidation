@@ -15,7 +15,7 @@ class Constants {
     AAVE_NETWORKS_INFOS: any[] = [
         {
             network: Network.ARB_MAINNET,
-            addresses: {
+            aaveAddresses: {
                 //this will be filled up at startup from the initializeAlchemy() method with the other useful addresses
                 //fetching the other addresses from the pool address provider
                 poolAddressesProvider:
@@ -25,7 +25,7 @@ class Constants {
         },
     ];
 
-    CHUNK_SIZE = 500;
+    CHUNK_SIZE = 200;
 
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
 

@@ -1,10 +1,10 @@
 import engine from "../engines/engine";
 import { app } from "@azure/functions";
 
-app.timer("updateCloseFactor", {
+app.timer("updateGasPrice", {
     schedule: "0 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await engine.updateCloseFactor(context);
+        await engine.updateGasPrice(context);
     },
 });
 
@@ -25,7 +25,7 @@ app.timer("updateReservesData", {
 app.timer("updateUserAccountDataAndUserReserves", {
     schedule: "10 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await engine.updateUserAccountDataAndUserReserves(context);
+        await engine.updateUserAccountDataAndUsersReserves(context);
     },
 });
 

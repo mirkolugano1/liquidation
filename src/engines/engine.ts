@@ -72,31 +72,12 @@ class Engine {
         await this.initializeAddresses();
         await this.initializeReserves();
         await this.initializeUsersReserves();
-        await this.initializeCloseFactor();
+        await this.initializeGasPrice();
 
         this.isWebServerInitialized = true;
     }
 
     //#endregion initializeWebServer
-
-    //#region initializeCloseFactor
-
-    async initializeCloseFactor() {
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
-            const dataProviderContract = this.getContract(
-                aaveNetworkInfo.addresses.poolDataProvider,
-                Constants.ABIS.POOL_DATA_PROVIDER_ABI,
-                aaveNetworkInfo.network
-            );
-            const closeFactor = await dataProviderContract.getCloseFactor();
-            this.aave[aaveNetworkInfo.network].closeFactor = closeFactor;
-
-            const gasPrice = await dataProviderContract.getGasPrice();
-            this.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
-        }
-    }
-
-    //#endregion initializeCloseFactor
 
     //#region initializeWebServerUrl
 
@@ -170,7 +151,7 @@ class Engine {
                 const userReserves = this.aave[key].usersReserves[address];
                 const externalCollateral = userReserves.reduce(
                     (total: any, userReserve: any) => {
-                        return total + userReserve.currentatokenbalance;
+                        return total + userReserve.currentATokenBalance;
                     },
                     0
                 );
@@ -250,7 +231,7 @@ class Engine {
             this.aave[key] = networkInfo;
 
             const addresses = await this.multicall(
-                aaveNetworkInfo.addresses.poolAddressesProvider,
+                aaveNetworkInfo.aaveAddresses.poolAddressesProvider,
                 null,
                 "ADDRESSES_PROVIDER_ABI",
                 ["getPoolDataProvider", "getPriceOracle", "getPool"],
@@ -265,9 +246,10 @@ class Engine {
                 return;
             }
 
-            networkInfo.addresses.poolDataProvider = addresses[0]?.toString();
-            networkInfo.addresses.aaveOracle = addresses[1]?.toString();
-            networkInfo.addresses.pool = addresses[2]?.toString();
+            networkInfo.aaveAddresses.poolDataProvider =
+                addresses[0]?.toString();
+            networkInfo.aaveAddresses.aaveOracle = addresses[1]?.toString();
+            networkInfo.aaveAddresses.pool = addresses[2]?.toString();
         }
     }
 
@@ -280,6 +262,7 @@ class Engine {
     aave: any;
     contractInterfaces: any = {};
 
+    triggerWebServerActionDevDisabled: boolean = true;
     webappUrl: string = "";
     isWebServerInitialized: boolean = false;
     batchAddressesTreshold: number = 25;
@@ -313,23 +296,25 @@ class Engine {
         if (!Array.isArray(addresses)) addresses = [addresses];
         const aaveNetworkInfo = this.getAaveNetworkInfo(network);
         const userConfigurations = await this.multicall(
-            aaveNetworkInfo.addresses.poolDataProvider,
+            aaveNetworkInfo.aaveAddresses.pool,
             addresses,
-            "POOL_DATA_PROVIDER_ABI",
+            "POOL_ABI",
             "getUserConfiguration",
             aaveNetworkInfo.network
         );
-        let ucQuery = `UPDATE addresses SET userconfiguration = CASE `;
+        let ucQuery = `UPDATE addresses SET userConfiguration = CASE `;
         for (let i = 0; i < userConfigurations.length; i++) {
             const userAddress = addresses[i];
-            const userConfiguration = userConfigurations[i]?.toString(2);
+            const userConfiguration = new Big(userConfigurations[i])
+                .toNumber()
+                .toString(2);
 
-            this.aave[network].addressesObjects[userAddress].userconfiguration =
+            this.aave[network].addressesObjects[userAddress].userConfiguration =
                 userConfiguration;
 
             ucQuery += `WHEN address = '${userAddress}' THEN '${userConfiguration}' `;
         }
-        ucQuery += `ELSE userconfiguration END WHERE address IN ('${addresses.join(
+        ucQuery += `ELSE userConfiguration END WHERE address IN ('${addresses.join(
             "','"
         )}');`;
         await sqlManager.execQuery(ucQuery);
@@ -337,15 +322,18 @@ class Engine {
 
     //#endregion updateUserConfiguration
 
-    //#region updateGasPrice
+    //#region initializeGasPrice
 
-    async updateGasPrice(network: Network) {
-        const aaveNetworkInfo = this.getAaveNetworkInfo(network);
-        const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
-        this.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
+    async initializeGasPrice(network: Network | null = null) {
+        if (!this.aave) throw new Error("Aave object not initialized");
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            if (network && network != aaveNetworkInfo.network) continue;
+            const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
+            this.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
+        }
     }
 
-    //#endregion updateGasPrice
+    //#endregion initializeGasPrice
 
     //#region updateUsersReservesData
 
@@ -372,7 +360,7 @@ class Engine {
         }
 
         const results = await this.multicall(
-            aaveNetworkInfo.addresses.poolDataProvider,
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
             multicallUserReserveDataParameters,
             "POOL_DATA_PROVIDER_ABI",
             "getUserReserveData",
@@ -418,6 +406,24 @@ class Engine {
 
                 allUserReserveObjects.push(...userReservesObjects);
 
+                //update usersReserves in memory
+                if (!this.aave[key].hasOwnProperty("usersReserves"))
+                    this.aave[key].usersReserves = {};
+                for (let i = 0; i < allUserReserveObjects.length; i++) {
+                    const userReservesObject = allUserReserveObjects[i];
+                    if (
+                        !this.aave[key].hasOwnProperty(
+                            userReservesObject.userAddress
+                        )
+                    )
+                        this.aave[key].usersReserves[
+                            userReservesObject.userAddress
+                        ] = [];
+                    this.aave[key].usersReserves[
+                        userReservesObject.userAddress
+                    ].push(userReservesObject);
+                }
+
                 let sqlQuery = `                        
                         MERGE INTO usersreserves AS target
                         USING (VALUES 
@@ -426,23 +432,23 @@ class Engine {
                                 (o) =>
                                     `('${o.userAddress}', '${o.tokenAddress}', '${key}', '${o.currentATokenBalance}', '${o.currentStableDebt}', '${o.currentVariableDebt}', '${o.principalStableDebt}', '${o.scaledVariableDebt}', '${o.stableBorrowRate}', '${o.liquidityRate}', '${o.stableRateLastUpdated}', ${o.usageAsCollateralEnabled}, GETUTCDATE())`
                             ).join(",")}
-                        ) AS source (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled, modifiedon)
+                        ) AS source (address, tokenaddress, network, currentATokenBalance, currentStableDebt, currentVariableDebt, principalStableDebt, scaledVariableDebt, stableBorrowRate, liquidityRate, stableRateLastUpdated, usageAsCollateralEnabled, modifiedOn)
                         ON (target.address = source.address AND target.tokenaddress = source.tokenaddress AND target.network = source.network)
                         WHEN MATCHED THEN
                         UPDATE SET                        
-                            currentatokenbalance = source.currentatokenbalance,
-                            currentstabledebt = source.currentstabledebt,
-                            currentvariabledebt = source.currentvariabledebt,
-                            principalstabledebt = source.principalstabledebt,
-                            scaledvariabledebt = source.scaledvariabledebt,
-                            stableborrowrate = source.stableborrowrate,
-                            liquidityrate = source.liquidityrate,
-                            stableratelastupdated = source.stableratelastupdated,
-                            usageascollateralenabled = source.usageascollateralenabled,
-                            modifiedon = source.modifiedon
+                            currentATokenBalance = source.currentATokenBalance,
+                            currentStableDebt = source.currentStableDebt,
+                            currentVariableDebt = source.currentVariableDebt,
+                            principalStableDebt = source.principalStableDebt,
+                            scaledVariableDebt = source.scaledVariableDebt,
+                            stableBorrowRate = source.stableBorrowRate,
+                            liquidityRate = source.liquidityRate,
+                            stableRateLastUpdated = source.stableRateLastUpdated,
+                            usageAsCollateralEnabled = source.usageAsCollateralEnabled,
+                            modifiedOn = source.modifiedOn
                             WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, tokenaddress, network, currentatokenbalance, currentstabledebt, currentvariabledebt, principalstabledebt, scaledvariabledebt, stableborrowrate, liquidityrate, stableratelastupdated, usageascollateralenabled, modifiedon)
-                        VALUES (source.address, source.tokenaddress, source.network, source.currentatokenbalance, source.currentstabledebt, source.currentvariabledebt, source.principalstabledebt, source.scaledvariabledebt, source.stableborrowrate, source.liquidityrate, source.stableratelastupdated, source.usageascollateralenabled, source.modifiedon);
+                        INSERT (address, tokenaddress, network, currentATokenBalance, currentStableDebt, currentVariableDebt, principalStableDebt, scaledVariableDebt, stableBorrowRate, liquidityRate, stableRateLastUpdated, usageAsCollateralEnabled, modifiedOn)
+                        VALUES (source.address, source.tokenaddress, source.network, source.currentATokenBalance, source.currentStableDebt, source.currentVariableDebt, source.principalStableDebt, source.scaledVariableDebt, source.stableBorrowRate, source.liquidityRate, source.stableRateLastUpdated, source.usageAsCollateralEnabled, source.modifiedOn);
                             `;
 
                 sqlQueries.push(sqlQuery);
@@ -558,13 +564,13 @@ class Engine {
                 price: reserve.price,
                 address: reserve.address,
                 balance:
-                    userReserve.currentvariabledebt +
-                    userReserve.currentstabledebt,
+                    userReserve.currentVariableDebt +
+                    userReserve.currentStableDebt,
                 decimals: reserve.decimals,
             };
         });
 
-        debts = _.reject(debts, (o: any) => o.balance == 0);
+        debts = _.reject(debts, (o: any) => !o || o.balance == 0);
         if (!debts || debts.length == 0) return 0;
         return debts.reduce((total: any, debt: any) => {
             const { price, address, balance, decimals } = debt;
@@ -588,25 +594,25 @@ class Engine {
 
         let collaterals = _.map(reserves, (reserve) => {
             const userReserve = _.find(userReserves, (o) => {
-                return o.tokenaddress == reserve.address;
+                return o.tokenAddress == reserve.address;
             });
             if (!userReserve) return null;
             return {
                 price: reserve.price,
                 address: reserve.address,
-                balance: userReserve.currentatokenbalance,
-                usageAsCollateralEnabled: userReserve.usageascollateralenabled,
+                balance: userReserve.currentATokenBalance,
+                usageAsCollateralEnabled: userReserve.usageAsCollateralEnabled,
                 decimals: reserve.decimals,
             };
         });
 
         collaterals = _.reject(
             collaterals,
-            (o: any) => !o.usageascollateralenabled || o.balance == 0
+            (o: any) => !o || !o.usageAsCollateralEnabled || o.balance == 0
         );
         if (!collaterals || collaterals.length == 0) return 0;
         const externalCollateral =
-            networkInfo.addresses[address].externalCollateral ?? 0;
+            networkInfo.addressesObjects[address].externalCollateral ?? 0;
         return (
             externalCollateral +
             collaterals.reduce((total: any, debt: any) => {
@@ -623,6 +629,15 @@ class Engine {
 
     async triggerWebServerAction(type: string, network: string) {
         await this.initializeWebServerUrl();
+        if (
+            this.triggerWebServerActionDevDisabled &&
+            process.env.LIQUIDATIONENVIRONMENT != "prod"
+        ) {
+            console.log(
+                `Skipped triggering web server action ${type} for network ${network}`
+            );
+            return;
+        }
         await axios.get(
             `${this.webappUrl}/refresh?type=${type}&network=${network}`
         );
@@ -641,8 +656,8 @@ class Engine {
         }
 
         switch (type) {
-            case "updateCloseFactor":
-                await this.initializeCloseFactor();
+            case "updateGasPrice":
+                await this.initializeGasPrice(network);
                 break;
             case "updateReserves":
                 await this.initializeReserves(network);
@@ -694,7 +709,7 @@ class Engine {
         const networkInfo = await this.getAaveNetworkInfo(network);
 
         const userAccountData = await this.multicall(
-            networkInfo.addresses.pool,
+            networkInfo.aaveAddresses.pool,
             _addresses,
             "POOL_ABI",
             "getUserAccountData",
@@ -1104,19 +1119,19 @@ class Engine {
                     };
                     for (const userReserve of userReserves) {
                         if (
-                            userReserve.usageascollateralenabled &&
+                            userReserve.usageAsCollateralEnabled &&
                             this.isReserveUsedAsCollateral(
-                                liquidatableUserAddressObject.userconfiguration,
+                                liquidatableUserAddressObject.userConfiguration,
                                 userReserve.tokenaddress,
                                 network
                             ) &&
-                            userReserve.currentatokenbalance > 0
+                            userReserve.currentATokenBalance > 0
                         ) {
                             for (const debtUserReserve of userReserves) {
                                 if (
                                     userReserve.tokenaddress !=
                                         debtUserReserve.tokenaddress &&
-                                    (debtUserReserve.currentstabledebt > 0 ||
+                                    (debtUserReserve.currentStableDebt > 0 ||
                                         debtUserReserve.variabledebt > 0)
                                 ) {
                                     //we are in a collateral / debt pair whose balance is both > 0.
@@ -1125,6 +1140,7 @@ class Engine {
                                         this.calculateNetLiquidationReward(
                                             userReserve,
                                             debtUserReserve,
+                                            liquidatableUserAddressObject.healthFactor,
                                             network
                                         );
 
@@ -1172,7 +1188,7 @@ class Engine {
                             }
                         );
                         await this.multicall(
-                            aaveNetworkInfo.addresses.pool,
+                            aaveNetworkInfo.aaveAddresses.pool,
                             liquidationsParameters,
                             "POOL_ABI",
                             "liquidationCall",
@@ -1204,14 +1220,16 @@ class Engine {
     calculateNetLiquidationReward(
         collateralAssetObject: any,
         debtAssetObject: any,
+        healthFactor: number,
         network: Network | string
     ) {
         const aaveNetworkInfo = this.getAaveNetworkInfo(network);
         const debtAmountTotal: Big = new Big(
-            debtAssetObject.currentstabledebt ?? 0
-        ).add(new Big(debtAssetObject.currentvariabledebt ?? 0));
+            debtAssetObject.currentStableDebt ?? 0
+        ).add(new Big(debtAssetObject.currentVariableDebt ?? 0));
+        const closeFactor = healthFactor > 0.95 ? 0.5 : 1; // 50% close factor if health factor is > 0.95, otherwise 100%
         const liquidatableDebtAmount: Big = debtAmountTotal
-            .mul(aaveNetworkInfo.closeFactor)
+            .mul(closeFactor)
             .div(10000);
 
         const debtTokenAddress = debtAssetObject.tokenaddress;
@@ -1328,7 +1346,7 @@ class Engine {
             const key = aaveNetworkInfo.network.toString();
 
             const results = await this.multicall(
-                aaveNetworkInfo.addresses.poolDataProvider,
+                aaveNetworkInfo.aaveAddresses.poolDataProvider,
                 null,
                 "POOL_DATA_PROVIDER_ABI",
                 "getAllReservesTokens",
@@ -1344,7 +1362,7 @@ class Engine {
             });
 
             const reserveTokenAddresses = await this.multicall(
-                aaveNetworkInfo.addresses.poolDataProvider,
+                aaveNetworkInfo.aaveAddresses.poolDataProvider,
                 _.map(allReserveTokens, (o) => o.address),
                 "POOL_DATA_PROVIDER_ABI",
                 "getReserveTokensAddresses",
@@ -1353,11 +1371,11 @@ class Engine {
 
             //const reserveTokenAddresses = results[1][0];
             for (let i = 0; i < reserveTokenAddresses.length; i++) {
-                allReserveTokens[i].atokenaddress =
+                allReserveTokens[i].aTokenAddress =
                     reserveTokenAddresses[i][0].toString();
-                allReserveTokens[i].stabledebttokenaddress =
+                allReserveTokens[i].stableDebtTokenAddress =
                     reserveTokenAddresses[i][1].toString();
-                allReserveTokens[i].variabledebttokenaddress =
+                allReserveTokens[i].variableDebtTokenAddress =
                     reserveTokenAddresses[i][2].toString();
             }
 
@@ -1367,7 +1385,7 @@ class Engine {
             );
 
             const reservesData1 = await this.multicall(
-                aaveNetworkInfo.addresses.poolDataProvider,
+                aaveNetworkInfo.aaveAddresses.poolDataProvider,
                 allReserveTokensAddresses,
                 "POOL_DATA_PROVIDER_ABI",
                 "getReserveData",
@@ -1375,33 +1393,33 @@ class Engine {
             );
 
             for (let i = 0; i < reservesData1.length; i++) {
-                allReserveTokens[i].liquidityindex =
+                allReserveTokens[i].liquidityIndex =
                     reservesData1[i][9].toString();
-                allReserveTokens[i].variableborrowindex =
+                allReserveTokens[i].variableBorrowIndex =
                     reservesData1[i][10].toString();
-                allReserveTokens[i].liquidityrate =
+                allReserveTokens[i].liquidityRate =
                     reservesData1[i][5].toString();
-                allReserveTokens[i].variableborrowrate =
+                allReserveTokens[i].variableBorrowRate =
                     reservesData1[i][6].toString();
-                allReserveTokens[i].totalstabledebt =
+                allReserveTokens[i].totalStableDebt =
                     reservesData1[i][3].toString();
-                allReserveTokens[i].lastupdatetimestamp =
+                allReserveTokens[i].lastUpdateTimestamp =
                     reservesData1[i][11].toString();
-                allReserveTokens[i].totalvariabledebt =
+                allReserveTokens[i].totalVariableDebt =
                     reservesData1[i][4].toString();
             }
 
             const reservesConfigData1 = await this.multicall(
-                aaveNetworkInfo.addresses.poolDataProvider,
+                aaveNetworkInfo.aaveAddresses.poolDataProvider,
                 allReserveTokensAddresses,
                 "POOL_DATA_PROVIDER_ABI",
                 "getReserveConfigurationData",
                 aaveNetworkInfo.network
             );
 
-            //update reserves liquidationprotocolfee
+            //update reserves liquidationProtocolFee
             const liquidationProtocolFees = await this.multicall(
-                aaveNetworkInfo.addresses.poolDataProvider,
+                aaveNetworkInfo.aaveAddresses.poolDataProvider,
                 allReserveTokensAddresses,
                 "POOL_DATA_PROVIDER_ABI",
                 "getLiquidationProtocolFee",
@@ -1413,23 +1431,23 @@ class Engine {
                 allReserveTokens[i].ltv = reservesConfigData1[i][1].toString();
                 allReserveTokens[i].reserveliquidationthreshold =
                     reservesConfigData1[i][2].toString();
-                allReserveTokens[i].reserveliquidationbonus =
+                allReserveTokens[i].reserveLiquidationBonus =
                     reservesConfigData1[i][3].toString();
-                allReserveTokens[i].reservefactor =
+                allReserveTokens[i].reserveFactor =
                     reservesConfigData1[i][4].toString();
-                allReserveTokens[i].usageascollateralenabled =
+                allReserveTokens[i].usageAsCollateralEnabled =
                     sqlManager.getBitFromBoolean(reservesConfigData1[i][5]);
-                allReserveTokens[i].borrowingenabled =
+                allReserveTokens[i].borrowingEnabled =
                     sqlManager.getBitFromBoolean(reservesConfigData1[i][6]);
-                allReserveTokens[i].stableborrowrateenabled =
+                allReserveTokens[i].stableBorrowRateEnabled =
                     sqlManager.getBitFromBoolean(reservesConfigData1[i][7]);
-                allReserveTokens[i].isactive = sqlManager.getBitFromBoolean(
+                allReserveTokens[i].isActive = sqlManager.getBitFromBoolean(
                     reservesConfigData1[i][8]
                 );
-                allReserveTokens[i].isfrozen = sqlManager.getBitFromBoolean(
+                allReserveTokens[i].isFrozen = sqlManager.getBitFromBoolean(
                     reservesConfigData1[i][9]
                 );
-                allReserveTokens[i].liquidationprotocolfee =
+                allReserveTokens[i].liquidationProtocolFee =
                     liquidationProtocolFees[i][0].toString();
             }
 
@@ -1458,27 +1476,27 @@ class Engine {
                 (o, index) => {
                     return `('${o.address}', '${key}', '${o.symbol}', ${
                         o.decimals
-                    }, '${o.reserveliquidationthreshold}', '${
-                        o.reserveliquidationbonus
-                    }', '${o.reservefactor}', ${
-                        o.usageascollateralenabled
+                    }, '${o.reserveLiquidationThreshold}', '${
+                        o.reserveLiquidationBonus
+                    }', '${o.reserveFactor}', ${
+                        o.usageAsCollateralEnabled
                     }, ${sqlManager.getBitFromBoolean(
-                        o.borrowingenabled
+                        o.borrowingEnabled
                     )}, ${sqlManager.getBitFromBoolean(
-                        o.stableborrowrateenabled
+                        o.stableBorrowRateEnabled
                     )}, ${sqlManager.getBitFromBoolean(
-                        o.isactive
-                    )}, ${sqlManager.getBitFromBoolean(o.isfrozen)}, '${
-                        o.liquidationprotocolfee
-                    }', '${o.liquidityindex}', '${o.variableborrowindex}', '${
-                        o.liquidityrate
-                    }', '${o.variableborrowrate}', '${
-                        o.lastupdatetimestamp
-                    }', '${o.atokenaddress}','${
-                        o.variabledebttokenaddress
-                    }', '${o.stabledebttokenaddress}', '${
-                        o.totalstabledebt
-                    }', '${o.totalvariabledebt}', '${
+                        o.isActive
+                    )}, ${sqlManager.getBitFromBoolean(o.isFrozen)}, '${
+                        o.liquidationProtocolFee
+                    }', '${o.liquidityIndex}', '${o.variableBorrowIndex}', '${
+                        o.liquidityRate
+                    }', '${o.variableBorrowRate}', '${
+                        o.lastUpdateTimestamp
+                    }', '${o.aTokenAddress}','${
+                        o.variableDebtTokenAddress
+                    }', '${o.stableDebtTokenAddress}', '${
+                        o.totalStableDebt
+                    }', '${o.totalVariableDebt}', '${
                         o.ltv
                     }', ${index}, GETUTCDATE())`;
                 }
@@ -1489,37 +1507,37 @@ class Engine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidationprotocolfee, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
+                    ) AS source (address, network, symbol, decimals, reserveLiquidationThreshold, reserveLiquidationBonus, reserveFactor, usageAsCollateralEnabled, borrowingEnabled, stableBorrowRateEnabled, isActive, isFrozen, liquidationProtocolFee, liquidityIndex, variableBorrowIndex, liquidityRate, variableBorrowRate, lastUpdateTimestamp, aTokenAddress, variableDebtTokenAddress, stableDebtTokenAddress, totalStableDebt, totalVariableDebt, ltv, sorting, modifiedOn)
                     ON (target.address = source.address AND target.network = source.network)
                     WHEN MATCHED THEN
                     UPDATE SET                        
                         symbol = source.symbol,
                         decimals = source.decimals,                        
-                        reserveliquidationtreshold = source.reserveliquidationtreshold,
-                        reserveliquidationbonus = source.reserveliquidationbonus,
-                        reservefactor = source.reservefactor,
-                        usageascollateralenabled = source.usageascollateralenabled,
-                        borrowingenabled = source.borrowingenabled,
-                        stableborrowrateenabled = source.stableborrowrateenabled,
-                        isactive = source.isactive,
-                        isfrozen = source.isfrozen,
-                        liquidationprotocolfee = source.liquidationprotocolfee,
-                        liquidityindex = source.liquidityindex,
-                        variableborrowindex = source.variableborrowindex,
-                        liquidityrate = source.liquidityrate,
-                        variableborrowrate = source.variableborrowrate,                        
-                        lastupdatetimestamp = source.lastupdatetimestamp,
-                        atokenaddress = source.atokenaddress,
-                        variabledebttokenaddress = source.variabledebttokenaddress,
-                        stabledebttokenaddress = source.stabledebttokenaddress,
-                        totalstabledebt = source.totalstabledebt,
-                        totalvariabledebt = source.totalvariabledebt,
+                        reserveLiquidationThreshold = source.reserveLiquidationThreshold,
+                        reserveLiquidationBonus = source.reserveLiquidationBonus,
+                        reserveFactor = source.reserveFactor,
+                        usageAsCollateralEnabled = source.usageAsCollateralEnabled,
+                        borrowingEnabled = source.borrowingEnabled,
+                        stableBorrowRateEnabled = source.stableBorrowRateEnabled,
+                        isActive = source.isActive,
+                        isFrozen = source.isFrozen,
+                        liquidationProtocolFee = source.liquidationProtocolFee,
+                        liquidityIndex = source.liquidityIndex,
+                        variableBorrowIndex = source.variableBorrowIndex,
+                        liquidityRate = source.liquidityRate,
+                        variableBorrowRate = source.variableBorrowRate,                        
+                        lastUpdateTimestamp = source.lastUpdateTimestamp,
+                        aTokenAddress = source.aTokenAddress,
+                        variableDebtTokenAddress = source.variableDebtTokenAddress,
+                        stableDebtTokenAddress = source.stableDebtTokenAddress,
+                        totalStableDebt = source.totalStableDebt,
+                        totalVariableDebt = source.totalVariableDebt,
                         ltv = source.ltv,
                         sorting = source.sorting,
-                        modifiedon = source.modifiedon
+                        modifiedOn = source.modifiedOn
                     WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, network, symbol, decimals, reserveliquidationtreshold, reserveliquidationbonus, reservefactor, usageascollateralenabled, borrowingenabled, stableborrowrateenabled, isactive, isfrozen, liquidationprotocolfee, liquidityindex, variableborrowindex, liquidityrate, variableborrowrate, lastupdatetimestamp, atokenaddress, variabledebttokenaddress, stabledebttokenaddress, totalstabledebt, totalvariabledebt, ltv, sorting, modifiedon)
-                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveliquidationtreshold, source.reserveliquidationbonus, source.reservefactor, source.usageascollateralenabled, source.borrowingenabled, source.stableborrowrateenabled, source.isactive, source.isfrozen, source.liquidationprotocolfee, source.liquidityindex, source.variableborrowindex, source.liquidityrate, source.variableborrowrate, source.lastupdatetimestamp, source.atokenaddress, source.variabledebttokenaddress, source.stabledebttokenaddress, source.totalstabledebt, source.totalvariabledebt, source.ltv, source.sorting, source.modifiedon);
+                        INSERT (address, network, symbol, decimals, reserveLiquidationThreshold, reserveLiquidationBonus, reserveFactor, usageAsCollateralEnabled, borrowingEnabled, stableBorrowRateEnabled, isActive, isFrozen, liquidationProtocolFee, liquidityIndex, variableBorrowIndex, liquidityRate, variableBorrowRate, lastUpdateTimestamp, aTokenAddress, variableDebtTokenAddress, stableDebtTokenAddress, totalStableDebt, totalVariableDebt, ltv, sorting, modifiedOn)
+                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveLiquidationThreshold, source.reserveLiquidationBonus, source.reserveFactor, source.usageAsCollateralEnabled, source.borrowingEnabled, source.stableBorrowRateEnabled, source.isActive, source.isFrozen, source.liquidationProtocolFee, source.liquidityIndex, source.variableBorrowIndex, source.liquidityRate, source.variableBorrowRate, source.lastUpdateTimestamp, source.aTokenAddress, source.variableDebtTokenAddress, source.stableDebtTokenAddress, source.totalStableDebt, source.totalVariableDebt, source.ltv, source.sorting, source.modifiedOn);
                 `;
 
                 await sqlManager.execQuery(sqlQuery);
@@ -1542,34 +1560,37 @@ class Engine {
      * - userReserves (for each user, for each token)
      * for all addresses in the DB with health factor < 2
      */
-    async updateUserAccountDataAndUserReserves(
+    async updateUserAccountDataAndUsersReserves(
         context: InvocationContext | null = null
     ) {
         //initialization
         logger.initialize(
-            "function:updateHealthFactrAndUserReserves",
+            "function:updateUserAccountDataAndUsersReserves",
             LoggingFramework.ApplicationInsights,
             context
         );
 
         await logger.log(
-            "Start updateHealthFactorAndUserReserves",
+            "Start updateUserAccountDataAndUsersReserves",
             "functionAppExecution"
         );
 
         await this.initializeAlchemy();
         await this.initializeReserves();
+        await this.initializeAddresses();
 
         for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             const key = aaveNetworkInfo.network.toString();
             let dbAddressesArr: any[];
+            let deleteAddressesQueries: string[] = [];
             let offset = 0;
             do {
                 dbAddressesArr = await sqlManager.execQuery(
                     `SELECT * FROM addresses WHERE network = '${key}'
-                     ORDER BY addedon OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
+                     ORDER BY addedOn OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
                 `
                 );
+
                 if (dbAddressesArr.length == 0) break;
                 offset += Constants.CHUNK_SIZE;
                 const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
@@ -1582,21 +1603,23 @@ class Engine {
                 const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
                     return o.healthFactor > 2;
                 });
-                const addressesUserAccountDataHFGreaterThan2 = _.map(
+                let deleteAddresses = _.map(
                     userAccountDataHFGreaterThan2,
                     (o) => o.address
                 );
-                const addressesUserAccountDataHFLowerThan2 = _.reject(
-                    dbAddressesArr,
-                    (o) =>
-                        addressesUserAccountDataHFGreaterThan2.includes(
-                            o.address
-                        )
+                const addressesUserAccountDataHFLowerThan2 = _.filter(
+                    results,
+                    (o) => {
+                        return o.healthFactor <= 2;
+                    }
                 );
 
                 await this.updateUserConfiguration(
-                    addressesUserAccountDataHFLowerThan2,
-                    aaveNetworkInfo
+                    _.map(
+                        addressesUserAccountDataHFLowerThan2,
+                        (o) => o.address
+                    ),
+                    aaveNetworkInfo.network
                 );
 
                 await this.updateUsersReservesData(
@@ -1605,10 +1628,9 @@ class Engine {
                 );
 
                 //Save data to the DB:
-                //NOTE: it is not necessary to save the totaldebtbase to the DB, since
+                //NOTE: it is not necessary to save the totalDebtBase to the DB, since
                 //it will be calculated anyway from the usersreserves data.
                 //I leave it here anyway for now, since it is not a big deal to save it
-                let deleteAddresses: string[] = [];
                 const chunks = _.chunk(results, Constants.CHUNK_SIZE);
                 for (let i = 0; i < chunks.length; i++) {
                     const chunk = chunks[i];
@@ -1618,22 +1640,22 @@ class Engine {
                             ? `
                 UPDATE addresses 
                 SET 
-                    modifiedon = GETUTCDATE(),
-                    healthfactor = CASE
+                    modifiedOn = GETUTCDATE(),
+                    healthFactor = CASE
                         {0}
-                    ELSE healthfactor
+                    ELSE healthFactor
                     END,                                        
-                    currentliquidationthreshold = CASE
+                    currentLiquidationThreshold = CASE
                         {1}
-                    ELSE currentliquidationthreshold
+                    ELSE currentLiquidationThreshold
                     END,
-                    totalcollateralbase = CASE
+                    totalCollateralBase = CASE
                         {2}
-                    ELSE totalcollateralbase
+                    ELSE totalCollateralBase
                     END,
-                    totaldebtbase = CASE
+                    totalDebtBase = CASE
                         {3}
-                    ELSE totaldebtbase
+                    ELSE totalDebtBase
                     END
                 WHERE address IN ({4}) AND network = '${key}';
             `
@@ -1673,9 +1695,8 @@ class Engine {
                     if (query) await sqlManager.execQuery(query);
                 }
 
-                await this.triggerWebServerAction("updateUsersReserves", key);
-
                 //delete addresses from the DB where health factor is > 2
+                deleteAddresses = _.uniq(deleteAddresses);
                 if (deleteAddresses.length > 0) {
                     const chunks = _.chunk(
                         deleteAddresses,
@@ -1690,36 +1711,42 @@ class Engine {
                         i
                     ].join("','")}') AND network = '${key}';
                     `;
-                        await sqlManager.execQuery(sqlQuery);
+                        deleteAddressesQueries.push(sqlQuery);
                     }
                 }
             } while (dbAddressesArr.length > 0);
+
+            for (const deleteAddressesQuery of deleteAddressesQueries) {
+                await sqlManager.execQuery(deleteAddressesQuery);
+            }
+
+            await this.triggerWebServerAction("updateUsersReserves", key);
         }
 
         await logger.log(
-            "End updateHealthFactorAndUserReserves",
+            "End updateUserAccountDataAndUsersReserves",
             "functionAppExecution"
         );
     }
 
     //#endregion updateUserAccountDataAndUserReserves
 
-    //#region updateCloseFactor
+    //#region updateGasPrice
 
-    async updateCloseFactor(context: InvocationContext | null = null) {
+    async updateGasPrice(context: InvocationContext | null = null) {
         logger.initialize(
-            "function:updateCloseFactor",
+            "function:updateGasPrice",
             LoggingFramework.ApplicationInsights,
             context
         );
         await this.initializeAlchemy();
         for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             await this.triggerWebServerAction(
-                "updateCloseFactor",
+                "updateGasPrice",
                 aaveNetworkInfo.network
             );
         }
-        await logger.log("End updateCloseFactor", "functionAppExecution");
+        await logger.log("End updateGasPrice", "functionAppExecution");
     }
 
     //#endregion updateCloseFactor
@@ -1753,7 +1780,7 @@ class Engine {
 
         //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
         const allAddressesDb = await sqlManager.execQuery(
-            `SELECT * FROM addresses WHERE healthfactor < 2 ORDER BY healthfactor;`
+            `SELECT * FROM addresses WHERE healthFactor < 2 ORDER BY healthFactor;`
         );
 
         if (allAddressesDb.length == 0) {
@@ -1763,9 +1790,6 @@ class Engine {
 
         for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
             if (network && network != aaveNetworkInfo.network) continue;
-
-            //update gas price of network along with tokens prices
-            await this.updateGasPrice(aaveNetworkInfo.network);
 
             const key = aaveNetworkInfo.network.toString();
             const addressesDb = _.filter(
@@ -1789,7 +1813,7 @@ class Engine {
 
             //get current reserves prices from the network
             const aaveOracleContract = this.getContract(
-                aaveNetworkInfo.addresses.aaveOracle,
+                aaveNetworkInfo.aaveAddresses.aaveOracle,
                 Constants.ABIS.AAVE_ORACLE_ABI,
                 aaveNetworkInfo.network
             );
@@ -1859,11 +1883,11 @@ class Engine {
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
-                    ) AS source (address, network, price, pricemodifiedon)
+                    ) AS source (address, network, price, priceModifiedOn)
                     ON (target.address = source.address AND target.network = source.network)
                     WHEN MATCHED THEN
                     UPDATE SET                    
-                        pricemodifiedon = source.pricemodifiedon,    
+                        priceModifiedOn = source.priceModifiedOn,    
                         price = source.price;                        
                         `;
 
@@ -1893,7 +1917,7 @@ class Engine {
      *
      * @param context the InvocationContext of the function app (for Application Insights logging)
      */
-    async deleteOldTablesEntries(context: InvocationContext) {
+    async deleteOldTablesEntries(context: InvocationContext | null = null) {
         logger.initialize(
             "function:deleteOldTablesEntries",
             LoggingFramework.ApplicationInsights,
@@ -1980,21 +2004,21 @@ class Engine {
                         //detract the liquidated collateral amount from the user's collateral
                         this.aave[key].usersReserves[userLiquidated][
                             liquidationCollateralAsset
-                        ].currentatokenbalance -= liquidatedCollateralAmount;
+                        ].currentATokenBalance -= liquidatedCollateralAmount;
 
                         //detract the debt to cover from the user's debt
                         if (
                             this.aave[key].usersReserves[userLiquidated][
                                 liquidationDebtAsset
-                            ].currentstabledebt >= debtToCover
+                            ].currentStableDebt >= debtToCover
                         ) {
                             this.aave[key].usersReserves[userLiquidated][
                                 liquidationDebtAsset
-                            ].currentstabledebt -= debtToCover;
+                            ].currentStableDebt -= debtToCover;
                         } else {
                             this.aave[key].usersReserves[userLiquidated][
                                 liquidationDebtAsset
-                            ].currentvariabledebt -= debtToCover;
+                            ].currentVariableDebt -= debtToCover;
                         }
 
                         await this.updateUserConfiguration(userLiquidated, key);
@@ -2005,7 +2029,7 @@ class Engine {
                             //add the liquidated collateral amount to the liquidator's collateral
                             this.aave[key].usersReserves[userLiquidator][
                                 liquidationCollateralAsset
-                            ].currentatokenbalance +=
+                            ].currentATokenBalance +=
                                 liquidatedCollateralAmount;
                         }
 
@@ -2030,14 +2054,14 @@ class Engine {
                         addressesObjectsAddresses.includes(depositOnBehalfOf) &&
                         this.isReserveUsedAsCollateral(
                             this.aave[key].addressesObjects[depositOnBehalfOf]
-                                .userconfiguration,
+                                .userConfiguration,
                             depositReserve,
                             key
                         )
                     ) {
                         this.aave[key].usersReserves[depositOnBehalfOf][
                             depositReserve
-                        ].currentatokenbalance += depositAmount;
+                        ].currentATokenBalance += depositAmount;
                     }
                     break;
 
@@ -2059,11 +2083,11 @@ class Engine {
                         if (borrowRateMode == 1) {
                             this.aave[key].usersReserves[borrowOnBehalfOf][
                                 borrowReserve
-                            ].currentstabledebt += borrowedAmount;
+                            ].currentStableDebt += borrowedAmount;
                         } else {
                             this.aave[key].usersReserves[borrowOnBehalfOf][
                                 borrowReserve
-                            ].currentvariabledebt += borrowedAmount;
+                            ].currentVariableDebt += borrowedAmount;
                         }
 
                         await this.checkLiquidateAddresses(
@@ -2092,7 +2116,7 @@ class Engine {
                     ) {
                         this.aave[key].usersReserves[log.topics[3]][
                             repayReserve
-                        ].currentatokenbalance -= amountRepayed;
+                        ].currentATokenBalance -= amountRepayed;
                     }
 
                     //detract the repaid amount from the beneficiary's debt
@@ -2105,17 +2129,17 @@ class Engine {
                         //is not present in the Repay event. So I check the amount of the variable debt and
                         //evtl then even the stable debt, since in the end I am interested in the total debt
                         if (
-                            repayUserReserve.currentstabledebt == 0 ||
-                            repayUserReserve.currentvariabledebt >=
+                            repayUserReserve.currentStableDebt == 0 ||
+                            repayUserReserve.currentVariableDebt >=
                                 amountRepayed
                         ) {
                             this.aave[key].usersReserves[address][
                                 repayReserve
-                            ].currentvariabledebt -= amountRepayed;
+                            ].currentVariableDebt -= amountRepayed;
                         } else {
                             this.aave[key].usersReserves[address][
                                 repayReserve
-                            ].currentstabledebt -= amountRepayed;
+                            ].currentStableDebt -= amountRepayed;
                         }
 
                         await this.checkLiquidateAddresses(address, key);
@@ -2140,7 +2164,7 @@ class Engine {
                         const reserve = log.topics[1];
                         const userConfiguration =
                             this.aave[key].addressesObjects[address]
-                                .userconfiguration;
+                                .userConfiguration;
                         if (
                             this.isReserveUsedAsCollateral(
                                 userConfiguration,
@@ -2150,11 +2174,11 @@ class Engine {
                         ) {
                             this.aave[key].usersReserves[address][
                                 reserve
-                            ].currentatokenbalance += amount;
+                            ].currentATokenBalance += amount;
 
                             if (
                                 this.aave[key].usersReserves[address][reserve]
-                                    .usageascollateralenabled
+                                    .usageAsCollateralEnabled
                             ) {
                                 await this.checkLiquidateAddresses(
                                     address,
@@ -2179,11 +2203,11 @@ class Engine {
                         const reserve = log.topics[1];
                         this.aave[key].usersReserves[address][
                             reserve
-                        ].usageascollateralenabled = false;
+                        ].usageAsCollateralEnabled = false;
 
                         await this.checkLiquidateAddresses(network, address);
 
-                        const query = `UPDATE usersreserves SET usageascollateralenabled = 0 WHERE address = '${address}' AND tokenaddress = '${reserve}' AND network = '${key}'`;
+                        const query = `UPDATE usersreserves SET usageAsCollateralEnabled = 0 WHERE address = '${address}' AND tokenaddress = '${reserve}' AND network = '${key}'`;
                         await sqlManager.execQuery(query);
 
                         await this.updateUserConfiguration(address, key);
@@ -2200,11 +2224,11 @@ class Engine {
                         const reserve = log.topics[1];
                         this.aave[key].usersReserves[address][
                             reserve
-                        ].usageascollateralenabled = true;
+                        ].usageAsCollateralEnabled = true;
 
                         await this.checkLiquidateAddresses(network, address);
 
-                        const query = `UPDATE usersreserves SET usageascollateralenabled = 1 WHERE address = '${address}' AND tokenaddress = '${reserve}' AND network = '${key}'`;
+                        const query = `UPDATE usersreserves SET usageAsCollateralEnabled = 1 WHERE address = '${address}' AND tokenaddress = '${reserve}' AND network = '${key}'`;
                         await sqlManager.execQuery(query);
 
                         await this.updateUserConfiguration(address, key);
@@ -2234,7 +2258,7 @@ class Engine {
                         const reserve = log.topics[1];
                         const userConfiguration =
                             this.aave[key].addressesObjects[log.topics[2]]
-                                .userconfiguration;
+                                .userConfiguration;
                         if (
                             this.isReserveUsedAsCollateral(
                                 userConfiguration,
@@ -2242,11 +2266,11 @@ class Engine {
                                 key
                             ) &&
                             this.aave[key].usersReserves[log.topics[2]][reserve]
-                                .usageascollateralenabled
+                                .usageAsCollateralEnabled
                         ) {
                             this.aave[key].usersReserves[log.topics[2]][
                                 reserve
-                            ].currentatokenbalance -= amountWithdrawn;
+                            ].currentATokenBalance -= amountWithdrawn;
 
                             await this.checkLiquidateAddresses(
                                 log.topics[2],
@@ -2346,11 +2370,11 @@ class Engine {
                             MERGE INTO addresses AS target
                             USING (VALUES 
                                 ${this.aave[key].batchAddressesList.join(",")}
-                            ) AS source (address, network, healthFactor, addedon)
+                            ) AS source (address, network, healthFactor, addedOn)
                             ON (target.address = source.address AND target.network = source.network)
                             WHEN NOT MATCHED BY TARGET THEN
-                                INSERT (address, network, healthFactor, addedon)
-                                VALUES (source.address, source.network, source.healthFactor, source.addedon);
+                                INSERT (address, network, healthFactor, addedOn)
+                                VALUES (source.address, source.network, source.healthFactor, source.addedOn);
                         `;
 
                             await sqlManager.execQuery(query);
