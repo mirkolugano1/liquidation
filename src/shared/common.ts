@@ -1,6 +1,9 @@
 import _ from "lodash";
 import encryption from "../managers/encryptionManager";
 import Big from "big.js";
+import repo from "./repo";
+import { ethers } from "ethers";
+import { Network } from "alchemy-sdk";
 
 class Common {
     public isProd: boolean;
@@ -63,6 +66,8 @@ class Common {
         return tokenPrice.mul(ethPrice).toNumber();
     }
 
+    //#region normalizeAddress
+
     public normalizeAddress(address: string) {
         if (!address) return "";
         const addressWithoutPrefix = address.slice(2); // Remove the "0x" prefix
@@ -70,6 +75,50 @@ class Common {
         const normalized = addressWithoutPrefix.slice(firstNonZeroIndex); // Slice from the first non-zero character to the end
         return "0x" + normalized.padStart(40, "0"); // Ensure the address is 40 characters long by padding with zeros if necessary
     }
+
+    //#endregion normalizeAddress
+
+    //#region getContract
+
+    getContract(address: string, contractAbi: any, network: Network) {
+        const networkInfo = this.getAaveNetworkInfo(network);
+        return new ethers.Contract(
+            address,
+            contractAbi,
+            networkInfo.alchemyProvider
+        );
+    }
+
+    //#endregion getContract
+
+    //#region getAaveNetworkInfo
+
+    public getAaveNetworkInfo(network: Network | string) {
+        if (!network) throw new Error("No network provided");
+        const key = network.toString();
+        let obj = repo.aave[key];
+        if (!obj)
+            throw new Error(`Aave network info not found for network ${key}`);
+        return obj;
+    }
+
+    //#endregion getAaveNetworkInfo
+
+    //#region getContractInterface
+
+    public getContractInterface(contractABI: any) {
+        if (!contractABI) throw new Error("No contractABI provided");
+        const contractABIString = JSON.stringify(contractABI);
+
+        if (!repo.contractInterfaces[contractABIString]) {
+            repo.contractInterfaces[contractABIString] = new ethers.Interface(
+                contractABI
+            );
+        }
+        return repo.contractInterfaces[contractABIString];
+    }
+
+    //#endregion getContractInterface
 
     public getJsonObjectFromArray(
         array: any[],

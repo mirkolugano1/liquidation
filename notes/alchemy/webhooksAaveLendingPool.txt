@@ -72,14 +72,22 @@ Arbitrum Mainnet
       filter: {
         addresses: ["0x794a61358D6845594F94dc1DB02A252b5b4814aD"], 
         topics: [
-          ["0xea368a40e9570069bb8e6511d668293ad2e1f03b0d982431fd223de9f3b70ca6",
-          "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051",
-          "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b",
-          "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7",
-					"0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951",
-          "0x9f439ae0c81e41a04d3fdfe07aed54e6a179fb0db15be7702eb66fa8ef6f5300",
-          "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2",
-          "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd"],
+          [
+            "0xea368a40e9570069bb8e6511d668293ad2e1f03b0d982431fd223de9f3b70ca6",
+            "0xa534c8dbe71f871f9f3530e97a74601fea17b426cae02e1c5aee42c96c784051",
+            "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b",
+            "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7",
+					  "0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951",
+            "0x9f439ae0c81e41a04d3fdfe07aed54e6a179fb0db15be7702eb66fa8ef6f5300",
+            "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2",
+            "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd"
+            "0x9a2f48d3aa6146e0a0f4e8622b5ff4b9d90a3c4f5e9a3b69c8523e213f775bfe",
+            "0x9c369e2bdbd7c7a5b5c8c0b9e6f5f4b1a8dc9b3f2e5c123c3a9e3b4d3e0c4a9f",
+            "0xd3d8717c9c7a8b5c8c0b9e6f5f4b1a8dc9b3f2e5c123c3a9e3b4d3e0c4a9f8f9",
+            "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e9",
+            "0xe6cd5d3f2cfd1bf39c09a4afc6cfbfbce2a3c2c5c9d64e7464b3a8b5c2eecb1e",
+            "0x9bf0c5e4a0c4f3f430a20d9a8f1f3a1f0dd5a4f84d90e5c5f5db6aa3c4e6e7a8",
+          ],
         ]
       }
     ) { 

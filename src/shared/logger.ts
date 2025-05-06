@@ -253,7 +253,7 @@ class Logger {
         } else {
             // Database logging
             const query = `
-            INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientappname)
+            INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientAppName)
             VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)
         `;
             await sqlManager.execQuery(query, dbParameters);

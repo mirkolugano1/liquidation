@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import express from "express";
 import logger from "../shared/logger";
 import engine from "../engines/engine";
+import webhookManager from "../managers/webhookManager";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -41,7 +42,7 @@ app.get("/refresh", async (req, res) => {
 });
 
 app.post("/aaveEvent", async (req: any, res: any) => {
-    await engine.processAaveEvent(req, res);
+    await webhookManager.processAaveEvent(req, res);
 });
 
 app.listen(port, "0.0.0.0", async () => {

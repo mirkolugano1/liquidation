@@ -25,7 +25,7 @@ class Constants {
         },
     ];
 
-    CHUNK_SIZE = 200;
+    CHUNK_SIZE = 300;
 
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
 
