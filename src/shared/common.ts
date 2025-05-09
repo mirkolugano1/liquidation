@@ -2,7 +2,7 @@ import _ from "lodash";
 import encryption from "../managers/encryptionManager";
 import Big from "big.js";
 import repo from "./repo";
-import { ethers } from "ethers";
+import { ethers, formatUnits } from "ethers";
 import { Network } from "alchemy-sdk";
 
 class Common {
@@ -77,6 +77,15 @@ class Common {
     }
 
     //#endregion normalizeAddress
+
+    //#region getHealthFactorFromUserAccountData
+
+    getHealthFactorFromUserAccountData(userAccountData: any) {
+        const healthFactorStr = formatUnits(userAccountData[5], 18);
+        return parseFloat(healthFactorStr);
+    }
+
+    //#endregion getHealthFactorFromUserAccountData
 
     //#region getContract
 

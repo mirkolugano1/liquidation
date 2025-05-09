@@ -21,5 +21,9 @@ class Repo {
     public ifaceLiquidationCall: any;
     public ifaceRepay: any;
     public ifaceFlashLoan: any;
+    public isUsersReservesSynced: boolean = false;
+    public isUsersReservesSyncInProgress: boolean = false;
+    public temporaryBlocks: any[] = [];
+    public updateUsersReservesOnStart: boolean = false;
 }
 export default Repo.getInstance();

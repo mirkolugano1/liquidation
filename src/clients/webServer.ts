@@ -3,6 +3,7 @@ import express from "express";
 import logger from "../shared/logger";
 import engine from "../engines/engine";
 import webhookManager from "../managers/webhookManager";
+import common from "../shared/common";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -50,4 +51,8 @@ app.listen(port, "0.0.0.0", async () => {
     await engine.initializeWebServer();
     console.log("Engine Initialized. Ready to receive requests...");
     engine.setCloseEvent();
+
+    if (!common.isProd) {
+        engine.updateUserAccountDataAndUsersReserves(); //not awaited, so that express server can start
+    }
 });

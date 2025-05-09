@@ -29,10 +29,10 @@ app.timer("updateUserAccountDataAndUserReserves", {
     },
 });
 
-app.timer("updateTokensPrices", {
+app.timer("updateReservesPrices", {
     schedule: "15 0 * * *", // Cron expression for every day at 00:10 h
     handler: async (myTimer, context) => {
-        await engine.updateTokensPrices(context);
+        await engine.updateReservesPrices(context);
     },
 });
 

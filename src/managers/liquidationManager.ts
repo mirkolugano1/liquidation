@@ -6,6 +6,7 @@ import { LogType, LoggingFramework } from "../shared/enums";
 import repo from "../shared/repo";
 import multicallManager from "./multicallManager";
 import common from "../shared/common";
+import { r } from "tar";
 
 class LiquidationManager {
     private static instance: LiquidationManager;
@@ -104,6 +105,53 @@ class LiquidationManager {
                 }
             }
 
+            /////
+            //only for testing purposes, to compare calculated data with on-chain data
+            if (!common.isProd) {
+                const userAccountDatas = await multicallManager.multicall(
+                    aaveNetworkInfo.aaveAddresses.pool,
+                    userAddressesObjectsAddresses,
+                    "POOL_ABI",
+                    "getUserAccountData",
+                    aaveNetworkInfo.network
+                );
+
+                const userAccountDatasObjects = _.map(
+                    userAccountDatas,
+                    (userAccountData: any, index: number) => {
+                        return {
+                            address: userAddressesObjectsAddresses[index],
+                            chainTotalCollateralBase: userAccountData[0],
+                            chainTotalDebtBase: userAccountData[1],
+                            chainHealthFactor:
+                                common.getHealthFactorFromUserAccountData(
+                                    userAccountData
+                                ),
+                            offchainTotalCollateralBase:
+                                repo.aave[key].addressesObjects[
+                                    userAddressesObjectsAddresses[index]
+                                ].totalCollateralBase,
+                            offchainTotalDebtBase:
+                                repo.aave[key].addressesObjects[
+                                    userAddressesObjectsAddresses[index]
+                                ].totalDebtBase,
+                            offchainHealthFactor:
+                                repo.aave[key].addressesObjects[
+                                    userAddressesObjectsAddresses[index]
+                                ].healthFactor,
+                        };
+                    }
+                );
+
+                await logger.log(
+                    JSON.stringify(userAccountDatasObjects),
+                    "liquidationTriggered",
+                    LogType.Trace,
+                    LoggingFramework.Table
+                );
+            }
+            ///end of testing purposes
+
             if (liquidatableAddresses.length > 0) {
                 const liquidatableUserAddressObjects = _.filter(
                     userAddressesObjects,
@@ -174,6 +222,37 @@ class LiquidationManager {
                         profitableLiquidations.push(
                             potentialProfitableLiquidation
                         );
+                }
+
+                // Log the number of liquidatable addresses and the details of profitable liquidations
+                if (!common.isProd) {
+                    const profitableLiquidationsAddresses = _.map(
+                        profitableLiquidations,
+                        (o) => o.address
+                    );
+                    const uads = await multicallManager.multicall(
+                        aaveNetworkInfo.aaveAddresses.pool,
+                        profitableLiquidationsAddresses,
+                        "POOL_ABI",
+                        "getUserAccountData",
+                        aaveNetworkInfo.network
+                    );
+                    for (let i = 0; i < uads.length; i++) {
+                        const uad = uads[i];
+                        profitableLiquidations[i].test_healthFactorFromChain =
+                            common.getHealthFactorFromUserAccountData(uad);
+                    }
+
+                    await logger.log(
+                        JSON.stringify({
+                            liquidatableAddressesCount:
+                                liquidatableAddresses.length,
+                            profitableLiquidations: profitableLiquidations,
+                        }),
+                        "liquidationTriggered",
+                        LogType.Trace,
+                        LoggingFramework.Table
+                    );
                 }
 
                 if (profitableLiquidations.length > 0) {
