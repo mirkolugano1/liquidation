@@ -25,7 +25,7 @@ class Constants {
             chainId: 42161,
         },
     ];
-    SIGNER_ADDRESS = "0x3D9066daB0A7ffe46BcE32507046157EA51CdacC"; //liquidationAccount on Metamask
+    SIGNER_ADDRESS = "0x4be842eA1114870D749F7EfB22FcAac18891466A"; //"liquidation" account on Metamask
     CHUNK_SIZE = 300;
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
     ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
