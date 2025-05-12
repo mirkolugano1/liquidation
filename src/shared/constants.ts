@@ -22,15 +22,13 @@ class Constants {
                     "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
             },
             averageLiquidationGasUnits: 170000,
+            chainId: 42161,
         },
     ];
-
+    SIGNER_ADDRESS = "0x3D9066daB0A7ffe46BcE32507046157EA51CdacC"; //liquidationAccount on Metamask
     CHUNK_SIZE = 300;
-
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
-
     ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-
     ABIS: any = {
         MULTICALL3_ABI: [
             // Minimal ABI for aggregate function

@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import common from "../shared/common";
+import { ethers, Transaction } from "ethers";
 
 import { SecretClient } from "@azure/keyvault-secrets";
 import { DefaultAzureCredential } from "@azure/identity";
@@ -11,6 +12,7 @@ class EncryptionManager {
     private encryptionPassword: string = "";
     private secretClient: any;
     private cryptoClient: any;
+    private privateKeyClient: any;
 
     private constructor() {
         const keyVaultUrl = "https://liquidation.vault.azure.net/";
@@ -20,6 +22,10 @@ class EncryptionManager {
             `${keyVaultUrl}keys/liquidationkey`,
             credential
         );
+        this.privateKeyClient = new CryptographyClient(
+            `${keyVaultUrl}keys/privatekey`,
+            credential
+        );
     }
 
     public static getInstance(): EncryptionManager {
@@ -27,6 +33,40 @@ class EncryptionManager {
             EncryptionManager.instance = new EncryptionManager();
         }
         return EncryptionManager.instance;
+    }
+
+    async signTransaction(transactionData: any): Promise<string> {
+        // Step 1: Create a new Transaction instance
+        const tx = new Transaction();
+
+        // Step 2: Populate the transaction fields
+        tx.to = transactionData.to;
+        tx.value = transactionData.value;
+        tx.gasLimit = transactionData.gasLimit;
+        tx.gasPrice = transactionData.gasPrice;
+        tx.nonce = transactionData.nonce;
+        tx.chainId = transactionData.chainId;
+        tx.data = transactionData.data;
+
+        // Step 3: Get the unsigned transaction hash
+        const unsignedHash = tx.unsignedHash;
+
+        // Step 4: Sign the hash using Azure Key Vault
+        const signature = await this.privateKeyClient.sign(
+            "ECDSA256",
+            Buffer.from(unsignedHash.slice(2), "hex") // Remove "0x" prefix from hash
+        );
+
+        // Step 5: Decode and format the signature for Ethereum
+        const r = "0x" + signature.result.slice(0, 32).toString("hex");
+        const s = "0x" + signature.result.slice(32, 64).toString("hex");
+        const v = 27 + (signature.result[64] & 1);
+
+        // Step 6: Attach the signature to the transaction
+        tx.signature = { r, s, v };
+
+        // Step 7: Serialize the signed transaction
+        return tx.serialized;
     }
 
     async ensureEncryptionPassword() {

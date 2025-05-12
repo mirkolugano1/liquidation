@@ -38,7 +38,7 @@ app.get("/healthcheck", (req, res) => {
 });
 
 app.get("/refresh", async (req, res) => {
-    await engine.refresh(req, res);
+    engine.refresh(req, res); //not awaited, otherwise it can lead to timeout
     res.status(200);
 });
 

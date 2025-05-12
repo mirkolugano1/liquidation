@@ -4,7 +4,7 @@ import common from "../shared/common";
 import _ from "lodash";
 import encryption from "../managers/encryptionManager";
 import sqlManager from "../managers/sqlManager";
-import { ethers, formatUnits } from "ethers";
+import { ethers } from "ethers";
 import Big from "big.js";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
@@ -916,7 +916,7 @@ class Engine {
         let userAccountObjects: any[] = [];
         for (let i = 0; i < _addresses.length; i++) {
             const address = _addresses[i];
-            const healthFactor = this.getHealthFactorFromUserAccountData(
+            const healthFactor = common.getHealthFactorFromUserAccountData(
                 userAccountData[i]
             );
             const totalCollateralBase = userAccountData[i][0].toString();
@@ -937,15 +937,6 @@ class Engine {
     }
 
     //#endregion getUserAccountDataForAddresses
-
-    //#region getHealthFactorFromUserAccountData
-
-    getHealthFactorFromUserAccountData(userAccountData: any) {
-        const healthFactorStr = formatUnits(userAccountData[5], 18);
-        return parseFloat(healthFactorStr);
-    }
-
-    //#endregion getHealthFactorFromUserAccountData
 
     //#endregion Helper methods
 
@@ -1568,8 +1559,7 @@ class Engine {
         );
         await logger.log("Started function deleteOldTablesEntries");
         const query = `
-            DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());
-            DELETE FROM dbo.changes WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());
+            DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());            
         `;
         await sqlManager.execQuery(query);
         await logger.log("Ended function deleteOldTablesEntries");

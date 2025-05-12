@@ -2,6 +2,7 @@ import Constants from "../shared/constants";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
 import _ from "lodash";
+import encryptionManager from "./encryptionManager";
 
 class MulticallManager {
     private static instance: MulticallManager;
@@ -33,6 +34,7 @@ class MulticallManager {
         contractABIsKeys: string | string[],
         methodNames: string | string[],
         network: Network,
+        usePrivateTransaction: boolean = false,
         estimateGas: boolean = false
     ) {
         [targetAddresses, params, contractABIsKeys, methodNames] =
@@ -86,9 +88,46 @@ class MulticallManager {
         const callIndices = Array.from({ length: calls.length }, (_, i) => i);
         const indexBatches = _.chunk(callIndices, Constants.CHUNK_SIZE);
 
+        const aaveNetworkInfo = common.getAaveNetworkInfo(network);
+        const chainId = aaveNetworkInfo.chainId;
+        const txBase = {
+            to: Constants.MULTICALL3_ADDRESS,
+            value: 0n, // If no ETH is being sent (BigInt for ethers v6)
+            gasLimit: 2000000n, // Estimate gas limit (BigInt for ethers v6)
+            gasPrice: 5n * 10n ** 9n, // (Optional if using EIP-1559)
+            maxFeePerGas: 30n * 10n ** 9n, // Maximum fee per gas (EIP-1559)
+            maxPriorityFeePerGas: 2n * 10n ** 9n, // Maximum tip (EIP-1559)
+            chainId: chainId,
+        };
+
         // Execute each chunk
         const chunkPromises = callBatches.map(async (callBatch) => {
-            return multicallContract.aggregate(callBatch);
+            if (usePrivateTransaction) {
+                const calldata = multicallContract.interface.encodeFunctionData(
+                    "aggregate", // Multicall3's aggregate method
+                    [callBatch]
+                );
+                const nonce =
+                    await aaveNetworkInfo.alchemyProvider.getTransactionCount(
+                        Constants.SIGNER_ADDRESS
+                    );
+                const tx = {
+                    ...txBase,
+                    data: calldata,
+                    nonce: nonce,
+                };
+
+                // Sign the transaction
+                const signedTx = await encryptionManager.signTransaction(tx);
+
+                // Send the transaction privately via Alchemy
+                return aaveNetworkInfo.alchemyProvider.send(
+                    "eth_sendPrivateTransaction",
+                    [
+                        { tx: signedTx, maxBlockNumber: null }, // Optional: Specify maxBlockNumber
+                    ]
+                );
+            } else return multicallContract.aggregate(callBatch);
         });
 
         const chunkResults = await Promise.all(chunkPromises);
