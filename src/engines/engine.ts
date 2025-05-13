@@ -1445,7 +1445,7 @@ class Engine {
             }
 
             //get last saved reserves prices from the DB
-            let dbAssetsPrices = common.getJsonObjectFromArray(
+            let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
                 _.values(aaveNetworkInfo.reserves),
                 "address",
                 "price"
