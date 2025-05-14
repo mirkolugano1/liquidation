@@ -204,7 +204,7 @@ df.app.orchestration(
     "updateUserAccountDataAndUsersReservesOrchestrator",
     updateUserAccountDataAndUsersReservesOrchestrator
 );
-df.app.activity("updateUserAccountDataAndUsersReservesPricesActivity", {
+df.app.activity("updateUserAccountDataAndUsersReservesActivity", {
     handler: updateUserAccountDataAndUsersReservesActivity,
 });
 

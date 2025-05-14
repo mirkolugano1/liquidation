@@ -76,91 +76,96 @@ class MulticallManager {
             }
         );
 
-        if (estimateGas) {
-            const aaveNetworkInfo = common.getAaveNetworkInfo(network);
-            return await aaveNetworkInfo.alchemyProvider.estimateGas(calls);
-        }
-
-        // Split into chunks of 1000 or fewer calls
-        const callBatches = _.chunk(calls, Constants.CHUNK_SIZE);
-
-        // Create a tracking array to map chunk results back to original indices
-        const callIndices = Array.from({ length: calls.length }, (_, i) => i);
-        const indexBatches = _.chunk(callIndices, Constants.CHUNK_SIZE);
-
         const aaveNetworkInfo = common.getAaveNetworkInfo(network);
-        const chainId = aaveNetworkInfo.chainId;
-        const txBase = {
-            to: Constants.MULTICALL3_ADDRESS,
-            value: 0n, // If no ETH is being sent (BigInt for ethers v6)
-            gasLimit: 2000000n, // Estimate gas limit (BigInt for ethers v6)
-            gasPrice: 5n * 10n ** 9n, // (Optional if using EIP-1559)
-            maxFeePerGas: 30n * 10n ** 9n, // Maximum fee per gas (EIP-1559)
-            maxPriorityFeePerGas: 2n * 10n ** 9n, // Maximum tip (EIP-1559)
-            chainId: chainId,
-        };
+        if (estimateGas) {
+            return await aaveNetworkInfo.alchemyProvider.estimateGas(calls);
+        } else {
+            // Split into chunks of 1000 or fewer calls
+            const callBatches = _.chunk(calls, Constants.CHUNK_SIZE);
 
-        // Execute each chunk
-        const chunkPromises = callBatches.map(async (callBatch) => {
-            if (usePrivateTransaction) {
-                const calldata = multicallContract.interface.encodeFunctionData(
-                    "aggregate", // Multicall3's aggregate method
-                    [callBatch]
-                );
-                const nonce =
-                    await aaveNetworkInfo.alchemyProvider.getTransactionCount(
-                        Constants.SIGNER_ADDRESS
+            // Create a tracking array to map chunk results back to original indices
+            const callIndices = Array.from(
+                { length: calls.length },
+                (_, i) => i
+            );
+            const indexBatches = _.chunk(callIndices, Constants.CHUNK_SIZE);
+            const chainId = aaveNetworkInfo.chainId;
+            const txBase = {
+                to: Constants.MULTICALL3_ADDRESS,
+                value: 0n, // If no ETH is being sent (BigInt for ethers v6)
+                gasLimit: 2000000n, // Estimate gas limit (BigInt for ethers v6)
+                gasPrice: 5n * 10n ** 9n, // (Optional if using EIP-1559)
+                maxFeePerGas: 30n * 10n ** 9n, // Maximum fee per gas (EIP-1559)
+                maxPriorityFeePerGas: 2n * 10n ** 9n, // Maximum tip (EIP-1559)
+                chainId: chainId,
+            };
+
+            // Execute each chunk
+            const chunkPromises = callBatches.map(async (callBatch) => {
+                if (usePrivateTransaction) {
+                    const calldata =
+                        multicallContract.interface.encodeFunctionData(
+                            "aggregate", // Multicall3's aggregate method
+                            [callBatch]
+                        );
+                    const nonce =
+                        await aaveNetworkInfo.alchemyProvider.getTransactionCount(
+                            Constants.SIGNER_ADDRESS
+                        );
+                    const tx = {
+                        ...txBase,
+                        data: calldata,
+                        nonce: nonce,
+                    };
+
+                    // Sign the transaction
+                    const signedTx = await encryptionManager.signTransaction(
+                        tx
                     );
-                const tx = {
-                    ...txBase,
-                    data: calldata,
-                    nonce: nonce,
-                };
 
-                // Sign the transaction
-                const signedTx = await encryptionManager.signTransaction(tx);
+                    // Send the transaction privately via Alchemy
+                    return aaveNetworkInfo.alchemyProvider.send(
+                        "eth_sendPrivateTransaction",
+                        [
+                            { tx: signedTx, maxBlockNumber: null }, // Optional: Specify maxBlockNumber
+                        ]
+                    );
+                } else return multicallContract.aggregate(callBatch);
+            });
 
-                // Send the transaction privately via Alchemy
-                return aaveNetworkInfo.alchemyProvider.send(
-                    "eth_sendPrivateTransaction",
-                    [
-                        { tx: signedTx, maxBlockNumber: null }, // Optional: Specify maxBlockNumber
-                    ]
-                );
-            } else return multicallContract.aggregate(callBatch);
-        });
+            const chunkResults = await Promise.all(chunkPromises);
 
-        const chunkResults = await Promise.all(chunkPromises);
+            // Process results from each chunk
+            const allDecodedResults = [];
 
-        // Process results from each chunk
-        const allDecodedResults = [];
+            for (
+                let chunkIndex = 0;
+                chunkIndex < chunkResults.length;
+                chunkIndex++
+            ) {
+                const [blockNumber, chunkReturnData] = chunkResults[chunkIndex];
+                const originalIndices = indexBatches[chunkIndex];
 
-        for (
-            let chunkIndex = 0;
-            chunkIndex < chunkResults.length;
-            chunkIndex++
-        ) {
-            const [blockNumber, chunkReturnData] = chunkResults[chunkIndex];
-            const originalIndices = indexBatches[chunkIndex];
+                // Decode each result in this chunk
+                for (let i = 0; i < chunkReturnData.length; i++) {
+                    const originalIndex = originalIndices[i];
+                    const contractInterface = common.getContractInterface(
+                        Constants.ABIS[contractABIsKeys[originalIndex]]
+                    );
 
-            // Decode each result in this chunk
-            for (let i = 0; i < chunkReturnData.length; i++) {
-                const originalIndex = originalIndices[i];
-                const contractInterface = common.getContractInterface(
-                    Constants.ABIS[contractABIsKeys[originalIndex]]
-                );
+                    const decodedResult =
+                        contractInterface.decodeFunctionResult(
+                            methodNames[originalIndex],
+                            chunkReturnData[i]
+                        );
 
-                const decodedResult = contractInterface.decodeFunctionResult(
-                    methodNames[originalIndex],
-                    chunkReturnData[i]
-                );
-
-                // Store at the original position to maintain order
-                allDecodedResults[originalIndex] = decodedResult;
+                    // Store at the original position to maintain order
+                    allDecodedResults[originalIndex] = decodedResult;
+                }
             }
-        }
 
-        return allDecodedResults;
+            return allDecodedResults;
+        }
     }
 
     //#endregion multicall
