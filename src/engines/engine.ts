@@ -145,9 +145,14 @@ class Engine {
                 const address = repo.aave[key].addresses[i];
                 if (!repo.aave[key].usersReserves[address]) continue;
                 const userReserves = repo.aave[key].usersReserves[address];
-                const externalCollateral = userReserves.reduce(
-                    (total: any, userReserve: any) => {
-                        return total + userReserve.currentATokenBalance;
+                if (!userReserves || userReserves.length == 0) continue;
+                const externalCollateral = _.reduce(
+                    userReserves,
+                    (
+                        total: number,
+                        userReserve: { currentATokenBalance: number }
+                    ) => {
+                        return total + (userReserve.currentATokenBalance || 0);
                     },
                     0
                 );
