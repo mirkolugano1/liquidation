@@ -1,6 +1,6 @@
 import crypto from "crypto";
 import common from "../shared/common";
-import { ethers, Transaction } from "ethers";
+import { ethers, Network, Transaction } from "ethers";
 
 import { SecretClient } from "@azure/keyvault-secrets";
 import { DefaultAzureCredential } from "@azure/identity";
