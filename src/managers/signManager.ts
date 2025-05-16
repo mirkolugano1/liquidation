@@ -24,6 +24,5 @@ class Repo {
     public isUsersReservesSynced: boolean = false;
     public isUsersReservesSyncInProgress: boolean = false;
     public temporaryBlocks: any[] = [];
-    public updateUsersReservesOnStart: boolean = false;
 }
 export default Repo.getInstance();

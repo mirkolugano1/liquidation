@@ -73,6 +73,8 @@ class Engine {
         await this.initializeAlchemy();
         await this.initializeAddresses();
 
+        //set this to true if you want to update the reserves and users reserves on start
+        //mainly for testing purposes. In prod, info will be fetched by scheduled tasks
         if (repo.updateUsersReservesOnStart) {
             await this.initializeReserves();
             await this.initializeUsersReserves();
@@ -1209,7 +1211,7 @@ class Engine {
     }
 
     async updateUserAccountDataAndUsersReserves_loop(
-        context: InvocationContext | null = null,
+        context: InvocationContext | null,
         network: Network,
         offset: number = 0
     ) {

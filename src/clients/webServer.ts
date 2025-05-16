@@ -4,6 +4,7 @@ import logger from "../shared/logger";
 import engine from "../engines/engine";
 import webhookManager from "../managers/webhookManager";
 import common from "../shared/common";
+import Constants from "../shared/constants";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -53,6 +54,12 @@ app.listen(port, "0.0.0.0", async () => {
     engine.setCloseEvent();
 
     if (!common.isProd) {
-        engine.updateUserAccountDataAndUsersReserves(); //not awaited, so that express server can start
+        engine.initializeReserves();
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            engine.updateUserAccountDataAndUsersReserves_loop(
+                null,
+                aaveNetworkInfo.network
+            ); //not awaited, so that express server can start
+        }
     }
 });
