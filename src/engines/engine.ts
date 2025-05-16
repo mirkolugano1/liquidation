@@ -170,8 +170,9 @@ class Engine {
     async initializeReserves(network: Network | null = null) {
         if (!repo.aave) throw new Error("Aave object not initialized");
         const _key = network?.toString() ?? null;
-        let query = `SELECT * FROM reserves ORDER BY sorting`;
-        if (_key) query += ` WHERE network = '${_key}'`;
+        const whereClause = _key ? ` WHERE network = '${_key}'` : "";
+        let query = `SELECT * FROM reserves ${whereClause} ORDER BY sorting`;
+
         const dbReserves = await sqlManager.execQuery(query);
         if (!dbReserves || dbReserves.length == 0) {
             await logger.log(
@@ -962,9 +963,9 @@ class Engine {
      * Periodically update the reserves data in the DB
      * @param context the InvocationContext of the function app on azure (for Application Insights)
      */
-    async updateReservesData(context: InvocationContext | null = null) {
-        //initialization
-
+    async updateReservesData_initialization(
+        context: InvocationContext | null = null
+    ) {
         logger.initialize(
             "function:updateReservesData",
             LoggingFramework.ApplicationInsights,
@@ -973,169 +974,165 @@ class Engine {
 
         await logger.log("Start updateReservesData", "functionAppExecution");
         await this.initializeAlchemy();
+    }
 
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
-            const key = aaveNetworkInfo.network.toString();
+    async updateReservesData_loop(
+        context: InvocationContext | null,
+        network: Network
+    ) {
+        const key = network.toString();
+        const aaveNetworkInfo = common.getAaveNetworkInfo(key);
 
-            const results = await multicallManager.multicall(
-                aaveNetworkInfo.aaveAddresses.poolDataProvider,
-                null,
-                "POOL_DATA_PROVIDER_ABI",
-                "getAllReservesTokens",
-                aaveNetworkInfo.network
+        const results = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            null,
+            "POOL_DATA_PROVIDER_ABI",
+            "getAllReservesTokens",
+            aaveNetworkInfo.network
+        );
+
+        const allReserveTokens: any[] = _.map(results[0][0], (o) => {
+            return {
+                network: key,
+                symbol: o[0].toString(),
+                address: o[1].toString(),
+            };
+        });
+
+        const reserveTokenAddress = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            _.map(allReserveTokens, (o) => o.address),
+            "POOL_DATA_PROVIDER_ABI",
+            "getReserveTokensAddresses",
+            aaveNetworkInfo.network
+        );
+
+        //const reserveTokenAddress = results[1][0];
+        for (let i = 0; i < reserveTokenAddress.length; i++) {
+            allReserveTokens[i].atokenAddress =
+                reserveTokenAddress[i][0].toString();
+            allReserveTokens[i].stableDebttokenAddress =
+                reserveTokenAddress[i][1].toString();
+            allReserveTokens[i].variableDebttokenAddress =
+                reserveTokenAddress[i][2].toString();
+        }
+
+        const allReserveTokensAddresses = _.map(
+            allReserveTokens,
+            (o) => o.address
+        );
+
+        const reservesData = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            allReserveTokensAddresses,
+            "POOL_DATA_PROVIDER_ABI",
+            "getReserveData",
+            aaveNetworkInfo.network
+        );
+
+        for (let i = 0; i < reservesData.length; i++) {
+            allReserveTokens[i].liquidityIndex = reservesData[i][9].toString();
+            allReserveTokens[i].variableBorrowIndex =
+                reservesData[i][10].toString();
+            allReserveTokens[i].liquidityRate = reservesData[i][5].toString();
+            allReserveTokens[i].variableBorrowRate =
+                reservesData[i][6].toString();
+            allReserveTokens[i].totalStableDebt = reservesData[i][3].toString();
+            allReserveTokens[i].lastUpdateTimestamp =
+                reservesData[i][11].toString();
+            allReserveTokens[i].totalVariableDebt =
+                reservesData[i][4].toString();
+        }
+
+        const reservesConfigData = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            allReserveTokensAddresses,
+            "POOL_DATA_PROVIDER_ABI",
+            "getReserveConfigurationData",
+            aaveNetworkInfo.network
+        );
+
+        //update reserves liquidationProtocolFee
+        const liquidationProtocolFees = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            allReserveTokensAddresses,
+            "POOL_DATA_PROVIDER_ABI",
+            "getLiquidationProtocolFee",
+            aaveNetworkInfo.network
+        );
+
+        for (let i = 0; i < reservesConfigData.length; i++) {
+            allReserveTokens[i].decimals = reservesConfigData[i][0];
+            allReserveTokens[i].ltv = reservesConfigData[i][1].toString();
+            allReserveTokens[i].reserveLiquidationThreshold =
+                reservesConfigData[i][2].toString();
+            allReserveTokens[i].reserveLiquidationBonus =
+                reservesConfigData[i][3].toString();
+            allReserveTokens[i].reserveFactor =
+                reservesConfigData[i][4].toString();
+            allReserveTokens[i].usageAsCollateralEnabled =
+                sqlManager.getBitFromBoolean(reservesConfigData[i][5]);
+            allReserveTokens[i].borrowingEnabled = sqlManager.getBitFromBoolean(
+                reservesConfigData[i][6]
             );
-
-            const allReserveTokens: any[] = _.map(results[0][0], (o) => {
-                return {
-                    network: key,
-                    symbol: o[0].toString(),
-                    address: o[1].toString(),
-                };
-            });
-
-            const reservetokenAddresses = await multicallManager.multicall(
-                aaveNetworkInfo.aaveAddresses.poolDataProvider,
-                _.map(allReserveTokens, (o) => o.address),
-                "POOL_DATA_PROVIDER_ABI",
-                "getReserveTokensAddresses",
-                aaveNetworkInfo.network
+            allReserveTokens[i].stableBorrowRateEnabled =
+                sqlManager.getBitFromBoolean(reservesConfigData[i][7]);
+            allReserveTokens[i].isActive = sqlManager.getBitFromBoolean(
+                reservesConfigData[i][8]
             );
-
-            //const reservetokenAddresses = results[1][0];
-            for (let i = 0; i < reservetokenAddresses.length; i++) {
-                allReserveTokens[i].atokenAddress =
-                    reservetokenAddresses[i][0].toString();
-                allReserveTokens[i].stableDebttokenAddress =
-                    reservetokenAddresses[i][1].toString();
-                allReserveTokens[i].variableDebttokenAddress =
-                    reservetokenAddresses[i][2].toString();
-            }
-
-            const allReserveTokensAddresses = _.map(
-                allReserveTokens,
-                (o) => o.address
+            allReserveTokens[i].isFrozen = sqlManager.getBitFromBoolean(
+                reservesConfigData[i][9]
             );
+            allReserveTokens[i].liquidationProtocolFee =
+                liquidationProtocolFees[i][0].toString();
+        }
 
-            const reservesData1 = await multicallManager.multicall(
-                aaveNetworkInfo.aaveAddresses.poolDataProvider,
-                allReserveTokensAddresses,
-                "POOL_DATA_PROVIDER_ABI",
-                "getReserveData",
-                aaveNetworkInfo.network
-            );
+        //check if there are reserves in the DB which are not in the reservesList
+        //and in case delete them from the DB
+        const fetchedReservesAddresses = _.map(
+            allReserveTokens,
+            (o) => o.address
+        );
 
-            for (let i = 0; i < reservesData1.length; i++) {
-                allReserveTokens[i].liquidityIndex =
-                    reservesData1[i][9].toString();
-                allReserveTokens[i].variableBorrowIndex =
-                    reservesData1[i][10].toString();
-                allReserveTokens[i].liquidityRate =
-                    reservesData1[i][5].toString();
-                allReserveTokens[i].variableBorrowRate =
-                    reservesData1[i][6].toString();
-                allReserveTokens[i].totalStableDebt =
-                    reservesData1[i][3].toString();
-                allReserveTokens[i].lastUpdateTimestamp =
-                    reservesData1[i][11].toString();
-                allReserveTokens[i].totalVariableDebt =
-                    reservesData1[i][4].toString();
-            }
+        //delete reserves and usersReserves data where token address is not in the reserves list
+        const sqlQueryDelete = `DELETE FROM usersReserves WHERE tokenAddress NOT IN ('${fetchedReservesAddresses.join(
+            "','"
+        )}') AND network = '${key}';`;
+        await sqlManager.execQuery(sqlQueryDelete);
 
-            const reservesConfigData = await multicallManager.multicall(
-                aaveNetworkInfo.aaveAddresses.poolDataProvider,
-                allReserveTokensAddresses,
-                "POOL_DATA_PROVIDER_ABI",
-                "getReserveConfigurationData",
-                aaveNetworkInfo.network
-            );
+        const sqlQuery = `DELETE FROM reserves WHERE address NOT IN ('${fetchedReservesAddresses.join(
+            "','"
+        )}') AND network = '${key}';`;
+        await sqlManager.execQuery(sqlQuery);
 
-            //update reserves liquidationProtocolFee
-            const liquidationProtocolFees = await multicallManager.multicall(
-                aaveNetworkInfo.aaveAddresses.poolDataProvider,
-                allReserveTokensAddresses,
-                "POOL_DATA_PROVIDER_ABI",
-                "getLiquidationProtocolFee",
-                aaveNetworkInfo.network
-            );
+        //prepare query to update reserves list in DB
+        //and update DB
+        let reservesSQLList: string[] = _.map(allReserveTokens, (o, index) => {
+            return `('${o.address}', '${key}', '${o.symbol}', ${o.decimals}, '${
+                o.reserveLiquidationThreshold
+            }', '${o.reserveLiquidationBonus}', '${o.reserveFactor}', ${
+                o.usageAsCollateralEnabled
+            }, ${sqlManager.getBitFromBoolean(
+                o.borrowingEnabled
+            )}, ${sqlManager.getBitFromBoolean(
+                o.stableBorrowRateEnabled
+            )}, ${sqlManager.getBitFromBoolean(
+                o.isActive
+            )}, ${sqlManager.getBitFromBoolean(o.isFrozen)}, '${
+                o.liquidationProtocolFee
+            }', '${o.liquidityIndex}', '${o.variableBorrowIndex}', '${
+                o.liquidityRate
+            }', '${o.variableBorrowRate}', '${o.lastUpdateTimestamp}', '${
+                o.atokenAddress
+            }','${o.variableDebttokenAddress}', '${
+                o.stableDebttokenAddress
+            }', '${o.totalStableDebt}', '${o.totalVariableDebt}', '${
+                o.ltv
+            }', ${index}, GETUTCDATE())`;
+        });
 
-            for (let i = 0; i < reservesConfigData.length; i++) {
-                allReserveTokens[i].decimals = reservesConfigData[i][0];
-                allReserveTokens[i].ltv = reservesConfigData[i][1].toString();
-                allReserveTokens[i].reserveLiquidationThreshold =
-                    reservesConfigData[i][2].toString();
-                allReserveTokens[i].reserveLiquidationBonus =
-                    reservesConfigData[i][3].toString();
-                allReserveTokens[i].reserveFactor =
-                    reservesConfigData[i][4].toString();
-                allReserveTokens[i].usageAsCollateralEnabled =
-                    sqlManager.getBitFromBoolean(reservesConfigData[i][5]);
-                allReserveTokens[i].borrowingEnabled =
-                    sqlManager.getBitFromBoolean(reservesConfigData[i][6]);
-                allReserveTokens[i].stableBorrowRateEnabled =
-                    sqlManager.getBitFromBoolean(reservesConfigData[i][7]);
-                allReserveTokens[i].isActive = sqlManager.getBitFromBoolean(
-                    reservesConfigData[i][8]
-                );
-                allReserveTokens[i].isFrozen = sqlManager.getBitFromBoolean(
-                    reservesConfigData[i][9]
-                );
-                allReserveTokens[i].liquidationProtocolFee =
-                    liquidationProtocolFees[i][0].toString();
-            }
-
-            //check if there are reserves in the DB which are not in the reservesList
-            //and in case delete them from the DB
-            const fetchedReservesAddresses = _.map(
-                allReserveTokens,
-                (o) => o.address
-            );
-
-            //delete reserves and usersReserves data where token address is not in the reserves list
-            const sqlQueryDelete = `DELETE FROM usersReserves WHERE tokenAddress NOT IN ('${fetchedReservesAddresses.join(
-                "','"
-            )}') AND network = '${key}';`;
-            await sqlManager.execQuery(sqlQueryDelete);
-
-            const sqlQuery = `DELETE FROM reserves WHERE address NOT IN ('${fetchedReservesAddresses.join(
-                "','"
-            )}') AND network = '${key}';`;
-            await sqlManager.execQuery(sqlQuery);
-
-            //prepare query to update reserves list in DB
-            //and update DB
-            let reservesSQLList: string[] = _.map(
-                allReserveTokens,
-                (o, index) => {
-                    return `('${o.address}', '${key}', '${o.symbol}', ${
-                        o.decimals
-                    }, '${o.reserveLiquidationThreshold}', '${
-                        o.reserveLiquidationBonus
-                    }', '${o.reserveFactor}', ${
-                        o.usageAsCollateralEnabled
-                    }, ${sqlManager.getBitFromBoolean(
-                        o.borrowingEnabled
-                    )}, ${sqlManager.getBitFromBoolean(
-                        o.stableBorrowRateEnabled
-                    )}, ${sqlManager.getBitFromBoolean(
-                        o.isActive
-                    )}, ${sqlManager.getBitFromBoolean(o.isFrozen)}, '${
-                        o.liquidationProtocolFee
-                    }', '${o.liquidityIndex}', '${o.variableBorrowIndex}', '${
-                        o.liquidityRate
-                    }', '${o.variableBorrowRate}', '${
-                        o.lastUpdateTimestamp
-                    }', '${o.atokenAddress}','${
-                        o.variableDebttokenAddress
-                    }', '${o.stableDebttokenAddress}', '${
-                        o.totalStableDebt
-                    }', '${o.totalVariableDebt}', '${
-                        o.ltv
-                    }', ${index}, GETUTCDATE())`;
-                }
-            );
-
-            if (reservesSQLList.length > 0) {
-                const sqlQuery = `
+        if (reservesSQLList.length > 0) {
+            const sqlQuery = `
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
@@ -1172,10 +1169,9 @@ class Engine {
                         VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveLiquidationThreshold, source.reserveLiquidationBonus, source.reserveFactor, source.usageAsCollateralEnabled, source.borrowingEnabled, source.stableBorrowRateEnabled, source.isActive, source.isFrozen, source.liquidationProtocolFee, source.liquidityIndex, source.variableBorrowIndex, source.liquidityRate, source.variableBorrowRate, source.lastUpdateTimestamp, source.atokenAddress, source.variableDebttokenAddress, source.stableDebttokenAddress, source.totalStableDebt, source.totalVariableDebt, source.ltv, source.sorting, source.modifiedOn);
                 `;
 
-                await sqlManager.execQuery(sqlQuery);
+            await sqlManager.execQuery(sqlQuery);
 
-                await this.triggerWebServerAction("updateReserves", key);
-            }
+            await this.triggerWebServerAction("updateReserves", key);
         }
     }
 
@@ -1192,7 +1188,7 @@ class Engine {
      * - userReserves (for each user, for each token)
      * for all addresses in the DB with health factor < 2
      */
-    async updateUserAccountDataAndUsersReserves(
+    async updateUserAccountDataAndUsersReserves_initialization(
         context: InvocationContext | null = null
     ) {
         //initialization
@@ -1210,168 +1206,158 @@ class Engine {
         await this.initializeAlchemy();
         await this.initializeReserves();
         await this.initializeAddresses();
+    }
 
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
-            const key = aaveNetworkInfo.network.toString();
-            let dbAddressesArr: any[];
-            let deleteAddressesQueries: string[] = [];
-            let offset = 0;
-            do {
-                dbAddressesArr = await sqlManager.execQuery(
-                    `SELECT * FROM addresses WHERE network = '${key}'
-                     ORDER BY addedOn OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
-                `
-                );
+    async updateUserAccountDataAndUsersReserves_loop(
+        context: InvocationContext | null = null,
+        network: Network,
+        offset: number = 0
+    ) {
+        const key = network.toString();
+        const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
+        let deleteAddressesQueries: string[] = [];
+        const dbAddressesArr = await sqlManager.execQuery(
+            `SELECT * FROM addresses WHERE network = '${key}'
+             ORDER BY addedOn OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
+        `
+        );
 
-                if (dbAddressesArr.length == 0) break;
-                offset += Constants.CHUNK_SIZE;
-                const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+        if (dbAddressesArr.length == 0) return 0;
+        //offset += Constants.CHUNK_SIZE;
+        const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
-                const results = await this.getUserAccountDataForAddresses(
-                    _addresses,
-                    aaveNetworkInfo.network
-                );
+        const results = await this.getUserAccountDataForAddresses(
+            _addresses,
+            aaveNetworkInfo.network
+        );
 
-                const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
-                    return o.healthFactor > 2;
-                });
-                let deleteAddresses = _.map(
-                    userAccountDataHFGreaterThan2,
-                    (o) => o.address
-                );
-                const addressesUserAccountDataHFLowerThan2 = _.filter(
-                    results,
-                    (o) => {
-                        return o.healthFactor <= 2;
-                    }
-                );
+        const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
+            return o.healthFactor > 2;
+        });
+        let deleteAddresses = _.map(
+            userAccountDataHFGreaterThan2,
+            (o) => o.address
+        );
+        const addressesUserAccountDataHFLowerThan2 = _.filter(results, (o) => {
+            return o.healthFactor <= 2;
+        });
 
-                await this.updateUserConfiguration(
-                    _.map(
-                        addressesUserAccountDataHFLowerThan2,
-                        (o) => o.address
-                    ),
-                    aaveNetworkInfo.network
-                );
+        await this.updateUserConfiguration(
+            _.map(addressesUserAccountDataHFLowerThan2, (o) => o.address),
+            aaveNetworkInfo.network
+        );
 
-                for (
-                    let i = 0;
-                    i < addressesUserAccountDataHFLowerThan2.length;
-                    i++
-                ) {
-                    const userAddress =
-                        addressesUserAccountDataHFLowerThan2[i].address;
-                    addressesUserAccountDataHFLowerThan2[i].userConfiguration =
-                        repo.aave[key].addressesObjects[
-                            userAddress
-                        ].userConfiguration;
-                }
-
-                await this.updateUsersReservesData(
-                    addressesUserAccountDataHFLowerThan2,
-                    aaveNetworkInfo
-                );
-
-                //Save data to the DB:
-                //NOTE: it is not necessary to save the totalDebtBase to the DB, since
-                //it will be calculated anyway from the usersReserves data.
-                //I leave it here anyway for now, since it is not a big deal to save it
-                const chunks = _.chunk(results, Constants.CHUNK_SIZE);
-                for (let i = 0; i < chunks.length; i++) {
-                    const chunk = chunks[i];
-
-                    let query =
-                        chunk.length > 0
-                            ? `
-                UPDATE addresses 
-                SET 
-                    modifiedOn = GETUTCDATE(),
-                    healthFactor = CASE
-                        {0}
-                    ELSE healthFactor
-                    END,                                        
-                    currentLiquidationThreshold = CASE
-                        {1}
-                    ELSE currentLiquidationThreshold
-                    END,
-                    totalCollateralBase = CASE
-                        {2}
-                    ELSE totalCollateralBase
-                    END,
-                    totalDebtBase = CASE
-                        {3}
-                    ELSE totalDebtBase
-                    END
-                WHERE address IN ({4}) AND network = '${key}';
-            `
-                            : "";
-
-                    let arr0 = [];
-                    let arr1 = [];
-                    let arr2 = [];
-                    let arr3 = [];
-                    let arr4 = [];
-                    for (let i = 0; i < chunk.length; i++) {
-                        if (chunk[i].healthFactor < 2) {
-                            arr0.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
-                            );
-                            arr1.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
-                            );
-                            arr2.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
-                            );
-                            arr3.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
-                            );
-                            arr4.push(`'${chunk[i].address}'`);
-                        } else {
-                            deleteAddresses.push(chunk[i].address);
-                        }
-                    }
-
-                    query = query.replace("{0}", arr0.join(" "));
-                    query = query.replace("{1}", arr1.join(" "));
-                    query = query.replace("{2}", arr2.join(" "));
-                    query = query.replace("{3}", arr3.join(" "));
-                    query = query.replace("{4}", arr4.join(","));
-
-                    if (query) await sqlManager.execQuery(query);
-                }
-
-                //delete addresses from the DB where health factor is > 2
-                deleteAddresses = _.uniq(deleteAddresses);
-                if (deleteAddresses.length > 0) {
-                    const chunks = _.chunk(
-                        deleteAddresses,
-                        Constants.CHUNK_SIZE
-                    );
-                    for (let i = 0; i < chunks.length; i++) {
-                        const sqlQuery = `
-                    DELETE FROM addresses WHERE address IN ('${chunks[i].join(
-                        "','"
-                    )}') AND network = '${key}';
-                    DELETE FROM usersReserves WHERE address IN ('${chunks[
-                        i
-                    ].join("','")}') AND network = '${key}';
-                    `;
-                        deleteAddressesQueries.push(sqlQuery);
-                    }
-                }
-            } while (dbAddressesArr.length > 0);
-
-            for (const deleteAddressesQuery of deleteAddressesQueries) {
-                await sqlManager.execQuery(deleteAddressesQuery);
-            }
-
-            await this.triggerWebServerAction("updateUsersReserves", key);
+        for (let i = 0; i < addressesUserAccountDataHFLowerThan2.length; i++) {
+            const userAddress = addressesUserAccountDataHFLowerThan2[i].address;
+            addressesUserAccountDataHFLowerThan2[i].userConfiguration =
+                repo.aave[key].addressesObjects[userAddress].userConfiguration;
         }
 
-        await logger.log(
-            "End updateUserAccountDataAndUsersReserves",
-            "functionAppExecution"
+        await this.updateUsersReservesData(
+            addressesUserAccountDataHFLowerThan2,
+            aaveNetworkInfo
         );
+
+        //Save data to the DB:
+        //NOTE: it is not necessary to save the totalDebtBase to the DB, since
+        //it will be calculated anyway from the usersReserves data.
+        //I leave it here anyway for now, since it is not a big deal to save it
+        const chunks = _.chunk(results, Constants.CHUNK_SIZE);
+        for (let i = 0; i < chunks.length; i++) {
+            const chunk = chunks[i];
+
+            let query =
+                chunk.length > 0
+                    ? `
+        UPDATE addresses 
+        SET 
+            modifiedOn = GETUTCDATE(),
+            healthFactor = CASE
+                {0}
+            ELSE healthFactor
+            END,                                        
+            currentLiquidationThreshold = CASE
+                {1}
+            ELSE currentLiquidationThreshold
+            END,
+            totalCollateralBase = CASE
+                {2}
+            ELSE totalCollateralBase
+            END,
+            totalDebtBase = CASE
+                {3}
+            ELSE totalDebtBase
+            END
+        WHERE address IN ({4}) AND network = '${key}';
+    `
+                    : "";
+
+            let arr0 = [];
+            let arr1 = [];
+            let arr2 = [];
+            let arr3 = [];
+            let arr4 = [];
+            for (let i = 0; i < chunk.length; i++) {
+                if (chunk[i].healthFactor < 2) {
+                    arr0.push(
+                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
+                    );
+                    arr1.push(
+                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
+                    );
+                    arr2.push(
+                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
+                    );
+                    arr3.push(
+                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
+                    );
+                    arr4.push(`'${chunk[i].address}'`);
+                } else {
+                    deleteAddresses.push(chunk[i].address);
+                }
+            }
+
+            query = query.replace("{0}", arr0.join(" "));
+            query = query.replace("{1}", arr1.join(" "));
+            query = query.replace("{2}", arr2.join(" "));
+            query = query.replace("{3}", arr3.join(" "));
+            query = query.replace("{4}", arr4.join(","));
+
+            if (query) await sqlManager.execQuery(query);
+        }
+
+        //delete addresses from the DB where health factor is > 2
+        deleteAddresses = _.uniq(deleteAddresses);
+        if (deleteAddresses.length > 0) {
+            const chunks = _.chunk(deleteAddresses, Constants.CHUNK_SIZE);
+            for (let i = 0; i < chunks.length; i++) {
+                const sqlQuery = `
+            DELETE FROM addresses WHERE address IN ('${chunks[i].join(
+                "','"
+            )}') AND network = '${key}';
+            DELETE FROM usersReserves WHERE address IN ('${chunks[i].join(
+                "','"
+            )}') AND network = '${key}';
+            `;
+                deleteAddressesQueries.push(sqlQuery);
+            }
+        }
+
+        for (const deleteAddressesQuery of deleteAddressesQueries) {
+            await sqlManager.execQuery(deleteAddressesQuery);
+        }
+
+        const hasMoreResults = dbAddressesArr.length == Constants.CHUNK_SIZE;
+        if (!hasMoreResults) {
+            await this.triggerWebServerAction("updateUsersReserves", key);
+
+            await logger.log(
+                "End updateUserAccountDataAndUsersReserves",
+                "functionAppExecution"
+            );
+        }
+
+        return hasMoreResults;
     }
 
     //#endregion updateUserAccountDataAndUserReserves
@@ -1430,95 +1416,97 @@ class Engine {
 
         if (allAddressesDb.length == 0) {
             await logger.log("No addresses found in DB with health factor < 2");
-            return;
-        }
+        } else {
+            for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+                if (network && network != aaveNetworkInfo.network) continue;
 
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
-            if (network && network != aaveNetworkInfo.network) continue;
-
-            const key = aaveNetworkInfo.network.toString();
-            const addressesDb = _.filter(
-                allAddressesDb,
-                (o) => o.network == key
-            );
-
-            if (addressesDb.length == 0) {
-                await logger.log(
-                    `Network: ${key} No addresses found in DB with health factor < 2`
+                const key = aaveNetworkInfo.network.toString();
+                const addressesDb = _.filter(
+                    allAddressesDb,
+                    (o) => o.network == key
                 );
-                return;
-            }
 
-            //get last saved reserves prices from the DB
-            let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
-                _.values(aaveNetworkInfo.reserves),
-                "address",
-                "price"
-            );
-
-            //get current reserves prices from the network
-            const aaveOracleContract = common.getContract(
-                aaveNetworkInfo.aaveAddresses.aaveOracle,
-                Constants.ABIS.AAVE_ORACLE_ABI,
-                aaveNetworkInfo.network
-            );
-            const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
-            const currentAssetsPrices =
-                await aaveOracleContract.getAssetsPrices(reservesAddresses);
-
-            let newReservesPrices: any = {};
-            for (let i = 0; i < reservesAddresses.length; i++) {
-                const reserveAddress = reservesAddresses[i];
-                const price = currentAssetsPrices[i];
-                newReservesPrices[reserveAddress] = price;
-            }
-
-            //by default we should not perform the check. If price changes are found, we do check
-            let reservesChangedCheck: any[] = [];
-            let reservesDbUpdate: any[] = [];
-
-            for (const reserveAddress of reservesAddresses) {
-                const oldPrice = dbAssetsPrices[reserveAddress];
-                const newPrice =
-                    new Big(newReservesPrices[reserveAddress]).toNumber() / 1e8;
-                if (!oldPrice) {
-                    //mark current reserve to be updated in the DB since no previous price is defined
-                    reservesDbUpdate.push({
-                        address: reserveAddress,
-                        price: newPrice,
-                    });
-                    continue;
-                }
-                const normalizedChange = newPrice - oldPrice;
-
-                let check = "none";
-
-                //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
-                if (Math.abs(normalizedChange) > 0.5) {
-                    //mark current reserve to be updated in the DB since the change exceeds the treshold
-                    reservesDbUpdate.push({
-                        address: reserveAddress,
-                        price: newPrice,
-                    });
-
-                    //add current reserve to the list of changed reserves and check if it should be checked as collateral or a debt
-                    check = normalizedChange < 0 ? "collateral" : "debt";
+                if (addressesDb.length == 0) {
+                    await logger.log(
+                        `Network: ${key} No addresses found in DB with health factor < 2`
+                    );
+                    return;
                 }
 
-                //add the reserve to the list of changed reserves. If no price change for this reserve has happened, the check will be "none"
-                reservesChangedCheck.push({
-                    reserve: reserveAddress,
-                    check: check,
-                });
-            }
+                //get last saved reserves prices from the DB
+                let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
+                    _.values(aaveNetworkInfo.reserves),
+                    "address",
+                    "price"
+                );
 
-            if (reservesDbUpdate.length > 0) {
-                let reservesSQLList: string[] = _.map(reservesDbUpdate, (o) => {
-                    return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
-                });
+                //get current reserves prices from the network
+                const aaveOracleContract = common.getContract(
+                    aaveNetworkInfo.aaveAddresses.aaveOracle,
+                    Constants.ABIS.AAVE_ORACLE_ABI,
+                    aaveNetworkInfo.network
+                );
+                const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
+                const currentAssetsPrices =
+                    await aaveOracleContract.getAssetsPrices(reservesAddresses);
 
-                if (reservesSQLList.length > 0) {
-                    const sqlQuery = `
+                let newReservesPrices: any = {};
+                for (let i = 0; i < reservesAddresses.length; i++) {
+                    const reserveAddress = reservesAddresses[i];
+                    const price = currentAssetsPrices[i];
+                    newReservesPrices[reserveAddress] = price;
+                }
+
+                //by default we should not perform the check. If price changes are found, we do check
+                let reservesChangedCheck: any[] = [];
+                let reservesDbUpdate: any[] = [];
+
+                for (const reserveAddress of reservesAddresses) {
+                    const oldPrice = dbAssetsPrices[reserveAddress];
+                    const newPrice =
+                        new Big(newReservesPrices[reserveAddress]).toNumber() /
+                        1e8;
+                    if (!oldPrice) {
+                        //mark current reserve to be updated in the DB since no previous price is defined
+                        reservesDbUpdate.push({
+                            address: reserveAddress,
+                            price: newPrice,
+                        });
+                        continue;
+                    }
+                    const normalizedChange = newPrice - oldPrice;
+
+                    let check = "none";
+
+                    //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
+                    if (Math.abs(normalizedChange) > 0.5) {
+                        //mark current reserve to be updated in the DB since the change exceeds the treshold
+                        reservesDbUpdate.push({
+                            address: reserveAddress,
+                            price: newPrice,
+                        });
+
+                        //add current reserve to the list of changed reserves and check if it should be checked as collateral or a debt
+                        check = normalizedChange < 0 ? "collateral" : "debt";
+                    }
+
+                    //add the reserve to the list of changed reserves. If no price change for this reserve has happened, the check will be "none"
+                    reservesChangedCheck.push({
+                        reserve: reserveAddress,
+                        check: check,
+                    });
+                }
+
+                if (reservesDbUpdate.length > 0) {
+                    let reservesSQLList: string[] = _.map(
+                        reservesDbUpdate,
+                        (o) => {
+                            return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
+                        }
+                    );
+
+                    if (reservesSQLList.length > 0) {
+                        const sqlQuery = `
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
@@ -1530,20 +1518,22 @@ class Engine {
                         price = source.price;                        
                         `;
 
-                    await sqlManager.execQuery(sqlQuery);
+                        await sqlManager.execQuery(sqlQuery);
 
-                    await this.triggerWebServerAction(
-                        "updateReservesPrices",
-                        key
-                    );
-                } else {
-                    //we should actually never come here, but just in case
-                    throw new Error(
-                        "reservesSQLList is empty despite reservesDbUpdate being not empty"
-                    );
+                        await this.triggerWebServerAction(
+                            "updateReservesPrices",
+                            key
+                        );
+                    } else {
+                        //we should actually never come here, but just in case
+                        throw new Error(
+                            "reservesSQLList is empty despite reservesDbUpdate being not empty"
+                        );
+                    }
                 }
             }
         }
+        await logger.log("End updateReservesPrices");
     }
 
     //#endregion updateReservesPrices

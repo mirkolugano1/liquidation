@@ -270,6 +270,10 @@ class LiquidationManager {
                                 ];
                             }
                         );
+
+                        //TODO MIRKO Call requestFlashLoan method of the liquidation contract
+
+                        /*
                         await multicallManager.multicall(
                             aaveNetworkInfo.aaveAddresses.pool,
                             liquidationsParameters,
@@ -277,6 +281,7 @@ class LiquidationManager {
                             "liquidationCall",
                             aaveNetworkInfo.network
                         );
+                        */
                     } else {
                         /*
                             await emailManager.sendLogEmail(

@@ -6,6 +6,8 @@ import {
     OrchestrationHandler,
 } from "durable-functions";
 import engine from "../engines/engine";
+import { Network } from "alchemy-sdk";
+import Constants from "../shared/constants";
 
 // =========== Gas Price Update ===========
 // Orchestrator for gas price update
@@ -92,15 +94,30 @@ app.timer("deleteOldTablesEntriesTimer", {
 const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    yield context.df.callActivity("updateReservesDataActivity");
+    const logger = yield context.df.callActivity(
+        "updateReservesDataActivity_initialization"
+    );
+    for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        yield context.df.callActivity("updateReservesDataActivity_loop", {
+            network: aaveNetworkInfo.network,
+        });
+    }
+    logger.log("End updateReservesData");
 };
 
 // Activity function for updating reserves data
-const updateReservesDataActivity: ActivityHandler = async (
+const updateReservesDataActivity_initialization: ActivityHandler = async (
     input: unknown,
     context: InvocationContext
 ) => {
-    await engine.updateReservesData(context);
+    await engine.updateReservesData_initialization(context);
+};
+
+const updateReservesDataActivity_loop: ActivityHandler = async (
+    input: { network: Network },
+    context: InvocationContext
+) => {
+    await engine.updateReservesData_loop(context, input.network);
 };
 
 // Timer trigger for updating reserves data
@@ -117,8 +134,11 @@ df.app.orchestration(
     "updateReservesDataOrchestrator",
     updateReservesDataOrchestrator
 );
-df.app.activity("updateReservesDataActivity", {
-    handler: updateReservesDataActivity,
+df.app.activity("updateReservesDataActivity_initialization", {
+    handler: updateReservesDataActivity_initialization,
+});
+df.app.activity("updateReservesDataActivity_loop", {
+    handler: updateReservesDataActivity_loop,
 });
 
 // Register timer function
@@ -176,17 +196,41 @@ app.timer("updateReservesPricesTimer", {
 const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     function* (context: OrchestrationContext) {
         yield context.df.callActivity(
-            "updateUserAccountDataAndUsersReservesActivity"
+            "updateUserAccountDataAndUsersReservesActivity_initialization"
         );
+
+        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            let offset = 0;
+            let hasMoreResults = true;
+            do {
+                hasMoreResults = yield context.df.callActivity(
+                    "updateUserAccountDataAndUsersReservesActivity_loop",
+                    { network: aaveNetworkInfo.network, offset: offset }
+                );
+                offset += Constants.CHUNK_SIZE;
+            } while (hasMoreResults);
+        }
     };
 
 // Activity function
-const updateUserAccountDataAndUsersReservesActivity: ActivityHandler = async (
-    input: unknown,
-    context: InvocationContext
-) => {
-    await engine.updateUserAccountDataAndUsersReserves(context);
-};
+const updateUserAccountDataAndUsersReservesActivity_initialization: ActivityHandler =
+    async (input: unknown, context: InvocationContext) => {
+        await engine.updateUserAccountDataAndUsersReserves_initialization(
+            context
+        );
+    };
+
+const updateUserAccountDataAndUsersReservesActivity_loop: ActivityHandler =
+    async (
+        input: { network: Network; offset: number },
+        context: InvocationContext
+    ) => {
+        await engine.updateUserAccountDataAndUsersReserves_loop(
+            context,
+            input.network,
+            input.offset
+        );
+    };
 
 // Timer trigger
 const updateUserAccountDataAndUsersReservesTimer = async (
@@ -204,8 +248,14 @@ df.app.orchestration(
     "updateUserAccountDataAndUsersReservesOrchestrator",
     updateUserAccountDataAndUsersReservesOrchestrator
 );
-df.app.activity("updateUserAccountDataAndUsersReservesActivity", {
-    handler: updateUserAccountDataAndUsersReservesActivity,
+df.app.activity(
+    "updateUserAccountDataAndUsersReservesActivity_initialization",
+    {
+        handler: updateUserAccountDataAndUsersReservesActivity_initialization,
+    }
+);
+df.app.activity("updateUserAccountDataAndUsersReservesActivity_loop", {
+    handler: updateUserAccountDataAndUsersReservesActivity_loop,
 });
 
 // Register timer function
