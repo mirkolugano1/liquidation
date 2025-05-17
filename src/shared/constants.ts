@@ -22,14 +22,37 @@ class Constants {
                     "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
             },
             averageLiquidationGasUnits: 170000,
+            liquidationContractAddress: "???", //TODO
+            flashbotsProviderUrl: "https://arbitrum.rpc.flashbots.net",
             chainId: 42161,
+            isActive: true,
+        },
+        {
+            network: Network.ARB_SEPOLIA,
+            aaveAddresses: {
+                //this will be filled up at startup from the initializeAlchemy() method with the other useful addresses
+                //fetching the other addresses from the pool address provider
+                poolAddressesProvider:
+                    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
+            },
+            averageLiquidationGasUnits: 170000,
+            liquidationContractAddress:
+                "0x775F2CD4c2b942076988068D8B7762b430345Ed1",
+            flashbotsProviderUrl: "https://arbitrum-sepolia.public.blastapi.io",
+            chainId: 421614,
+            isActive: false,
         },
     ];
-    SIGNER_ADDRESS = "0x4be842eA1114870D749F7EfB22FcAac18891466A"; //"liquidation" account on Metamask
     CHUNK_SIZE = 300;
+    METAMASK_ADDRESS = "0x4be842eA1114870D749F7EfB22FcAac18891466A"; //liquidation metamask address
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
     ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
     ABIS: any = {
+        LIQUIDATION_ABI: [
+            "function retrieve() view returns (uint256)",
+            "function store(uint256)",
+        ],
+
         MULTICALL3_ABI: [
             // Minimal ABI for aggregate function
             {

@@ -123,7 +123,7 @@ class Engine {
         }
 
         let usersReserves: any = {};
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             const key = aaveNetworkInfo.network.toString();
             if (_key && key != _key) continue;
 
@@ -185,7 +185,7 @@ class Engine {
         }
 
         let reserves: any = {};
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             const key = aaveNetworkInfo.network.toString();
             if (_key && key != _key) continue;
 
@@ -203,7 +203,7 @@ class Engine {
 
     async initializeGasPrice(network: Network | null = null) {
         if (!repo.aave) throw new Error("Aave object not initialized");
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             if (network && network != aaveNetworkInfo.network) continue;
             const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
             repo.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
@@ -232,7 +232,7 @@ class Engine {
             return;
         }
 
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             const key = aaveNetworkInfo.network.toString();
 
             const config = {
@@ -241,13 +241,19 @@ class Engine {
             };
             const alchemy = new Alchemy(config);
             const alchemyProvider = await alchemy.config.getProvider();
+            const flashbotsProvider = new ethers.JsonRpcProvider(
+                aaveNetworkInfo.flashbotsProviderUrl
+            );
 
             let networkInfo: any = _.assign(aaveNetworkInfo, {
                 alchemy: alchemy,
                 alchemyProvider: alchemyProvider,
+                flashbotsProvider: flashbotsProvider,
             });
 
             repo.aave[key] = networkInfo;
+
+            if (!common.isProd && !networkInfo.isActive) continue;
 
             const addresses = await multicallManager.multicall(
                 aaveNetworkInfo.aaveAddresses.poolAddressesProvider,
@@ -259,7 +265,7 @@ class Engine {
 
             if (!addresses) {
                 await logger.log(
-                    `No addresses found for network ${aaveNetworkInfo.network.toString()}. Please run the updateReservesData function first.`,
+                    `No addresses found for network ${aaveNetworkInfo.network.toString()}. Please check the Aave addresses provider.`,
                     "functionAppExecution"
                 );
                 return;
@@ -1373,7 +1379,7 @@ class Engine {
             context
         );
         await this.initializeAlchemy();
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             await this.triggerWebServerAction(
                 "updateGasPrice",
                 aaveNetworkInfo.network
@@ -1419,7 +1425,7 @@ class Engine {
         if (allAddressesDb.length == 0) {
             await logger.log("No addresses found in DB with health factor < 2");
         } else {
-            for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+            for (const aaveNetworkInfo of common.getNetworkInfos()) {
                 if (network && network != aaveNetworkInfo.network) continue;
 
                 const key = aaveNetworkInfo.network.toString();
@@ -1569,7 +1575,30 @@ class Engine {
     //#region #Testing
 
     async doTest() {
-        console.log(Network.ARB_MAINNET.toString());
+        await this.initializeAlchemy();
+        const aaveNetworkInfo = await common.getAaveNetworkInfo(
+            Network.ARB_SEPOLIA
+        );
+
+        const resultStore = await multicallManager.multicall(
+            aaveNetworkInfo.liquidationContractAddress,
+            8,
+            "LIQUIDATION_ABI",
+            "store",
+            aaveNetworkInfo.network,
+            true
+        );
+        console.log(resultStore);
+
+        const result = await multicallManager.multicall(
+            aaveNetworkInfo.liquidationContractAddress,
+            null,
+            "LIQUIDATION_ABI",
+            "retrieve",
+            aaveNetworkInfo.network
+        );
+        const res = parseInt(result[0]);
+        console.log(res);
     }
 
     //#endregion Testing methods

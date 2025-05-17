@@ -1,11 +1,13 @@
 import Constants from "../shared/constants";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
-import _ from "lodash";
+import _, { chunk } from "lodash";
 import encryptionManager from "./encryptionManager";
 
 class MulticallManager {
     private static instance: MulticallManager;
+    private lastNonce: number | null = null;
+    private nonceLock = false;
 
     public static getInstance(): MulticallManager {
         if (!MulticallManager.instance) {
@@ -30,7 +32,7 @@ class MulticallManager {
      */
     async multicall(
         targetAddresses: string | string[],
-        params: any | null,
+        params: any | any[] | null,
         contractABIsKeys: string | string[],
         methodNames: string | string[],
         network: Network,
@@ -58,17 +60,29 @@ class MulticallManager {
                 const contractInterface = common.getContractInterface(
                     Constants.ABIS[contractABIsKeys[index]]
                 );
-                const calldata =
-                    !params || params.length == 0
-                        ? contractInterface.encodeFunctionData(
-                              methodNames[index]
-                          )
-                        : contractInterface.encodeFunctionData(
-                              methodNames[index],
-                              Array.isArray(params[index])
-                                  ? params[index]
-                                  : [params[index]]
-                          );
+
+                let currentParams = params ? params[index] : null;
+                let calldata;
+
+                if (!currentParams) {
+                    // No params case
+                    calldata = contractInterface.encodeFunctionData(
+                        methodNames[index]
+                    );
+                } else if (Array.isArray(currentParams)) {
+                    // Array of params case
+                    calldata = contractInterface.encodeFunctionData(
+                        methodNames[index],
+                        currentParams
+                    );
+                } else {
+                    // Single param case
+                    calldata = contractInterface.encodeFunctionData(
+                        methodNames[index],
+                        [currentParams]
+                    );
+                }
+
                 return {
                     target: targetAddress,
                     callData: calldata,
@@ -108,10 +122,10 @@ class MulticallManager {
                             "aggregate", // Multicall3's aggregate method
                             [callBatch]
                         );
-                    const nonce =
-                        await aaveNetworkInfo.alchemyProvider.getTransactionCount(
-                            Constants.SIGNER_ADDRESS
-                        );
+                    const nonce = await this.getAndLockNonce(
+                        aaveNetworkInfo.alchemyProvider,
+                        Constants.METAMASK_ADDRESS
+                    );
                     const tx = {
                         ...txBase,
                         data: calldata,
@@ -123,17 +137,28 @@ class MulticallManager {
                         tx
                     );
 
-                    // Send the transaction privately via Alchemy
-                    return aaveNetworkInfo.alchemyProvider.send(
-                        "eth_sendPrivateTransaction",
-                        [
-                            { tx: signedTx, maxBlockNumber: null }, // Optional: Specify maxBlockNumber
-                        ]
-                    );
+                    switch (network) {
+                        case Network.ETH_MAINNET:
+                        case Network.ETH_SEPOLIA:
+                        case Network.ETH_GOERLI:
+                            // For Ethereum mainnet and Sepolia, use Alchemy's private transaction
+                            return aaveNetworkInfo.alchemyProvider.send(
+                                "eth_sendPrivateTransaction",
+                                [
+                                    { tx: signedTx, maxBlockNumber: null }, // Optional: Specify maxBlockNumber
+                                ]
+                            );
+                        default:
+                            // For other networks, use Flashbots (alchemy does not support private transactions other than mainnet, sepolia and goerli)
+                            return aaveNetworkInfo.flashbotsProvider.broadcastTransaction(
+                                signedTx
+                            );
+                    }
                 } else return multicallContract.aggregate(callBatch);
             });
 
             const chunkResults = await Promise.all(chunkPromises);
+            if (usePrivateTransaction) return chunkResults;
 
             // Process results from each chunk
             const allDecodedResults = [];
@@ -169,6 +194,36 @@ class MulticallManager {
     }
 
     //#endregion multicall
+
+    //#region getAndLockNonce
+
+    private async getAndLockNonce(
+        provider: any,
+        address: string
+    ): Promise<number | null> {
+        // Wait if another transaction is currently getting a nonce
+        while (this.nonceLock) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
+        this.nonceLock = true;
+
+        try {
+            // Get the current nonce from the network if we don't have it cached
+            // or increment our cached nonce
+            if (this.lastNonce === null) {
+                this.lastNonce = await provider.getTransactionCount(address);
+            } else {
+                this.lastNonce++;
+            }
+
+            return this.lastNonce;
+        } finally {
+            this.nonceLock = false;
+        }
+    }
+
+    //#region getAndLockNonce
 
     //#region multicallEstimateGas
 

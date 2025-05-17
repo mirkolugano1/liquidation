@@ -8,6 +8,7 @@ import {
 import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import Constants from "../shared/constants";
+import common from "../shared/common";
 
 // =========== Gas Price Update ===========
 // Orchestrator for gas price update
@@ -97,7 +98,7 @@ const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     const logger = yield context.df.callActivity(
         "updateReservesDataActivity_initialization"
     );
-    for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+    for (const aaveNetworkInfo of common.getNetworkInfos()) {
         yield context.df.callActivity("updateReservesDataActivity_loop", {
             network: aaveNetworkInfo.network,
         });
@@ -199,7 +200,7 @@ const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
             "updateUserAccountDataAndUsersReservesActivity_initialization"
         );
 
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             let offset = 0;
             let hasMoreResults = true;
             do {

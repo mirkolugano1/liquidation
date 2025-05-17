@@ -3,17 +3,26 @@ import dotenv from "dotenv";
 import engine from "../engines/engine";
 import { Wallet } from "ethers";
 import fs from "fs";
+import encryptionManager from "../managers/encryptionManager";
+import common from "../shared/common";
 
 dotenv.config();
-//logger.initialize("sandbox");
-//aa
+
 async function main() {
     try {
-        //await engine.updateReservesPrices();
-        //await engine.doTest();
+        //await encryptionManager.debugKeyConsistency();
+        await engine.doTest();
     } catch (error) {
         console.error("Error in main function:", error);
     }
 }
 
-main();
+main()
+    .then(() => {
+        console.log("Execution complete, exiting process");
+        process.exit(0);
+    })
+    .catch((error) => {
+        console.error("Error in execution:", error);
+        process.exit(1);
+    });

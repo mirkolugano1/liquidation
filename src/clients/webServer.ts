@@ -54,8 +54,8 @@ app.listen(port, "0.0.0.0", async () => {
     engine.setCloseEvent();
 
     if (!common.isProd) {
-        engine.initializeReserves();
-        for (const aaveNetworkInfo of Constants.AAVE_NETWORKS_INFOS) {
+        await engine.initializeReserves();
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             engine.updateUserAccountDataAndUsersReserves_loop(
                 null,
                 aaveNetworkInfo.network
