@@ -2,6 +2,28 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "Kill Debug Session",
+            "type": "shell",
+            "command": "sleep 1 && echo 'Terminating debugger...'",
+            "presentation": {
+                "reveal": "never"
+            },
+            "problemMatcher": [],
+            "dependsOn": ["Force Stop Debugging"]
+        },
+        {
+            "label": "Force Stop Debugging",
+            "type": "shell",
+            "command": "sleep 0.5",
+            "presentation": {
+                "reveal": "never"
+            },
+            "problemMatcher": [],
+            "runOptions": {
+                "runOn": "folderOpen"
+            }
+        },
+        {
             "type": "func",
             "label": "func: host start",
             "command": "host start",

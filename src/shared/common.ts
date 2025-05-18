@@ -136,55 +136,6 @@ class Common {
 
     //#endregion getContractInterface
 
-    /**
-     * Call this method to create a PEM file from a hex private key.
-     * Then use the PEM file to import the key into Azure Key Vault by following the procedure below:
-     *
-     * # (in WSL) First check if your current key can be read by OpenSSL
-     * openssl ec -inform PEM -in pkcs8_key.pem -text -noout
-     *
-     *  # (in WSL) If the above works, convert to named curve format
-     * openssl ec -inform PEM -in pkcs8_key.pem -outform PEM -out named_curve_key.pem -param_enc named_curve
-     *
-     * # (in Windows) Try importing with the new file
-     * az keyvault key import --vault-name liquidation \
-     *                --name ethereum-signing-key \
-     *                --pem-file named_curve_key.pem \
-     *                --kty EC \
-     *                --curve P-256K
-     *
-     * @param hexPrivateKey The private key of the wallet in hex format
-     */
-    public createPemFileFromPrivateKey(hexPrivateKey: string) {
-        const fs = require("fs");
-        const crypto = require("crypto");
-
-        // Convert to Buffer
-        const privateKeyBuffer = Buffer.from(hexPrivateKey, "hex");
-
-        // Create EC key pair
-        const ecdh = crypto.createECDH("secp256k1");
-        ecdh.setPrivateKey(privateKeyBuffer);
-
-        // Create an ASN.1 structure for PKCS#8
-        // Note: This is a simplified version and may need adjustments
-        const asn1 = Buffer.concat([
-            Buffer.from("302e0201010420", "hex"), // ASN.1 header for EC private key
-            privateKeyBuffer, // Private key bytes
-            Buffer.from("a00706052b8104000a", "hex"), // secp256k1 OID
-        ]);
-
-        // Convert to PEM format
-        const pemKey =
-            "-----BEGIN PRIVATE KEY-----\n" +
-            (asn1.toString("base64").match(/.{1,64}/g) || []).join("\n") +
-            "\n-----END PRIVATE KEY-----\n";
-
-        // Write to file
-        fs.writeFileSync("pkcs8_key.pem", pemKey);
-        console.log("Private key saved to pkcs8_key.pem");
-    }
-
     public isObjectIterable(obj: any) {
         // Check for null and undefined
         if (obj == null) {

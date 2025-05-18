@@ -10,19 +10,11 @@ dotenv.config();
 
 async function main() {
     try {
-        //await encryptionManager.debugKeyConsistency();
         await engine.doTest();
+        //console.log("test");
     } catch (error) {
         console.error("Error in main function:", error);
     }
 }
 
-main()
-    .then(() => {
-        console.log("Execution complete, exiting process");
-        process.exit(0);
-    })
-    .catch((error) => {
-        console.error("Error in execution:", error);
-        process.exit(1);
-    });
+main();

@@ -1582,13 +1582,12 @@ class Engine {
 
         const resultStore = await multicallManager.multicall(
             aaveNetworkInfo.liquidationContractAddress,
-            8,
+            16,
             "LIQUIDATION_ABI",
             "store",
             aaveNetworkInfo.network,
             true
         );
-        console.log(resultStore);
 
         const result = await multicallManager.multicall(
             aaveNetworkInfo.liquidationContractAddress,

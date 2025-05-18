@@ -5,7 +5,9 @@ import Constants from "../shared/constants";
 import { SecretClient } from "@azure/keyvault-secrets";
 import { DefaultAzureCredential } from "@azure/identity";
 import { CryptographyClient } from "@azure/keyvault-keys";
-import { Network } from "alchemy-sdk";
+import { BN } from "bn.js";
+
+const asn1 = require("asn1.js") as any;
 
 class EncryptionManager {
     private static instance: EncryptionManager;
@@ -24,7 +26,7 @@ class EncryptionManager {
             credential
         );
         this.privateKeyClient = new CryptographyClient(
-            `${keyVaultUrl}keys/ethereum-signing-key`,
+            `${keyVaultUrl}keys/privatekey`,
             credential
         );
     }
@@ -37,250 +39,179 @@ class EncryptionManager {
     }
 
     async signTransaction(transactionData: any): Promise<string> {
-        try {
-            // Create a new Transaction instance
-            const tx = ethers.Transaction.from(transactionData);
+        const algorithm = "ECDSA256";
+        // Create a new Transaction instance
+        const tx = ethers.Transaction.from(transactionData);
 
-            // Get the hash to sign - NOTE: Make sure this matches what Azure Key Vault expects
-            // Use ethers.js hashMessage if this doesn't work
-            const unsignedHash = ethers.keccak256(tx.unsignedSerialized);
+        // Get the hash to sign - using the proper Ethereum transaction hash format
+        const unsignedHash = ethers.keccak256(tx.unsignedSerialized);
 
-            console.log(`Signing hash: ${unsignedHash}`);
-            console.log(
-                `Expected signer address: ${Constants.METAMASK_ADDRESS}`
-            );
+        // Sign with Azure Key Vault
+        const signature = await this.privateKeyClient.sign(
+            algorithm,
+            Buffer.from(unsignedHash.slice(2), "hex")
+        );
 
-            // Sign with Azure Key Vault
-            const signature = await this.privateKeyClient.sign(
-                "ECDSA256",
-                Buffer.from(unsignedHash.slice(2), "hex")
-            );
-
-            console.log(
-                `Raw signature result length: ${signature.result.length}`
-            );
-            console.log(
-                `Raw signature buffer: ${signature.result
-                    .toString("hex")
-                    .substring(0, 64)}...`
-            );
-
-            // Try multiple approaches to recover the signature
-
-            // APPROACH 1: Standard DER signature parsing
-            // Extract r, s components - Using strict DER parsing if Azure returns DER format
-            const signatureHex = signature.result.toString("hex");
-            console.log(`Signature hex: ${signatureHex}`);
-
-            let r, s, v;
-
-            // Extract r, s components as you were doing
-            r = "0x" + signature.result.slice(0, 32).toString("hex");
-            s = "0x" + signature.result.slice(32, 64).toString("hex");
-
-            console.log(`Extracted r: ${r}`);
-            console.log(`Extracted s: ${s}`);
-
-            // Normalize 's' value (must be in lower half of curve)
-            const halfCurveOrder = BigInt(
-                "0x7FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF5D576E7357A4501DDFE92F46681B20A0"
-            );
-            const sBigInt = BigInt(s);
-            const n = BigInt(
-                "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F"
-            );
-
-            // Check if we need to normalize s
-            const normalizeS = sBigInt > halfCurveOrder;
-            if (normalizeS) {
-                console.log(`Normalizing s value (${s} > halfCurveOrder)`);
-                s = "0x" + (n - sBigInt).toString(16).padStart(64, "0");
-                console.log(`Normalized s: ${s}`);
+        // Define ASN1 parser for DER signatures
+        const ECDSASignature = asn1.define(
+            "ECDSASignature",
+            function (this: any) {
+                this.seq().obj(this.key("r").int(), this.key("s").int());
             }
+        );
 
-            // Try a wide range of v values for different signature types
-            // This handles various combinations of recovery bits and chain IDs
-            const chainId = BigInt(transactionData.chainId);
-            const vValues = [];
-
-            // Basic v values (pre-EIP155)
-            vValues.push(27, 28);
-
-            // If s was normalized, also try the opposite v values
-            if (normalizeS) {
-                vValues.push(28, 27);
-            }
-
-            // Add EIP-155 v values
-            if (chainId > 0n) {
-                vValues.push(
-                    Number(35n + chainId * 2n),
-                    Number(36n + chainId * 2n),
-                    // Also try the alternative formulation sometimes used
-                    Number(chainId * 2n + 35n),
-                    Number(chainId * 2n + 36n)
-                );
-
-                // With normalized s alternates
-                if (normalizeS) {
-                    vValues.push(
-                        Number(36n + chainId * 2n),
-                        Number(35n + chainId * 2n),
-                        Number(chainId * 2n + 36n),
-                        Number(chainId * 2n + 35n)
-                    );
-                }
-            }
-
-            console.log(
-                `Trying ${vValues.length} different v values: ${vValues.join(
-                    ", "
-                )}`
-            );
-
-            for (const vValue of vValues) {
-                try {
-                    const sig = { r, s, v: BigInt(vValue) };
-
-                    // Create a signed transaction with this signature
-                    const candidateTx = tx.clone();
-                    candidateTx.signature = sig;
-
-                    const recoveredAddress = candidateTx.from;
-                    console.log(`V=${vValue}: Recovered ${recoveredAddress}`);
-
-                    // Check if this signature recovers to our expected address
-                    if (
-                        recoveredAddress?.toLowerCase() ===
-                        Constants.METAMASK_ADDRESS.toLowerCase()
-                    ) {
-                        console.log(
-                            `✓ Found matching signature with v=${vValue}`
-                        );
-                        return candidateTx.serialized;
-                    }
-                } catch (err: any) {
-                    console.log(`Error with v=${vValue}: ${err.message}`);
-                }
-            }
-
-            // APPROACH 2: Try with raw message signing as a fallback
-            console.log("Trying alternative signing method...");
-
-            try {
-                // Get the message hash in a different format
-                const messageHash = ethers.hashMessage(
-                    ethers.getBytes(tx.unsignedSerialized)
-                );
-                console.log(`Alternative message hash: ${messageHash}`);
-
-                // Re-sign with Azure
-                const altSignature = await this.privateKeyClient.sign(
-                    "ECDSA256",
-                    Buffer.from(messageHash.slice(2), "hex")
-                );
-
-                // Try both recovery bits with this alternative approach
-                for (let recoveryBit of [0, 1]) {
-                    for (let tryNormalizeS of [false, true]) {
-                        let altR =
-                            "0x" +
-                            altSignature.result.slice(0, 32).toString("hex");
-                        let altS =
-                            "0x" +
-                            altSignature.result.slice(32, 64).toString("hex");
-
-                        const altSBigInt = BigInt(altS);
-                        if (tryNormalizeS && altSBigInt > halfCurveOrder) {
-                            altS =
-                                "0x" +
-                                (n - altSBigInt).toString(16).padStart(64, "0");
-                        }
-
-                        let altV = recoveryBit + 27;
-                        if (chainId > 0n) {
-                            altV = Number(
-                                BigInt(recoveryBit) + chainId * 2n + 35n
-                            );
-                        }
-
-                        try {
-                            const altSig = {
-                                r: altR,
-                                s: altS,
-                                v: BigInt(altV),
-                            };
-                            const altTx = tx.clone();
-                            altTx.signature = altSig;
-
-                            const altRecoveredAddress = altTx.from;
-                            console.log(
-                                `Alt method V=${altV}: Recovered ${altRecoveredAddress}`
-                            );
-
-                            if (
-                                altRecoveredAddress?.toLowerCase() ===
-                                Constants.METAMASK_ADDRESS.toLowerCase()
-                            ) {
-                                console.log(
-                                    `✓ Found matching signature with alternative method`
-                                );
-                                return altTx.serialized;
-                            }
-                        } catch (err: any) {
-                            console.log(
-                                `Error with alternative method: ${err.message}`
-                            );
-                        }
-                    }
-                }
-            } catch (err: any) {
-                console.log(
-                    `Alternative signing method failed: ${err.message}`
-                );
-            }
-
-            // APPROACH 3: Use a temporary wallet for debugging purposes ONLY
-            console.log(
-                "=== DIAGNOSTIC SECTION - Testing with a temporary wallet ==="
-            );
-            console.log(
-                "This section is for diagnosis only and doesn't use your Azure key"
-            );
-
-            try {
-                // Create a random wallet just to verify we can sign a transaction
-                // This is for DIAGNOSTIC purposes only - the resulting signature is NOT used
-                const tempWallet = ethers.Wallet.createRandom();
-                console.log(`Temporary wallet address: ${tempWallet.address}`);
-
-                // Sign with this wallet
-                const tempSignedTx = await tempWallet.signTransaction(tx);
-
-                console.log(
-                    `Able to sign with temporary wallet: ${!!tempSignedTx}`
-                );
-                console.log(
-                    `Transaction can be signed with a different key, indicating the signing process works`
-                );
-            } catch (err: any) {
-                console.log(
-                    `Even temporary wallet signing failed: ${err.message}`
-                );
-                console.log(
-                    `This indicates a problem with the transaction format itself`
-                );
-            }
-
-            throw new Error(
-                `Could not find a valid signature recovering to ${Constants.METAMASK_ADDRESS}. 
-                 This may indicate an issue with the private key or signing process.
-                 Check the logs for detailed debugging information.`
-            );
-        } catch (error) {
-            console.error("Error in signTransaction:", error);
-            throw error;
+        let parsedSig: any = {};
+        if (signature.result.length >= 64) {
+            parsedSig = {
+                r: new BN(signature.result.slice(0, 32)),
+                s: new BN(signature.result.slice(32, 64)),
+            };
         }
+
+        // Convert BN to hex strings with 0x prefix
+        const r = "0x" + parsedSig.r.toString(16).padStart(64, "0");
+        let s = "0x" + parsedSig.s.toString(16).padStart(64, "0");
+
+        // Normalize 's' value (must be in lower half of curve for Ethereum)
+        const secp256k1N = BigInt(
+            "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141"
+        );
+        const halfCurveOrder = secp256k1N / 2n;
+        const sBigInt = BigInt(s);
+
+        // Check if we need to normalize s
+        if (sBigInt > halfCurveOrder) {
+            console.log(`Normalizing s value (${s} > halfCurveOrder)`);
+            s = "0x" + (secp256k1N - sBigInt).toString(16).padStart(64, "0");
+            console.log(`Normalized s: ${s}`);
+        }
+
+        // Get the chainId from transaction data
+        const chainId = BigInt(transactionData.chainId);
+
+        // Try recovery values in a methodical order
+        const vOptions = [];
+
+        // For post-EIP-155 transactions (most modern Ethereum transactions)
+        if (chainId > 0n) {
+            vOptions.push({
+                v: Number(chainId * 2n + 35n),
+                desc: "EIP-155 v0",
+            });
+            vOptions.push({
+                v: Number(chainId * 2n + 36n),
+                desc: "EIP-155 v1",
+            });
+        }
+
+        // For legacy transactions (pre-EIP-155) - unlikely but included for completeness
+        vOptions.push({ v: 27, desc: "Legacy v0" });
+        vOptions.push({ v: 28, desc: "Legacy v1" });
+
+        // Record all recovered addresses for debugging
+        const recoveredAddresses = [];
+
+        for (const vOption of vOptions) {
+            // Create signature object
+            const sig = {
+                r,
+                s,
+                v: BigInt(vOption.v),
+            };
+
+            // Clone tx and apply signature
+            const candidateTx = tx.clone();
+            candidateTx.signature = sig;
+
+            // Get recovered address
+            const recoveredAddress = candidateTx.from;
+
+            recoveredAddresses.push({
+                v: vOption.v,
+                recovered: recoveredAddress,
+            });
+
+            // Check if matches expected address
+            if (
+                recoveredAddress?.toLowerCase() ===
+                Constants.METAMASK_ADDRESS.toLowerCase()
+            ) {
+                // Verify the transaction
+                const serialized = candidateTx.serialized;
+                const parsed = ethers.Transaction.from(serialized);
+
+                if (
+                    parsed.from?.toLowerCase() ===
+                    Constants.METAMASK_ADDRESS.toLowerCase()
+                ) {
+                    return serialized;
+                }
+            }
+        }
+
+        throw new Error(
+            `Could not find a valid signature recovering to ${Constants.METAMASK_ADDRESS}. 
+             This may indicate an issue with the private key or signing process.
+             Check the logs for detailed debugging information.`
+        );
+    }
+
+    /**
+     * Call this method to create a PEM file from a hex private key.
+     * Then use the PEM file to import the key into Azure Key Vault by following the procedure below:
+     *
+     * # (in WSL) First check if your current key can be read by OpenSSL
+     * openssl ec -inform PEM -in pkcs8_key.pem -text -noout
+     *
+     *  # (in WSL) If the above works, convert to named curve format
+     * openssl ec -inform PEM -in pkcs8_key.pem -outform PEM -out named_curve_key.pem -param_enc named_curve
+     *
+     * # (in Windows) Try importing with the new file
+     * az keyvault key import --vault-name liquidation \
+     *                --name ethereum-signing-key \
+     *                --pem-file named_curve_key.pem \
+     *                --kty EC \
+     *                --curve P-256K
+     *
+     * @param hexPrivateKey The private key of the wallet in hex format
+     */
+    public createPemFileFromPrivateKey(hexPrivateKey: string) {
+        const fs = require("fs");
+        const crypto = require("crypto");
+
+        // Remove '0x' prefix if present
+        const cleanHex = hexPrivateKey.startsWith("0x")
+            ? hexPrivateKey.slice(2)
+            : hexPrivateKey;
+
+        // Convert to Buffer
+        const privateKeyBuffer = Buffer.from(cleanHex, "hex");
+
+        // Create EC key in the specific format Azure needs
+        const ecPrivateKeyASN1 = Buffer.concat([
+            // EC PRIVATE KEY header and length
+            Buffer.from("302e", "hex"),
+            // Version
+            Buffer.from("0201", "hex"),
+            Buffer.from("01", "hex"),
+            // PrivKey header + length
+            Buffer.from("0420", "hex"),
+            privateKeyBuffer,
+            // OID for secp256k1
+            Buffer.from("a00706052b8104000a", "hex"),
+        ]);
+
+        // Convert to PEM format with EC-specific headers
+        const pemKey =
+            "-----BEGIN EC PRIVATE KEY-----\n" +
+            (ecPrivateKeyASN1.toString("base64").match(/.{1,64}/g) || []).join(
+                "\n"
+            ) +
+            "\n-----END EC PRIVATE KEY-----\n";
+
+        // Write to file
+        fs.writeFileSync("ec_key.pem", pemKey);
+        console.log("EC Private key saved to ec_key.pem");
     }
 
     async ensureEncryptionPassword() {

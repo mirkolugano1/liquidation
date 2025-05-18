@@ -1,32 +1,71 @@
 {
-    // Use IntelliSense to learn about possible attributes.
-    // Hover to view descriptions of existing attributes.
-    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
     "version": "0.2.0",
     "configurations": [
         {
-            "command": "npm run test",
+            "name": "Debug Sandbox",
+            "type": "node",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/clients/sandbox.ts",
+            "runtimeArgs": ["-r", "ts-node/register"],
+            "args": ["--transpileOnly"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "postDebugTask": "Kill Debug Session"
+        },
+        {
             "name": "Debug Tests",
+            "type": "node",
             "request": "launch",
-            "type": "node-terminal"
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "test"],
+            "skipFiles": ["<node_internals>/**"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "restart": false,
+            "autoAttachChildProcesses": true,
+            "sourceMaps": true,
+            "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+            "resolveSourceMapLocations": [
+                "${workspaceFolder}/**",
+                "!**/node_modules/**"
+            ]
         },
         {
-            "command": "npm run testOnly",
             "name": "Debug TestOnly",
+            "type": "node",
             "request": "launch",
-            "type": "node-terminal"
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "testOnly"],
+            "skipFiles": ["<node_internals>/**"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "restart": false,
+            "autoAttachChildProcesses": true,
+            "sourceMaps": true
         },
         {
-            "command": "npm run webJob -- testJob",
             "name": "Debug WebJob",
+            "type": "node",
             "request": "launch",
-            "type": "node-terminal"
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "webJob", "--", "testJob"],
+            "skipFiles": ["<node_internals>/**"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "restart": false,
+            "sourceMaps": true
         },
         {
-            "command": "npm run webServer",
             "name": "Debug WebServer",
+            "type": "node",
             "request": "launch",
-            "type": "node-terminal"
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "webServer"],
+            "skipFiles": ["<node_internals>/**"],
+            "console": "integratedTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "restart": false,
+            "sourceMaps": true
         },
         {
             "name": "Attach to Node Functions",
