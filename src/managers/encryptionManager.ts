@@ -81,9 +81,7 @@ class EncryptionManager {
 
         // Check if we need to normalize s
         if (sBigInt > halfCurveOrder) {
-            console.log(`Normalizing s value (${s} > halfCurveOrder)`);
             s = "0x" + (secp256k1N - sBigInt).toString(16).padStart(64, "0");
-            console.log(`Normalized s: ${s}`);
         }
 
         // Get the chainId from transaction data

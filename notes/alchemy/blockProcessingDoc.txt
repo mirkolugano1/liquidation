@@ -1,0 +1,18 @@
+Sync of data from webhooks
+Scenario 1: Fresh start of express server
+syncInMemoryData should not be called, nor should event blocks be saved for later processing
+
+Scenario 2: Data is not synced yet for the first time, but updateUserReserves is in progress
+syncInMemoryData should still not be called, event blocks should be saved for later processing at 
+the end of the updateUserReserves routine.
+When processing the saved event blocks, it should be checked if the single block should be applied 
+(aka should sync the in memory data) by checking the block timestamp (evtl add timestamp myself) and 
+comparing this timestamp with the corresponding entry in the usersreserves table “modifiedOn” column. 
+If the modifiedOn column is older than the block being processed, block should sync in memory data, 
+otherwise it can be ignored since the data in the db is already uptodate. 
+
+Scenario 3: Data has already been synced before, but updateUserReserves is in progress
+data should be synced while the data is being fetched from chain and written to DB.
+When calling refresh method, thus webserver updating local data from the DB, syncing should be 
+paused and block saved in temporaryBlocks array. Once fetching data is done, temporaryBlocks should be 
+applied, always considering modifiedOn timestamp (same as scenario 2)

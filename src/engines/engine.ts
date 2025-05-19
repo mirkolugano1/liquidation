@@ -110,6 +110,7 @@ class Engine {
 
     async initializeUsersReserves(network: Network | null = null) {
         if (!repo.aave) throw new Error("Aave object not initialized");
+        repo.isFetchingUserReserves = true;
         const _key = network?.toString() ?? null;
         let query = `SELECT * FROM usersReserves`;
         if (_key) query += ` WHERE network = '${_key}'`;
@@ -163,6 +164,8 @@ class Engine {
                     externalCollateral;
             }
         }
+
+        repo.isFetchingUserReserves = false;
     }
 
     //#endregion initializeUsersReserves
@@ -340,7 +343,12 @@ class Engine {
         userAddressesObjects: any[],
         aaveNetworkInfo: any
     ) {
-        repo.isUsersReservesSyncInProgress = true;
+        //set the flag to true, so that the web server knows that the sync is in progress
+        await this.triggerWebServerAction(
+            "setIsUsersReservesSyncInProgressToTrue",
+            aaveNetworkInfo.network
+        );
+
         const key = aaveNetworkInfo.network.toString();
 
         let multicallUserReserveDataParameters: any[] = [];
@@ -566,6 +574,9 @@ class Engine {
         }
 
         switch (type) {
+            case "setIsUsersReservesSyncInProgressToTrue":
+                repo.isUsersReservesSyncInProgress = true;
+                break;
             case "updateGasPrice":
                 await this.initializeGasPrice(network);
                 break;
@@ -594,6 +605,7 @@ class Engine {
                         await this.syncInMemoryData(
                             block,
                             shouldCheckLiquidationOpportunities,
+                            true,
                             network
                         );
                     }
@@ -617,6 +629,7 @@ class Engine {
     async syncInMemoryData(
         block: any,
         shouldCheckLiquidationOpportunities: boolean,
+        shouldCheckBlockCanBeApplied: boolean,
         network: string
     ) {
         const key = network;
@@ -630,6 +643,17 @@ class Engine {
 
             switch (eventHash) {
                 case "0x9a2f48d3aa6146e0a0f4e8622b5ff4b9d90a3c4f5e9a3b69c8523e213f775bfe": //LiquidationCall
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            log.topics[3],
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
+
                     const decodedLogLiquidationCall =
                         repo.ifaceLiquidationCall.parseLog(log);
                     const userLiquidator =
@@ -666,6 +690,18 @@ class Engine {
                             ].currentVariableDebt -= debtToCover;
                         }
 
+                        await this.checkUserReservesData(
+                            eventHash,
+                            userLiquidated,
+                            liquidationDebtAsset,
+                            repo.aave[key],
+                            [
+                                "currentATokenBalance",
+                                "currentStableDebt",
+                                "currentVariableDebt",
+                            ]
+                        );
+
                         await this.updateUserConfiguration(userLiquidated, key);
                     }
 
@@ -681,47 +717,100 @@ class Engine {
                         //not necessary to check for liquidation, since collateral has increased
                         //not necessary to update userConfiguration. If reserve was already set as collateral,
                         //this does not change anyway.
+
+                        await this.checkUserReservesData(
+                            eventHash,
+                            userLiquidated,
+                            liquidationDebtAsset,
+                            repo.aave[key],
+                            ["currentATokenBalance"]
+                        );
                     }
                     break;
 
                 //Deposit
                 case "0xde6857219544bb5b7746f48ed30be6386fefc61b2f864cacf559893bf50fd951":
+                    const depositOnBehalfOf = log.topics[3];
+                    const depositInitiatorAddress = log.topics[2];
+                    const depositAddress =
+                        depositOnBehalfOf ?? depositInitiatorAddress;
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            depositAddress,
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
+
                     const decodedLogDeposit = repo.ifaceDeposit.parseLog(log);
                     const depositReserve = log.topics[1];
                     const depositAmount = decodedLogDeposit.args.amount;
-                    const depositOnBehalfOf = log.topics[3];
                     if (
-                        addressesObjectsAddresses.includes(depositOnBehalfOf) &&
+                        addressesObjectsAddresses.includes(depositAddress) &&
                         liquidationManager.isReserveUsedAsCollateral(
-                            repo.aave[key].addressesObjects[depositOnBehalfOf]
+                            repo.aave[key].addressesObjects[depositAddress]
                                 .userConfiguration,
                             depositReserve,
                             key
                         )
                     ) {
-                        repo.aave[key].usersReserves[depositOnBehalfOf][
+                        repo.aave[key].usersReserves[depositAddress][
                             depositReserve
                         ].currentATokenBalance += depositAmount;
+
+                        await this.checkUserReservesData(
+                            eventHash,
+                            userLiquidated,
+                            liquidationDebtAsset,
+                            repo.aave[key],
+                            ["currentATokenBalance"]
+                        );
                     }
                     break;
 
                 //Borrow
                 case "0xc6a898309e823ee50bac64e45ca8adba6690e99e7841c45d754e2a38e9019d9b":
-                    const decodedLogBorrow = repo.ifaceBorrow.parseLog(log);
+                    const borrowInitiatorAddress = log.topics[2];
                     const borrowOnBehalfOf = log.topics[3];
+                    const borrowAddress =
+                        borrowOnBehalfOf ?? borrowInitiatorAddress;
+
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            borrowAddress,
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
+
+                    const decodedLogBorrow = repo.ifaceBorrow.parseLog(log);
                     const borrowReserve = log.topics[1];
                     const borrowedAmount = decodedLogBorrow.args.amount;
                     const borrowRateMode = decodedLogBorrow.args.borrowRateMode;
-                    if (addressesObjectsAddresses.includes(borrowOnBehalfOf)) {
+                    if (addressesObjectsAddresses.includes(borrowAddress)) {
                         if (borrowRateMode == 1) {
-                            repo.aave[key].usersReserves[borrowOnBehalfOf][
+                            repo.aave[key].usersReserves[borrowAddress][
                                 borrowReserve
                             ].currentStableDebt += borrowedAmount;
                         } else {
-                            repo.aave[key].usersReserves[borrowOnBehalfOf][
+                            repo.aave[key].usersReserves[borrowAddress][
                                 borrowReserve
                             ].currentVariableDebt += borrowedAmount;
                         }
+
+                        await this.checkUserReservesData(
+                            eventHash,
+                            userLiquidated,
+                            liquidationDebtAsset,
+                            repo.aave[key],
+                            ["currentStableDebt", "currentVariableDebt"]
+                        );
 
                         if (shouldCheckLiquidationOpportunities) {
                             await liquidationManager.checkLiquidateAddresses(
@@ -744,13 +833,43 @@ class Engine {
                         addressesObjectsAddresses.includes(log.topics[3]) &&
                         useATokens
                     ) {
+                        if (
+                            !this.blockShouldBeApplied(
+                                shouldCheckBlockCanBeApplied,
+                                block,
+                                log.topics[3],
+                                repayReserve,
+                                repo.aave[key]
+                            )
+                        )
+                            return;
+
                         repo.aave[key].usersReserves[log.topics[3]][
                             repayReserve
                         ].currentATokenBalance -= amountRepayed;
+
+                        await this.checkUserReservesData(
+                            eventHash,
+                            userLiquidated,
+                            liquidationDebtAsset,
+                            repo.aave[key],
+                            ["currentATokenBalance"]
+                        );
                     }
 
                     //detract the repaid amount from the beneficiary's debt
                     if (addressesObjectsAddresses.includes(log.topics[2])) {
+                        if (
+                            !this.blockShouldBeApplied(
+                                shouldCheckBlockCanBeApplied,
+                                block,
+                                log.topics[2],
+                                repayReserve,
+                                repo.aave[key]
+                            )
+                        )
+                            return;
+
                         const address = log.topics[2];
                         const repayUserReserve =
                             repo.aave[key].usersReserves[address][repayReserve];
@@ -772,6 +891,14 @@ class Engine {
                             ].currentStableDebt -= amountRepayed;
                         }
 
+                        await this.checkUserReservesData(
+                            eventHash,
+                            userLiquidated,
+                            liquidationDebtAsset,
+                            repo.aave[key],
+                            ["currentStableDebt", "currentVariableDebt"]
+                        );
+
                         if (shouldCheckLiquidationOpportunities) {
                             await liquidationManager.checkLiquidateAddresses(
                                 address,
@@ -783,14 +910,27 @@ class Engine {
                     break;
 
                 case "0x2b627736bca15cd5381dcf80b0bf11fd197d01a037c52b927a881a10fb73ba61": //Supply
-                    const decodedLogSupply = repo.ifaceSupply.parseLog(log);
-                    const amount = decodedLogSupply.args.amount;
                     const onBehalfOf = log.topics[3];
                     const topicAddress = log.topics[2];
                     let address = topicAddress; //the actual beneficiary of the supply
                     if (onBehalfOf && onBehalfOf != topicAddress) {
                         address = onBehalfOf; //the actual beneficiary of the supply
                     }
+
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            address,
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
+
+                    const decodedLogSupply = repo.ifaceSupply.parseLog(log);
+                    const amount = decodedLogSupply.args.amount;
+
                     if (_.includes(addressesObjectsAddresses, address)) {
                         const reserve = log.topics[1];
                         const userConfiguration =
@@ -806,6 +946,14 @@ class Engine {
                             repo.aave[key].usersReserves[address][
                                 reserve
                             ].currentATokenBalance += amount;
+
+                            await this.checkUserReservesData(
+                                eventHash,
+                                userLiquidated,
+                                liquidationDebtAsset,
+                                repo.aave[key],
+                                ["currentATokenBalance"]
+                            );
 
                             if (
                                 repo.aave[key].usersReserves[address][reserve]
@@ -828,6 +976,16 @@ class Engine {
                     break;
 
                 case "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd": //ReserveUsedAsCollateralDisabled
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            log.topics[2],
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
                     if (_.includes(addressesObjectsAddresses, log.topics[2])) {
                         const address = log.topics[2];
                         const reserve = log.topics[1];
@@ -847,6 +1005,17 @@ class Engine {
                     break;
 
                 case "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2": //ReserveUsedAsCollateralEnabled
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            log.topics[2],
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
+
                     if (_.includes(addressesObjectsAddresses, log.topics[2])) {
                         const address = log.topics[2];
                         const reserve = log.topics[1];
@@ -869,6 +1038,18 @@ class Engine {
                 case "0x3115d1449a7b732c986cba18244e897a450f61e1bb8d589cd2e69e6c8924f9f7": //Withdraw
                     const decodedLogWithdraw = repo.ifaceWithdraw.parseLog(log);
                     const amountWithdrawn = decodedLogWithdraw.args.amount;
+
+                    if (
+                        !this.blockShouldBeApplied(
+                            shouldCheckBlockCanBeApplied,
+                            block,
+                            log.topics[2],
+                            log.topics[1],
+                            repo.aave[key]
+                        )
+                    )
+                        return;
+
                     if (_.includes(addressesObjectsAddresses, log.topics[2])) {
                         const reserve = log.topics[1];
                         const userConfiguration =
@@ -886,6 +1067,14 @@ class Engine {
                             repo.aave[key].usersReserves[log.topics[2]][
                                 reserve
                             ].currentATokenBalance -= amountWithdrawn;
+
+                            await this.checkUserReservesData(
+                                eventHash,
+                                userLiquidated,
+                                liquidationDebtAsset,
+                                repo.aave[key],
+                                ["currentATokenBalance"]
+                            );
 
                             if (shouldCheckLiquidationOpportunities) {
                                 await liquidationManager.checkLiquidateAddresses(
@@ -905,9 +1094,79 @@ class Engine {
                     return;
             }
         }
+
+        await logger.log(
+            `Sync in memory data for block ${block.blockNumber} completed`,
+            "syncInMemoryData",
+            LogType.Trace,
+            LoggingFramework.Table
+        );
     }
 
     //#endregion syncInMemoryData
+
+    async checkUserReservesData(
+        eventHash: string,
+        userAddress: string,
+        reserveAddress: string,
+        aaveNetworkInfo: any,
+        propertiesToCheck: string[]
+    ) {
+        if (!repo.isCheckUserReservesDataEnabled) return;
+
+        const userReserveData = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            [[reserveAddress, userAddress]],
+            "POOL_DATA_PROVIDER_ABI",
+            "getUserReserveData",
+            aaveNetworkInfo.network
+        );
+
+        const userReserveDataObject = userReserveData[0];
+        const userReserve =
+            aaveNetworkInfo.usersReserves[userAddress][reserveAddress];
+        if (!userReserve) return;
+        const userReserveKeys = Object.keys(userReserve);
+        let str = "";
+        for (let i = 0; i < userReserveKeys.length; i++) {
+            const key = userReserveKeys[i];
+            if (propertiesToCheck.includes(key)) {
+                if (userReserveDataObject[key] != userReserve[key]) {
+                    str += `${key}: ${userReserveDataObject[key]} != ${userReserve[key]}\n`;
+                }
+            }
+        }
+        if (str.length > 0) {
+            await logger.log(
+                `User reserve data for ${userAddress} and ${reserveAddress} on event hash ${eventHash} is not consistent: ${str}`,
+                "checkUserReservesData",
+                LogType.Trace,
+                LoggingFramework.Table
+            );
+        }
+    }
+
+    //#region blockShouldBeApplied
+
+    async blockShouldBeApplied(
+        shouldCheckBlockCanBeApplied: boolean,
+        block: any,
+        userAddress: string,
+        reserveAddress: string,
+        aaveNetworkInfo: any
+    ) {
+        if (!shouldCheckBlockCanBeApplied) return true;
+        const userReserves = aaveNetworkInfo.usersReserves[userAddress];
+        if (!userReserves) return false;
+        const userReserve = userReserves[reserveAddress];
+        if (!userReserve) return false;
+        const modifiedOn = userReserve.modifiedOn;
+        const receivedOn = block.receivedOn;
+        if (!modifiedOn || !receivedOn) return false;
+        return modifiedOn < receivedOn;
+    }
+
+    //#endregion blockShouldBeApplied
 
     //#region getUserAccountDataForAddresses
 
@@ -1580,9 +1839,11 @@ class Engine {
             Network.ARB_SEPOLIA
         );
 
-        const resultStore = await multicallManager.multicall(
+        const numbers: any[] = [31, 32, 33, 34, 35];
+
+        await multicallManager.multicall(
             aaveNetworkInfo.liquidationContractAddress,
-            16,
+            numbers,
             "LIQUIDATION_ABI",
             "store",
             aaveNetworkInfo.network,

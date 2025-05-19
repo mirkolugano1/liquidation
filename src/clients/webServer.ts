@@ -5,6 +5,7 @@ import engine from "../engines/engine";
 import webhookManager from "../managers/webhookManager";
 import common from "../shared/common";
 import Constants from "../shared/constants";
+import repo from "../shared/repo";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -16,6 +17,22 @@ app.use(express.json());
 
 app.get("/", (req: any, res: any) => {
     res.send("Web server is up.");
+});
+
+app.get("toggleRepoVar", (req: any, res: any) => {
+    const key = req.query?.key;
+    const value = req.query?.value;
+    const code = req.query?.code;
+    if (code != "11") {
+        res.send("Operation not allowed");
+        return;
+    }
+    if (value) {
+        (repo as any)[key] = !(repo as any)[key];
+        res.send("Value set successfully");
+    } else {
+        res.status(404).send("Key not found");
+    }
 });
 
 app.get("getVar", (req: any, res: any) => {

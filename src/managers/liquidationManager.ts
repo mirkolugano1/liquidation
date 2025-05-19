@@ -97,6 +97,12 @@ class LiquidationManager {
                         .totalDebtBase,
                     userAddressObject.currentLiquidationThreshold
                 );
+
+                await this.checkUserAccountDataBeforeLiquidation(
+                    userAddressObject.address,
+                    aaveNetworkInfo
+                );
+
                 if (
                     repo.aave[key].addressesObjects[userAddressObject.address]
                         .healthFactor < 1
@@ -275,10 +281,10 @@ class LiquidationManager {
 
                         /*
                         await multicallManager.multicall(
-                            aaveNetworkInfo.aaveAddresses.pool,
+                            aaveNetworkInfo.liquidationContractAddress,
                             liquidationsParameters,
-                            "POOL_ABI",
-                            "liquidationCall",
+                            "LIQUIDATION_ABI",
+                            "requestFlashLoan",
                             aaveNetworkInfo.network
                         );
                         */
@@ -302,6 +308,57 @@ class LiquidationManager {
     }
 
     //#endregion checkLiquidateAddressesFromInMemoryObjects
+
+    async checkUserAccountDataBeforeLiquidation(
+        address: string,
+        aaveNetworkInfo: any
+    ) {
+        if (!repo.isCheckUserAccountDataEnabled) return;
+        const userAccountData = aaveNetworkInfo.addressesObjects[address];
+        if (!userAccountData) return;
+
+        const userAccountDataFromChain = await multicallManager.multicall(
+            aaveNetworkInfo.aaveAddresses.pool,
+            address,
+            "POOL_ABI",
+            "getUserAccountData",
+            aaveNetworkInfo.network
+        );
+
+        if (!userAccountDataFromChain) return;
+        const userAccountDataFromChainObject: any = {
+            totalCollateralBase: userAccountDataFromChain[0],
+            totalDebtBase: userAccountDataFromChain[1],
+            currentLiquidationThreshold: userAccountDataFromChain[2],
+            ltv: userAccountDataFromChain[3],
+            healthFactor: common.getHealthFactorFromUserAccountData(
+                userAccountDataFromChain
+            ),
+        };
+
+        const userAccountDataFromChainObjectKeys = _.keys(
+            userAccountDataFromChainObject
+        );
+        let str = "";
+        for (const key of userAccountDataFromChainObjectKeys) {
+            if (
+                userAccountData[key] !=
+                userAccountDataFromChainObject[key].toString()
+            ) {
+                str += `${key}: ${
+                    userAccountData[key]
+                } != ${userAccountDataFromChainObject[key].toString()}\n`;
+            }
+        }
+        if (str.length > 0) {
+            await logger.log(
+                `User account data mismatch for address ${address}: ${str}`,
+                "checkUserAccountDataBeforeLiquidation",
+                LogType.Trace,
+                LoggingFramework.Table
+            );
+        }
+    }
 
     //#region calculateNetLiquidationReward
 

@@ -209,11 +209,14 @@ class MulticallManager {
         this.nonceLock = true;
 
         try {
-            // Get the current nonce from the network if we don't have it cached
-            // or increment our cached nonce
-            if (this.lastNonce === null) {
-                this.lastNonce = await provider.getTransactionCount(address);
+            // Always get the current nonce from the network
+            const currentNonce = await provider.getTransactionCount(address);
+
+            // If our lastNonce is null or behind the network nonce, update it
+            if (this.lastNonce === null || currentNonce > this.lastNonce) {
+                this.lastNonce = currentNonce;
             } else {
+                // If our cached nonce is ahead of the network, increment it
                 this.lastNonce++;
             }
 
@@ -268,13 +271,11 @@ class MulticallManager {
         if (!Array.isArray(methodNames)) methodNames = [methodNames];
 
         if (targetAddresses.length == 1 && params.length > 1) {
-            for (let i = 1; i < params.length; i++) {
-                targetAddresses.push(targetAddresses[0]);
-            }
+            targetAddresses = Array(params.length).fill(targetAddresses[0]);
         } else if (targetAddresses.length == 1 && methodNames.length > 1) {
-            for (let i = 1; i < methodNames.length; i++) {
-                targetAddresses.push(targetAddresses[0]);
-            }
+            targetAddresses = Array(methodNames.length).fill(
+                targetAddresses[0]
+            );
         }
 
         if (!Array.isArray(params)) params = [params];
@@ -284,9 +285,7 @@ class MulticallManager {
             targetAddresses &&
             targetAddresses.length > 1
         ) {
-            for (let i = 1; i < targetAddresses.length; i++) {
-                params.push(params[0]);
-            }
+            params = Array(targetAddresses.length).fill(params[0]);
         }
 
         if (params.length > 0 && targetAddresses.length != params.length) {
@@ -301,9 +300,7 @@ class MulticallManager {
             targetAddresses &&
             targetAddresses.length > 1
         ) {
-            for (let i = 1; i < targetAddresses.length; i++) {
-                methodNames.push(methodNames[0]);
-            }
+            methodNames = Array(targetAddresses.length).fill(methodNames[0]);
         }
 
         if (targetAddresses.length != methodNames.length) {
@@ -321,9 +318,9 @@ class MulticallManager {
             targetAddresses &&
             targetAddresses.length > 1
         ) {
-            for (let i = 1; i < targetAddresses.length; i++) {
-                contractABIsKeys.push(contractABIsKeys[0]);
-            }
+            contractABIsKeys = Array(targetAddresses.length).fill(
+                contractABIsKeys[0]
+            );
         }
 
         if (targetAddresses.length != contractABIsKeys.length) {

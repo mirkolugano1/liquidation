@@ -5,6 +5,8 @@ import logger from "../shared/logger";
 import repo from "../shared/repo";
 import liquidationManager from "./liquidationManager";
 import sqlManager from "./sqlManager";
+import moment from "moment";
+import { LoggingFramework, LogType } from "../shared/enums";
 
 class WebhookManager {
     private static instance: WebhookManager;
@@ -139,10 +141,27 @@ class WebhookManager {
                     return;
             }
 
-            if (repo.isUsersReservesSynced)
-                await engine.syncInMemoryData(block, true, network);
-            else if (repo.isUsersReservesSyncInProgress)
-                repo.temporaryBlocks.push(block);
+            let blockAction = "";
+            //see blockProcessingDoc.txt for more details of block processing logic
+            if (repo.isUsersReservesSynced) {
+                if (repo.isFetchingUserReserves) {
+                    this.saveBlockToTemporaryBlocks(block);
+                    blockAction = "saveBlockToTemporaryBlocks";
+                } else {
+                    await engine.syncInMemoryData(block, true, false, network);
+                    blockAction = "syncInMemoryData";
+                }
+            } else if (repo.isUsersReservesSyncInProgress) {
+                this.saveBlockToTemporaryBlocks(block);
+                blockAction = "saveBlockToTemporaryBlocks";
+            }
+
+            await logger.log(
+                `block ${block.blockNumber}: ${blockAction}`,
+                "WebserverEngineProcessBlock",
+                LogType.Trace,
+                LoggingFramework.Table
+            );
 
             if (addressesToAdd.length > 0) {
                 //the "from" address is the one that initiated the transaction
@@ -258,6 +277,11 @@ class WebhookManager {
                 }
             }
         }
+    }
+
+    saveBlockToTemporaryBlocks(block: any) {
+        block.receivedOn = moment().utc().format("YYYY-MM-DD HH:mm:ss.SSS");
+        repo.temporaryBlocks.push(block);
     }
 
     //#endregion processAaveEvent (Alchemy Webhook)
