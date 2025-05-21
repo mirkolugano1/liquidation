@@ -141,7 +141,7 @@ class WebhookManager {
                     return;
             }
 
-            let blockAction = "";
+            let blockAction = "none";
             //see blockProcessingDoc.txt for more details of block processing logic
             if (repo.isUsersReservesSynced) {
                 if (repo.isFetchingUserReserves) {
@@ -178,9 +178,9 @@ class WebhookManager {
                 //if it doesn't exist yet
                 if (!repo.aave[key].hasOwnProperty("batchAddressesListSql")) {
                     repo.aave[key].batchAddressesListSql = [];
-                }
+                } //mirko
                 if (!repo.aave[key].hasOwnProperty("batchAddressesList")) {
-                    repo.aave[key].batchAddressesList[key] = [];
+                    repo.aave[key].batchAddressesList = [];
                 }
 
                 //Remove empty addresses or addresses already present in the DB or in the
@@ -209,7 +209,7 @@ class WebhookManager {
 
                     for (const address of uniqueAddresses) {
                         addressesListSql.push(
-                            `('${address}', '${key}', null, GETDATE())`
+                            `('${address}', '${key}', null, GETUTCDATE())`
                         );
                         addressesList.push(address);
                     }

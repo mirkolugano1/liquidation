@@ -4,7 +4,7 @@ import common from "../shared/common";
 import _ from "lodash";
 import encryption from "../managers/encryptionManager";
 import sqlManager from "../managers/sqlManager";
-import { ethers } from "ethers";
+import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
@@ -278,6 +278,12 @@ class Engine {
                 addresses[0]?.toString();
             networkInfo.aaveAddresses.aaveOracle = addresses[1]?.toString();
             networkInfo.aaveAddresses.pool = addresses[2]?.toString();
+
+            const liquidationServerEnvironment = await common.getAppSetting(
+                "LIQUIDATIONSERVERENVIRONMENT"
+            );
+            repo.isCheckUserAccountDataEnabled =
+                liquidationServerEnvironment == "webServer";
         }
     }
 
@@ -287,7 +293,7 @@ class Engine {
 
     //#region #Variables
 
-    triggerWebServerActionDevDisabled: boolean = false;
+    triggerWebServerActionDevDisabled: boolean = true;
     webappUrl: string = "";
 
     //#endregion Variables
@@ -338,16 +344,20 @@ class Engine {
     //#endregion updateUserConfiguration
 
     //#region updateUsersReservesData
+    isTriggered_setIsUsersReservesSyncInProgressToTrue: boolean = false;
 
     async updateUsersReservesData(
         userAddressesObjects: any[],
         aaveNetworkInfo: any
     ) {
-        //set the flag to true, so that the web server knows that the sync is in progress
-        await this.triggerWebServerAction(
-            "setIsUsersReservesSyncInProgressToTrue",
-            aaveNetworkInfo.network
-        );
+        if (!this.isTriggered_setIsUsersReservesSyncInProgressToTrue) {
+            //set the flag to true, so that the web server knows that the sync is in progress
+            await this.triggerWebServerAction(
+                "setIsUsersReservesSyncInProgressToTrue",
+                aaveNetworkInfo.network
+            );
+            this.isTriggered_setIsUsersReservesSyncInProgressToTrue = true;
+        }
 
         const key = aaveNetworkInfo.network.toString();
 
@@ -1479,7 +1489,16 @@ class Engine {
         context: InvocationContext | null,
         network: Network,
         offset: number = 0
-    ) {
+    ): Promise<boolean> {
+        logger.initialize(
+            "function:updateUserAccountDataAndUsersReserves",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+        await logger.log(
+            `Start loop updateUserAccountDataAndUsersReserves for network ${network} with offset ${offset}`,
+            "functionAppExecution"
+        );
         const key = network.toString();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
         let deleteAddressesQueries: string[] = [];
@@ -1489,8 +1508,7 @@ class Engine {
         `
         );
 
-        if (dbAddressesArr.length == 0) return 0;
-        //offset += Constants.CHUNK_SIZE;
+        if (dbAddressesArr.length == 0) return false;
         const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
         const results = await this.getUserAccountDataForAddresses(
@@ -1616,6 +1634,7 @@ class Engine {
 
         const hasMoreResults = dbAddressesArr.length == Constants.CHUNK_SIZE;
         if (!hasMoreResults) {
+            this.isTriggered_setIsUsersReservesSyncInProgressToTrue = false;
             await this.triggerWebServerAction("updateUsersReserves", key);
 
             await logger.log(
@@ -1833,7 +1852,46 @@ class Engine {
 
     //#region #Testing
 
+    async test_updateUsersReserves() {
+        const aaveNetworkInfo = await common.getAaveNetworkInfo(
+            Network.ARB_MAINNET
+        );
+        await this.initializeReserves();
+        let offset = 0;
+        let hasMoreResults = true;
+        do {
+            hasMoreResults =
+                await this.updateUserAccountDataAndUsersReserves_loop(
+                    null,
+                    aaveNetworkInfo.network,
+                    offset
+                );
+            offset += Constants.CHUNK_SIZE;
+        } while (hasMoreResults);
+    }
+
     async doTest() {
+        const a = formatUnits(719413754570120506n, 18);
+
+        await this.updateUserAccountDataAndUsersReserves_initialization();
+
+        const aaveNetworkInfo1 = await common.getAaveNetworkInfo(
+            Network.ARB_MAINNET
+        );
+        let offset = Constants.CHUNK_SIZE * 2;
+        let hasMoreResults = true;
+        do {
+            hasMoreResults =
+                await this.updateUserAccountDataAndUsersReserves_loop(
+                    null,
+                    aaveNetworkInfo1.network,
+                    offset
+                );
+            offset += Constants.CHUNK_SIZE;
+        } while (hasMoreResults);
+
+        return;
+
         await this.initializeAlchemy();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(
             Network.ARB_SEPOLIA

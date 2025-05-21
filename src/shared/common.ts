@@ -88,8 +88,14 @@ class Common {
     //#region getHealthFactorFromUserAccountData
 
     getHealthFactorFromUserAccountData(userAccountData: any) {
-        const healthFactorStr = formatUnits(userAccountData[5], 18);
-        return parseFloat(healthFactorStr);
+        try {
+            const healthFactorStr = formatUnits(userAccountData[5], 18);
+
+            return parseFloat(healthFactorStr);
+        } catch (error) {
+            console.error("Error parsing health factor:", userAccountData);
+            return 0;
+        }
     }
 
     //#endregion getHealthFactorFromUserAccountData

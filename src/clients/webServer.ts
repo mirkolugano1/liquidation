@@ -19,7 +19,7 @@ app.get("/", (req: any, res: any) => {
     res.send("Web server is up.");
 });
 
-app.get("toggleRepoVar", (req: any, res: any) => {
+app.get("/toggleRepoVar", (req: any, res: any) => {
     const key = req.query?.key;
     const value = req.query?.value;
     const code = req.query?.code;
@@ -35,7 +35,7 @@ app.get("toggleRepoVar", (req: any, res: any) => {
     }
 });
 
-app.get("getVar", (req: any, res: any) => {
+app.get("/getVar", (req: any, res: any) => {
     const key = req.query?.key;
     const value = engine.getVar(key);
     if (value) {
@@ -70,13 +70,8 @@ app.listen(port, "0.0.0.0", async () => {
     console.log("Engine Initialized. Ready to receive requests...");
     engine.setCloseEvent();
 
+    //initialize users reserves. In prod, this is done by the refresh api when the background function is done
     if (!common.isProd) {
-        await engine.initializeReserves();
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            engine.updateUserAccountDataAndUsersReserves_loop(
-                null,
-                aaveNetworkInfo.network
-            ); //not awaited, so that express server can start
-        }
+        engine.test_updateUsersReserves();
     }
 });

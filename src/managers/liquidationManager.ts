@@ -325,14 +325,15 @@ class LiquidationManager {
             aaveNetworkInfo.network
         );
 
-        if (!userAccountDataFromChain) return;
+        if (!userAccountDataFromChain || userAccountDataFromChain.length == 0)
+            return;
         const userAccountDataFromChainObject: any = {
-            totalCollateralBase: userAccountDataFromChain[0],
-            totalDebtBase: userAccountDataFromChain[1],
-            currentLiquidationThreshold: userAccountDataFromChain[2],
-            ltv: userAccountDataFromChain[3],
+            totalCollateralBase: userAccountDataFromChain[0][0],
+            totalDebtBase: userAccountDataFromChain[0][1],
+            currentLiquidationThreshold: userAccountDataFromChain[0][2],
+            ltv: userAccountDataFromChain[0][3],
             healthFactor: common.getHealthFactorFromUserAccountData(
-                userAccountDataFromChain
+                userAccountDataFromChain[0]
             ),
         };
 

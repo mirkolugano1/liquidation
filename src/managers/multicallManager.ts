@@ -270,7 +270,12 @@ class MulticallManager {
 
         if (!Array.isArray(methodNames)) methodNames = [methodNames];
 
-        if (targetAddresses.length == 1 && params.length > 1) {
+        if (
+            targetAddresses.length == 1 &&
+            params &&
+            Array.isArray(params) &&
+            params.length > 1
+        ) {
             targetAddresses = Array(params.length).fill(targetAddresses[0]);
         } else if (targetAddresses.length == 1 && methodNames.length > 1) {
             targetAddresses = Array(methodNames.length).fill(
@@ -283,6 +288,7 @@ class MulticallManager {
         if (
             params.length == 1 &&
             targetAddresses &&
+            Array.isArray(targetAddresses) &&
             targetAddresses.length > 1
         ) {
             params = Array(targetAddresses.length).fill(params[0]);
@@ -298,6 +304,7 @@ class MulticallManager {
         if (
             methodNames.length == 1 &&
             targetAddresses &&
+            Array.isArray(targetAddresses) &&
             targetAddresses.length > 1
         ) {
             methodNames = Array(targetAddresses.length).fill(methodNames[0]);
@@ -316,6 +323,7 @@ class MulticallManager {
         if (
             contractABIsKeys.length == 1 &&
             targetAddresses &&
+            Array.isArray(targetAddresses) &&
             targetAddresses.length > 1
         ) {
             contractABIsKeys = Array(targetAddresses.length).fill(

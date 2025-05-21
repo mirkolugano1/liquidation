@@ -217,7 +217,7 @@ class Logger {
         // Avoid multi-line logs in console
         console.log("Logger", JSON.stringify(dbParameters));
 
-        if (forceLoggingFramework) {
+        if (forceLoggingFramework != null) {
             this.originalLoggingFramework = this.loggingFramework;
             this.loggingFramework = forceLoggingFramework;
         }

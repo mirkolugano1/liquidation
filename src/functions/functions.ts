@@ -9,6 +9,8 @@ import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import Constants from "../shared/constants";
 import common from "../shared/common";
+import logger from "../shared/logger";
+import { LoggingFramework } from "../shared/enums";
 
 // =========== Gas Price Update ===========
 // Orchestrator for gas price update
@@ -95,15 +97,20 @@ app.timer("deleteOldTablesEntriesTimer", {
 const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    const logger = yield context.df.callActivity(
-        "updateReservesDataActivity_initialization"
+    logger.initialize(
+        "updateReservesDataOrchestrator",
+        LoggingFramework.ApplicationInsights,
+        context
     );
+
+    logger.log("Start updateReservesDataOrchestrator");
+    yield context.df.callActivity("updateReservesDataActivity_initialization");
     for (const aaveNetworkInfo of common.getNetworkInfos()) {
         yield context.df.callActivity("updateReservesDataActivity_loop", {
             network: aaveNetworkInfo.network,
         });
     }
-    logger.log("End updateReservesData");
+    logger.log("End updateReservesDataOrchestrator");
 };
 
 // Activity function for updating reserves data
