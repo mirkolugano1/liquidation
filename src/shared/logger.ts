@@ -197,7 +197,7 @@ class Logger {
         logType: LogType = LogType.Trace,
         forceLoggingFramework: LoggingFramework | null = null
     ) {
-        const date = moment.utc().toDate();
+        const date = moment.utc().toDate(); //test change
 
         // Prepare AI parameters
         const aiParameters = {
