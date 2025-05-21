@@ -4,6 +4,7 @@ import { table } from "table";
 import * as applicationInsights from "applicationinsights";
 import { LoggingFramework, LogType, OutputType } from "../shared/enums";
 import { InvocationContext } from "@azure/functions";
+import moment from "moment";
 
 class Logger {
     private clientAppName: string = "";
@@ -196,7 +197,7 @@ class Logger {
         logType: LogType = LogType.Trace,
         forceLoggingFramework: LoggingFramework | null = null
     ) {
-        const date = new Date();
+        const date = moment.utc().toDate();
 
         // Prepare AI parameters
         const aiParameters = {

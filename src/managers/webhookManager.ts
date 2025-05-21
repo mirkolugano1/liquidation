@@ -157,7 +157,7 @@ class WebhookManager {
             }
 
             await logger.log(
-                `block ${block.blockNumber}: ${blockAction}`,
+                `block ${block.number}: ${blockAction}`,
                 "WebserverEngineProcessBlock",
                 LogType.Trace,
                 LoggingFramework.Table
@@ -244,7 +244,7 @@ class WebhookManager {
                             let query = `
                                 MERGE INTO addresses AS target
                                 USING (VALUES 
-                                    ${repo.aave[key].batchAddressesList.join(
+                                    ${repo.aave[key].batchAddressesListSql.join(
                                         ","
                                     )}
                                 ) AS source (address, network, healthFactor, addedOn)
