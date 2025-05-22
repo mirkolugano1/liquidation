@@ -191,6 +191,15 @@ class Logger {
         await this.log(log, logLevel, LogType.Event);
     }
 
+    async error(
+        log: any,
+        logLevel: string = "error",
+        logType: LogType = LogType.Trace,
+        forceLoggingFramework: LoggingFramework | null = null
+    ) {
+        return await this.log(log, logLevel, logType, forceLoggingFramework);
+    }
+
     async log(
         log: any,
         logLevel: string = "info",

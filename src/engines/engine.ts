@@ -1499,61 +1499,73 @@ class Engine {
             `Start loop updateUserAccountDataAndUsersReserves for network ${network} with offset ${offset}`,
             "functionAppExecution"
         );
-        const key = network.toString();
-        const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
-        let deleteAddressesQueries: string[] = [];
-        const dbAddressesArr = await sqlManager.execQuery(
-            `SELECT * FROM addresses WHERE network = '${key}'
+
+        try {
+            const key = network.toString();
+            const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
+            let deleteAddressesQueries: string[] = [];
+            const dbAddressesArr = await sqlManager.execQuery(
+                `SELECT * FROM addresses WHERE network = '${key}'
              ORDER BY addedOn OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
         `
-        );
+            );
 
-        if (dbAddressesArr.length == 0) return false;
-        const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+            if (dbAddressesArr.length == 0) return false;
+            const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
-        const results = await this.getUserAccountDataForAddresses(
-            _addresses,
-            aaveNetworkInfo.network
-        );
+            const results = await this.getUserAccountDataForAddresses(
+                _addresses,
+                aaveNetworkInfo.network
+            );
 
-        const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
-            return o.healthFactor > 2;
-        });
-        let deleteAddresses = _.map(
-            userAccountDataHFGreaterThan2,
-            (o) => o.address
-        );
-        const addressesUserAccountDataHFLowerThan2 = _.filter(results, (o) => {
-            return o.healthFactor <= 2;
-        });
+            const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
+                return o.healthFactor > 2;
+            });
+            let deleteAddresses = _.map(
+                userAccountDataHFGreaterThan2,
+                (o) => o.address
+            );
+            const addressesUserAccountDataHFLowerThan2 = _.filter(
+                results,
+                (o) => {
+                    return o.healthFactor <= 2;
+                }
+            );
 
-        await this.updateUserConfiguration(
-            _.map(addressesUserAccountDataHFLowerThan2, (o) => o.address),
-            aaveNetworkInfo.network
-        );
+            await this.updateUserConfiguration(
+                _.map(addressesUserAccountDataHFLowerThan2, (o) => o.address),
+                aaveNetworkInfo.network
+            );
 
-        for (let i = 0; i < addressesUserAccountDataHFLowerThan2.length; i++) {
-            const userAddress = addressesUserAccountDataHFLowerThan2[i].address;
-            addressesUserAccountDataHFLowerThan2[i].userConfiguration =
-                repo.aave[key].addressesObjects[userAddress].userConfiguration;
-        }
+            for (
+                let i = 0;
+                i < addressesUserAccountDataHFLowerThan2.length;
+                i++
+            ) {
+                const userAddress =
+                    addressesUserAccountDataHFLowerThan2[i].address;
+                addressesUserAccountDataHFLowerThan2[i].userConfiguration =
+                    repo.aave[key].addressesObjects[
+                        userAddress
+                    ].userConfiguration;
+            }
 
-        await this.updateUsersReservesData(
-            addressesUserAccountDataHFLowerThan2,
-            aaveNetworkInfo
-        );
+            await this.updateUsersReservesData(
+                addressesUserAccountDataHFLowerThan2,
+                aaveNetworkInfo
+            );
 
-        //Save data to the DB:
-        //NOTE: it is not necessary to save the totalDebtBase to the DB, since
-        //it will be calculated anyway from the usersReserves data.
-        //I leave it here anyway for now, since it is not a big deal to save it
-        const chunks = _.chunk(results, Constants.CHUNK_SIZE);
-        for (let i = 0; i < chunks.length; i++) {
-            const chunk = chunks[i];
+            //Save data to the DB:
+            //NOTE: it is not necessary to save the totalDebtBase to the DB, since
+            //it will be calculated anyway from the usersReserves data.
+            //I leave it here anyway for now, since it is not a big deal to save it
+            const chunks = _.chunk(results, Constants.CHUNK_SIZE);
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
 
-            let query =
-                chunk.length > 0
-                    ? `
+                let query =
+                    chunk.length > 0
+                        ? `
         UPDATE addresses 
         SET 
             modifiedOn = GETUTCDATE(),
@@ -1575,48 +1587,48 @@ class Engine {
             END
         WHERE address IN ({4}) AND network = '${key}';
     `
-                    : "";
+                        : "";
 
-            let arr0 = [];
-            let arr1 = [];
-            let arr2 = [];
-            let arr3 = [];
-            let arr4 = [];
-            for (let i = 0; i < chunk.length; i++) {
-                if (chunk[i].healthFactor < 2) {
-                    arr0.push(
-                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
-                    );
-                    arr1.push(
-                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
-                    );
-                    arr2.push(
-                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
-                    );
-                    arr3.push(
-                        `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
-                    );
-                    arr4.push(`'${chunk[i].address}'`);
-                } else {
-                    deleteAddresses.push(chunk[i].address);
+                let arr0 = [];
+                let arr1 = [];
+                let arr2 = [];
+                let arr3 = [];
+                let arr4 = [];
+                for (let i = 0; i < chunk.length; i++) {
+                    if (chunk[i].healthFactor < 2) {
+                        arr0.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
+                        );
+                        arr1.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
+                        );
+                        arr2.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
+                        );
+                        arr3.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
+                        );
+                        arr4.push(`'${chunk[i].address}'`);
+                    } else {
+                        deleteAddresses.push(chunk[i].address);
+                    }
                 }
+
+                query = query.replace("{0}", arr0.join(" "));
+                query = query.replace("{1}", arr1.join(" "));
+                query = query.replace("{2}", arr2.join(" "));
+                query = query.replace("{3}", arr3.join(" "));
+                query = query.replace("{4}", arr4.join(","));
+
+                if (query) await sqlManager.execQuery(query);
             }
 
-            query = query.replace("{0}", arr0.join(" "));
-            query = query.replace("{1}", arr1.join(" "));
-            query = query.replace("{2}", arr2.join(" "));
-            query = query.replace("{3}", arr3.join(" "));
-            query = query.replace("{4}", arr4.join(","));
-
-            if (query) await sqlManager.execQuery(query);
-        }
-
-        //delete addresses from the DB where health factor is > 2
-        deleteAddresses = _.uniq(deleteAddresses);
-        if (deleteAddresses.length > 0) {
-            const chunks = _.chunk(deleteAddresses, Constants.CHUNK_SIZE);
-            for (let i = 0; i < chunks.length; i++) {
-                const sqlQuery = `
+            //delete addresses from the DB where health factor is > 2
+            deleteAddresses = _.uniq(deleteAddresses);
+            if (deleteAddresses.length > 0) {
+                const chunks = _.chunk(deleteAddresses, Constants.CHUNK_SIZE);
+                for (let i = 0; i < chunks.length; i++) {
+                    const sqlQuery = `
             DELETE FROM addresses WHERE address IN ('${chunks[i].join(
                 "','"
             )}') AND network = '${key}';
@@ -1624,26 +1636,36 @@ class Engine {
                 "','"
             )}') AND network = '${key}';
             `;
-                deleteAddressesQueries.push(sqlQuery);
+                    deleteAddressesQueries.push(sqlQuery);
+                }
             }
-        }
 
-        for (const deleteAddressesQuery of deleteAddressesQueries) {
-            await sqlManager.execQuery(deleteAddressesQuery);
-        }
+            for (const deleteAddressesQuery of deleteAddressesQueries) {
+                await sqlManager.execQuery(deleteAddressesQuery);
+            }
 
-        const hasMoreResults = dbAddressesArr.length == Constants.CHUNK_SIZE;
-        if (!hasMoreResults) {
-            this.isTriggered_setIsUsersReservesSyncInProgressToTrue = false;
-            await this.triggerWebServerAction("updateUsersReserves", key);
+            const hasMoreResults =
+                dbAddressesArr.length == Constants.CHUNK_SIZE;
+            if (!hasMoreResults) {
+                this.isTriggered_setIsUsersReservesSyncInProgressToTrue = false;
+                await this.triggerWebServerAction("updateUsersReserves", key);
 
+                await logger.log(
+                    "End updateUserAccountDataAndUsersReserves",
+                    "functionAppExecution"
+                );
+            }
+
+            return hasMoreResults;
+        } catch (error: any) {
             await logger.log(
-                "End updateUserAccountDataAndUsersReserves",
+                `Error in updateUserAccountDataAndUsersReserves: ${JSON.stringify(
+                    error
+                )}`,
                 "functionAppExecution"
             );
+            return false;
         }
-
-        return hasMoreResults;
     }
 
     //#endregion updateUserAccountDataAndUserReserves
