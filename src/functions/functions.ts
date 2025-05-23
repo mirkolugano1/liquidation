@@ -203,20 +203,21 @@ app.timer("updateReservesPricesTimer", {
 // Orchestrator
 const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     function* (context: OrchestrationContext) {
-        yield context.df.callActivity(
-            "updateUserAccountDataAndUsersReservesActivity_initialization"
-        );
-
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            let offset = 0;
-            let hasMoreResults = true;
-            do {
-                hasMoreResults = yield context.df.callActivity(
-                    "updateUserAccountDataAndUsersReservesActivity_loop",
-                    { network: aaveNetworkInfo.network, offset: offset }
+        try {
+            yield context.df.callActivity(
+                "updateUserAccountDataAndUsersReservesActivity_initialization"
+            );
+            for (const aaveNetworkInfo of common.getNetworkInfos()) {
+                yield context.df.callActivity(
+                    "updateUserAccountDataAndUsersReservesActivity_chunk",
+                    { network: aaveNetworkInfo.network }
                 );
-                offset += Constants.CHUNK_SIZE;
-            } while (hasMoreResults);
+            }
+        } catch (error: any) {
+            logger.log(
+                `Error in updateUserAccountDataAndUsersReservesOrchestrator: ${error.message}`,
+                error
+            );
         }
     };
 
@@ -228,15 +229,14 @@ const updateUserAccountDataAndUsersReservesActivity_initialization: ActivityHand
         );
     };
 
-const updateUserAccountDataAndUsersReservesActivity_loop: ActivityHandler =
+const updateUserAccountDataAndUsersReservesActivity_chunk: ActivityHandler =
     async (
         input: { network: Network; offset: number },
         context: InvocationContext
     ) => {
-        await engine.updateUserAccountDataAndUsersReserves_loop(
+        await engine.updateUserAccountDataAndUsersReserves_chunk(
             context,
-            input.network,
-            input.offset
+            input.network
         );
     };
 
@@ -262,13 +262,13 @@ df.app.activity(
         handler: updateUserAccountDataAndUsersReservesActivity_initialization,
     }
 );
-df.app.activity("updateUserAccountDataAndUsersReservesActivity_loop", {
-    handler: updateUserAccountDataAndUsersReservesActivity_loop,
+df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
+    handler: updateUserAccountDataAndUsersReservesActivity_chunk,
 });
 
 // Register timer function
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
-    schedule: "30 0 * * *", // Cron expression for every day at 00:15 h
+    schedule: "*/15 * * * *", // Cron expression for every 15 minutes
     extraInputs: [df.input.durableClient()],
     handler: updateUserAccountDataAndUsersReservesTimer,
 });

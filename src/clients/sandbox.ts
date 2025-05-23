@@ -10,6 +10,7 @@ dotenv.config();
 
 async function main() {
     try {
+        //await encryptionManager.createPemFileFromPrivateKey();
         await engine.doTest();
         //console.log("test");
     } catch (error) {

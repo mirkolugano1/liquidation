@@ -6,7 +6,6 @@ import { LogType, LoggingFramework } from "../shared/enums";
 import repo from "../shared/repo";
 import multicallManager from "./multicallManager";
 import common from "../shared/common";
-import { r } from "tar";
 
 class LiquidationManager {
     private static instance: LiquidationManager;
@@ -313,7 +312,11 @@ class LiquidationManager {
         address: string,
         aaveNetworkInfo: any
     ) {
-        if (!repo.isCheckUserAccountDataEnabled) return;
+        const liquidationServerEnvironment = await common.getAppSetting(
+            "LIQUIDATIONSERVERENVIRONMENT"
+        );
+        if (liquidationServerEnvironment == "function") return;
+
         const userAccountData = aaveNetworkInfo.addressesObjects[address];
         if (!userAccountData) return;
 

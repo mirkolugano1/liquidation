@@ -141,27 +141,7 @@ class WebhookManager {
                     return;
             }
 
-            let blockAction = "none";
-            //see blockProcessingDoc.txt for more details of block processing logic
-            if (repo.isUsersReservesSynced) {
-                if (repo.isFetchingUserReserves) {
-                    this.saveBlockToTemporaryBlocks(block);
-                    blockAction = "saveBlockToTemporaryBlocks";
-                } else {
-                    await engine.syncInMemoryData(block, true, false, network);
-                    blockAction = "syncInMemoryData";
-                }
-            } else if (repo.isUsersReservesSyncInProgress) {
-                this.saveBlockToTemporaryBlocks(block);
-                blockAction = "saveBlockToTemporaryBlocks";
-            }
-
-            await logger.log(
-                `block ${block.number}: ${blockAction}`,
-                "WebserverEngineProcessBlock",
-                LogType.Trace,
-                LoggingFramework.Table
-            );
+            await engine.syncInMemoryData(block, true, network);
 
             if (addressesToAdd.length > 0) {
                 //the "from" address is the one that initiated the transaction
@@ -277,11 +257,6 @@ class WebhookManager {
                 }
             }
         }
-    }
-
-    saveBlockToTemporaryBlocks(block: any) {
-        block.receivedOn = moment().utc().format("YYYY-MM-DD HH:mm:ss.SSS");
-        repo.temporaryBlocks.push(block);
     }
 
     //#endregion processAaveEvent (Alchemy Webhook)

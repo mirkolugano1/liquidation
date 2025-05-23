@@ -75,10 +75,10 @@ class Engine {
 
         //set this to true if you want to update the reserves and users reserves on start
         //mainly for testing purposes. In prod, info will be fetched by scheduled tasks
-        if (repo.updateUsersReservesOnStart) {
+        if (false) {
             await this.initializeReserves();
-            await this.initializeUsersReserves();
             await this.initializeGasPrice();
+            await this.initializeUsersReserves();
         }
 
         repo.isWebServerInitialized = true;
@@ -108,71 +108,82 @@ class Engine {
 
     //#region initializeUsersReserves
 
-    async initializeUsersReserves(network: Network | null = null) {
+    async initializeUsersReserves(
+        network: Network | string | null = null,
+        isChunk: boolean = false
+    ) {
         if (!repo.aave) throw new Error("Aave object not initialized");
-        repo.isFetchingUserReserves = true;
         const _key = network?.toString() ?? null;
-        let query = `SELECT * FROM usersReserves`;
-        if (_key) query += ` WHERE network = '${_key}'`;
-        const dbUsersReserves = await sqlManager.execQuery(query);
-        if (!dbUsersReserves || dbUsersReserves.length == 0) {
-            await logger.log(
-                "No reserves found in DB. Please run the updateReservesData function first.",
-                "functionAppExecution"
-            );
-            return;
+        const whereClause = _key ? `network = '${_key}'` : "1=1";
+        let hasAddressesToBeLoaded = true;
+        let query = `SELECT * FROM usersReserves WHERE ${whereClause}`;
+        if (isChunk) {
+            const queryAddresses = `SELECT address FROM addresses WHERE ${whereClause} AND status = 1`;
+            const chunkAddresses = await sqlManager.execQuery(queryAddresses);
+            hasAddressesToBeLoaded = chunkAddresses.length > 0;
+            query += ` AND address IN (${_.map(
+                chunkAddresses,
+                (o) => `'${o.address}'`
+            ).join(",")})`;
         }
+        if (hasAddressesToBeLoaded) {
+            const dbUsersReserves = await sqlManager.execQuery(query);
+            if (dbUsersReserves.length > 0) {
+                let usersReserves: any = {};
+                for (const aaveNetworkInfo of common.getNetworkInfos()) {
+                    const key = aaveNetworkInfo.network.toString();
+                    if (_key && key != _key) continue;
 
-        let usersReserves: any = {};
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            const key = aaveNetworkInfo.network.toString();
-            if (_key && key != _key) continue;
+                    const networkUsersReserves = _.filter(dbUsersReserves, {
+                        network: key,
+                    });
+                    for (let networkUserReserves of networkUsersReserves) {
+                        if (!usersReserves[networkUserReserves.address])
+                            usersReserves[networkUserReserves.address] = {};
+                        usersReserves[networkUserReserves.address][
+                            networkUserReserves.tokenAddress
+                        ] = networkUserReserves;
+                    }
+                    repo.aave[key] = _.assign(aaveNetworkInfo, {
+                        usersReserves: usersReserves,
+                    });
 
-            const networkUsersReserves = _.filter(dbUsersReserves, {
-                network: key,
-            });
-            for (let networkUserReserves of networkUsersReserves) {
-                if (!usersReserves[networkUserReserves.address])
-                    usersReserves[networkUserReserves.address] = {};
-                usersReserves[networkUserReserves.address][
-                    networkUserReserves.tokenAddress
-                ] = networkUserReserves;
-            }
-            repo.aave[key] = _.assign(aaveNetworkInfo, {
-                usersReserves: usersReserves,
-            });
+                    //calculate "external" collateral for all users in case of credit delegation in order to
+                    // take it into account when receiving events from Alchemy
+                    for (let i = 0; i < repo.aave[key].addresses.length; i++) {
+                        const address = repo.aave[key].addresses[i];
+                        if (!repo.aave[key].usersReserves[address]) continue;
+                        const userReserves =
+                            repo.aave[key].usersReserves[address];
+                        if (!userReserves || userReserves.length == 0) continue;
+                        const externalCollateral = _.reduce(
+                            userReserves,
+                            (
+                                total: number,
+                                userReserve: { currentATokenBalance: number }
+                            ) => {
+                                return (
+                                    total +
+                                    (userReserve.currentATokenBalance || 0)
+                                );
+                            },
+                            0
+                        );
 
-            //calculate "external" collateral for all users in case of credit delegation in order to
-            // take it into account when receiving events from Alchemy
-            for (let i = 0; i < repo.aave[key].addresses.length; i++) {
-                const address = repo.aave[key].addresses[i];
-                if (!repo.aave[key].usersReserves[address]) continue;
-                const userReserves = repo.aave[key].usersReserves[address];
-                if (!userReserves || userReserves.length == 0) continue;
-                const externalCollateral = _.reduce(
-                    userReserves,
-                    (
-                        total: number,
-                        userReserve: { currentATokenBalance: number }
-                    ) => {
-                        return total + (userReserve.currentATokenBalance || 0);
-                    },
-                    0
-                );
-
-                repo.aave[key].addressesObjects[address].externalCollateral =
-                    externalCollateral;
+                        repo.aave[key].addressesObjects[
+                            address
+                        ].externalCollateral = externalCollateral;
+                    }
+                }
             }
         }
-
-        repo.isFetchingUserReserves = false;
     }
 
     //#endregion initializeUsersReserves
 
     //#region initializeReserves
 
-    async initializeReserves(network: Network | null = null) {
+    async initializeReserves(network: Network | string | null = null) {
         if (!repo.aave) throw new Error("Aave object not initialized");
         const _key = network?.toString() ?? null;
         const whereClause = _key ? ` WHERE network = '${_key}'` : "";
@@ -204,10 +215,11 @@ class Engine {
 
     //#region initializeGasPrice
 
-    async initializeGasPrice(network: Network | null = null) {
+    async initializeGasPrice(network: Network | string | null = null) {
         if (!repo.aave) throw new Error("Aave object not initialized");
+        const key = network?.toString() ?? null;
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            if (network && network != aaveNetworkInfo.network) continue;
+            if (network && key != aaveNetworkInfo.network.toString()) continue;
             const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
             repo.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
         }
@@ -278,12 +290,6 @@ class Engine {
                 addresses[0]?.toString();
             networkInfo.aaveAddresses.aaveOracle = addresses[1]?.toString();
             networkInfo.aaveAddresses.pool = addresses[2]?.toString();
-
-            const liquidationServerEnvironment = await common.getAppSetting(
-                "LIQUIDATIONSERVERENVIRONMENT"
-            );
-            repo.isCheckUserAccountDataEnabled =
-                liquidationServerEnvironment == "webServer";
         }
     }
 
@@ -344,21 +350,11 @@ class Engine {
     //#endregion updateUserConfiguration
 
     //#region updateUsersReservesData
-    isTriggered_setIsUsersReservesSyncInProgressToTrue: boolean = false;
 
     async updateUsersReservesData(
         userAddressesObjects: any[],
         aaveNetworkInfo: any
     ) {
-        if (!this.isTriggered_setIsUsersReservesSyncInProgressToTrue) {
-            //set the flag to true, so that the web server knows that the sync is in progress
-            await this.triggerWebServerAction(
-                "setIsUsersReservesSyncInProgressToTrue",
-                aaveNetworkInfo.network
-            );
-            this.isTriggered_setIsUsersReservesSyncInProgressToTrue = true;
-        }
-
         const key = aaveNetworkInfo.network.toString();
 
         let multicallUserReserveDataParameters: any[] = [];
@@ -583,10 +579,14 @@ class Engine {
             return;
         }
 
+        logger.log(
+            type,
+            "refreshTriggered",
+            LogType.Trace,
+            LoggingFramework.Table
+        );
+
         switch (type) {
-            case "setIsUsersReservesSyncInProgressToTrue":
-                repo.isUsersReservesSyncInProgress = true;
-                break;
             case "updateGasPrice":
                 await this.initializeGasPrice(network);
                 break;
@@ -594,35 +594,14 @@ class Engine {
                 await this.initializeReserves(network);
                 break;
             case "updateReservesPrices":
-                await this.initializeReserves();
-                if (!repo.isUsersReservesSynced) {
-                    await this.initializeGasPrice();
-                    await this.initializeUsersReserves();
-                } else
-                    await liquidationManager.checkLiquidateAddresses(network);
-                break;
+                await this.initializeReserves(network);
+                await this.initializeGasPrice(network);
+                await this.initializeUsersReserves(network);
+                await liquidationManager.checkLiquidateAddresses(network);
             case "updateUsersReserves":
-                if (!repo.isUsersReservesSynced) {
-                    await this.initializeReserves();
-                    await this.initializeGasPrice();
-                }
-                await this.initializeUsersReserves();
-                if (repo.temporaryBlocks.length > 0) {
-                    for (let i = 0; i < repo.temporaryBlocks.length; i++) {
-                        const block = repo.temporaryBlocks[i];
-                        const shouldCheckLiquidationOpportunities =
-                            i == repo.temporaryBlocks.length - 1;
-                        await this.syncInMemoryData(
-                            block,
-                            shouldCheckLiquidationOpportunities,
-                            true,
-                            network
-                        );
-                    }
-                    repo.temporaryBlocks = [];
-                }
-                repo.isUsersReservesSynced = true;
-                repo.isUsersReservesSyncInProgress = false;
+                await this.initializeReserves(network);
+                await this.initializeGasPrice(network);
+                await this.initializeUsersReserves(network, true);
                 break;
             default:
                 res.status(400).send("Invalid type provided");
@@ -639,7 +618,6 @@ class Engine {
     async syncInMemoryData(
         block: any,
         shouldCheckLiquidationOpportunities: boolean,
-        shouldCheckBlockCanBeApplied: boolean,
         network: string
     ) {
         const key = network;
@@ -655,8 +633,6 @@ class Engine {
                 case "0x9a2f48d3aa6146e0a0f4e8622b5ff4b9d90a3c4f5e9a3b69c8523e213f775bfe": //LiquidationCall
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             log.topics[3],
                             log.topics[1],
                             repo.aave[key]
@@ -746,8 +722,6 @@ class Engine {
                         depositOnBehalfOf ?? depositInitiatorAddress;
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             depositAddress,
                             log.topics[1],
                             repo.aave[key]
@@ -790,8 +764,6 @@ class Engine {
 
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             borrowAddress,
                             log.topics[1],
                             repo.aave[key]
@@ -845,8 +817,6 @@ class Engine {
                     ) {
                         if (
                             !this.blockShouldBeApplied(
-                                shouldCheckBlockCanBeApplied,
-                                block,
                                 log.topics[3],
                                 repayReserve,
                                 repo.aave[key]
@@ -871,8 +841,6 @@ class Engine {
                     if (addressesObjectsAddresses.includes(log.topics[2])) {
                         if (
                             !this.blockShouldBeApplied(
-                                shouldCheckBlockCanBeApplied,
-                                block,
                                 log.topics[2],
                                 repayReserve,
                                 repo.aave[key]
@@ -929,8 +897,6 @@ class Engine {
 
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             address,
                             log.topics[1],
                             repo.aave[key]
@@ -988,8 +954,6 @@ class Engine {
                 case "0x44c58d81365b66dd4b1a7f36c25aa97b8c71c361ee4937adc1a00000227db5dd": //ReserveUsedAsCollateralDisabled
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             log.topics[2],
                             log.topics[1],
                             repo.aave[key]
@@ -1017,8 +981,6 @@ class Engine {
                 case "0x00058a56ea94653cdf4f152d227ace22d4c00ad99e2a43f58cb7d9e3feb295f2": //ReserveUsedAsCollateralEnabled
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             log.topics[2],
                             log.topics[1],
                             repo.aave[key]
@@ -1051,8 +1013,6 @@ class Engine {
 
                     if (
                         !this.blockShouldBeApplied(
-                            shouldCheckBlockCanBeApplied,
-                            block,
                             log.topics[2],
                             log.topics[1],
                             repo.aave[key]
@@ -1122,7 +1082,8 @@ class Engine {
         aaveNetworkInfo: any,
         propertiesToCheck: string[]
     ) {
-        if (!repo.isCheckUserReservesDataEnabled) return;
+        //TODO remove this to test consistency of data
+        return;
 
         const userReserveData = await multicallManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
@@ -1159,21 +1120,15 @@ class Engine {
     //#region blockShouldBeApplied
 
     async blockShouldBeApplied(
-        shouldCheckBlockCanBeApplied: boolean,
-        block: any,
         userAddress: string,
         reserveAddress: string,
         aaveNetworkInfo: any
     ) {
-        if (!shouldCheckBlockCanBeApplied) return true;
         const userReserves = aaveNetworkInfo.usersReserves[userAddress];
         if (!userReserves) return false;
         const userReserve = userReserves[reserveAddress];
         if (!userReserve) return false;
-        const modifiedOn = userReserve.modifiedOn;
-        const receivedOn = block.receivedOn;
-        if (!modifiedOn || !receivedOn) return false;
-        return modifiedOn < receivedOn;
+        return userReserve.status == 1;
     }
 
     //#endregion blockShouldBeApplied
@@ -1647,7 +1602,6 @@ class Engine {
             const hasMoreResults =
                 dbAddressesArr.length == Constants.CHUNK_SIZE;
             if (!hasMoreResults) {
-                this.isTriggered_setIsUsersReservesSyncInProgressToTrue = false;
                 await this.triggerWebServerAction("updateUsersReserves", key);
 
                 await logger.log(
@@ -1665,6 +1619,206 @@ class Engine {
                 "functionAppExecution"
             );
             return false;
+        }
+    }
+
+    async updateUserAccountDataAndUsersReserves_chunk(
+        context: InvocationContext | null,
+        network: Network,
+        isRecursiveCall: boolean = false
+    ) {
+        logger.initialize(
+            "function:updateUserAccountDataAndUsersReserves",
+            LoggingFramework.ApplicationInsights,
+            context
+        );
+        await logger.log(
+            `Start updateUserAccountDataAndUsersReserves_chunk for network ${network}`,
+            "functionAppExecution"
+        );
+
+        const chunkSize = Constants.CHUNK_SIZE / 2;
+        try {
+            const key = network.toString();
+            const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
+            let deleteAddressesQueries: string[] = [];
+            const dbAddressesArr = await sqlManager.execQuery(
+                `SELECT * FROM addresses WHERE healthFactor IS NOT NULL AND network = '${key}' AND (STATUS IS NULL OR STATUS < 1)
+             ORDER BY addedOn OFFSET 0 ROWS FETCH NEXT ${chunkSize} ROWS ONLY
+        `
+            );
+
+            if (dbAddressesArr.length == 0) {
+                if (!isRecursiveCall) {
+                    const query = `UPDATE addresses SET status = NULL WHERE network = '${key}'`;
+                    await sqlManager.execQuery(query);
+                    await this.updateUserAccountDataAndUsersReserves_chunk(
+                        context,
+                        network,
+                        true
+                    );
+                }
+            } else {
+                const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+
+                const results = await this.getUserAccountDataForAddresses(
+                    _addresses,
+                    aaveNetworkInfo.network
+                );
+
+                const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
+                    return o.healthFactor > 2;
+                });
+                let deleteAddresses = _.map(
+                    userAccountDataHFGreaterThan2,
+                    (o) => o.address
+                );
+                const addressesUserAccountDataHFLowerThan2 = _.filter(
+                    results,
+                    (o) => {
+                        return o.healthFactor <= 2;
+                    }
+                );
+
+                await this.updateUserConfiguration(
+                    _.map(
+                        addressesUserAccountDataHFLowerThan2,
+                        (o) => o.address
+                    ),
+                    aaveNetworkInfo.network
+                );
+
+                for (
+                    let i = 0;
+                    i < addressesUserAccountDataHFLowerThan2.length;
+                    i++
+                ) {
+                    const userAddress =
+                        addressesUserAccountDataHFLowerThan2[i].address;
+                    addressesUserAccountDataHFLowerThan2[i].userConfiguration =
+                        repo.aave[key].addressesObjects[
+                            userAddress
+                        ].userConfiguration;
+                }
+
+                await this.updateUsersReservesData(
+                    addressesUserAccountDataHFLowerThan2,
+                    aaveNetworkInfo
+                );
+
+                //Save data to the DB:
+                //NOTE: it is not necessary to save the totalDebtBase to the DB, since
+                //it will be calculated anyway from the usersReserves data.
+                //I leave it here anyway for now, since it is not a big deal to save it
+                const chunks = _.chunk(results, chunkSize);
+                for (let i = 0; i < chunks.length; i++) {
+                    const chunk = chunks[i];
+
+                    let query =
+                        chunk.length > 0
+                            ? `
+        UPDATE addresses 
+        SET 
+            modifiedOn = GETUTCDATE(),
+            healthFactor = CASE
+                {0}
+            ELSE healthFactor
+            END,                                        
+            currentLiquidationThreshold = CASE
+                {1}
+            ELSE currentLiquidationThreshold
+            END,
+            totalCollateralBase = CASE
+                {2}
+            ELSE totalCollateralBase
+            END,
+            totalDebtBase = CASE
+                {3}
+            ELSE totalDebtBase
+            END
+        WHERE address IN ({4}) AND network = '${key}';
+    `
+                            : "";
+
+                    let arr0 = [];
+                    let arr1 = [];
+                    let arr2 = [];
+                    let arr3 = [];
+                    let arr4 = [];
+                    for (let i = 0; i < chunk.length; i++) {
+                        if (chunk[i].healthFactor < 2) {
+                            arr0.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
+                            );
+                            arr1.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
+                            );
+                            arr2.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
+                            );
+                            arr3.push(
+                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
+                            );
+                            arr4.push(`'${chunk[i].address}'`);
+                        } else {
+                            deleteAddresses.push(chunk[i].address);
+                        }
+                    }
+
+                    query = query.replace("{0}", arr0.join(" "));
+                    query = query.replace("{1}", arr1.join(" "));
+                    query = query.replace("{2}", arr2.join(" "));
+                    query = query.replace("{3}", arr3.join(" "));
+                    query = query.replace("{4}", arr4.join(","));
+
+                    if (query) await sqlManager.execQuery(query);
+                }
+
+                //delete addresses from the DB where health factor is > 2
+                deleteAddresses = _.uniq(deleteAddresses);
+                if (deleteAddresses.length > 0) {
+                    const chunks = _.chunk(deleteAddresses, chunkSize);
+                    for (let i = 0; i < chunks.length; i++) {
+                        const sqlQuery = `
+            DELETE FROM addresses WHERE address IN ('${chunks[i].join(
+                "','"
+            )}') AND network = '${key}';
+            DELETE FROM usersReserves WHERE address IN ('${chunks[i].join(
+                "','"
+            )}') AND network = '${key}';
+            `;
+                        deleteAddressesQueries.push(sqlQuery);
+                    }
+                }
+
+                for (const deleteAddressesQuery of deleteAddressesQueries) {
+                    await sqlManager.execQuery(deleteAddressesQuery);
+                }
+
+                const addressesPresent = _.without(
+                    _addresses,
+                    ...deleteAddresses
+                );
+                if (addressesPresent.length > 0) {
+                    const query1 = `UPDATE addresses SET status = 1 WHERE address IN ('${addressesPresent.join(
+                        "','"
+                    )}') AND network = '${key}';`;
+                    await sqlManager.execQuery(query1);
+                }
+            }
+            await this.triggerWebServerAction("updateUsersReserves", key);
+
+            await logger.log(
+                "End updateUserAccountDataAndUsersReserves_chunk",
+                "functionAppExecution"
+            );
+        } catch (error: any) {
+            await logger.log(
+                `Error in updateUserAccountDataAndUsersReserves_chunk: ${JSON.stringify(
+                    error
+                )}`,
+                "functionAppExecution"
+            );
         }
     }
 
@@ -1893,33 +2047,26 @@ class Engine {
     }
 
     async doTest() {
-        const a = formatUnits(719413754570120506n, 18);
-
+        //const a = formatUnits(719413754570120506n, 18);
+        /*
         await this.updateUserAccountDataAndUsersReserves_initialization();
 
         const aaveNetworkInfo1 = await common.getAaveNetworkInfo(
             Network.ARB_MAINNET
         );
-        let offset = Constants.CHUNK_SIZE * 2;
-        let hasMoreResults = true;
-        do {
-            hasMoreResults =
-                await this.updateUserAccountDataAndUsersReserves_loop(
-                    null,
-                    aaveNetworkInfo1.network,
-                    offset
-                );
-            offset += Constants.CHUNK_SIZE;
-        } while (hasMoreResults);
 
+        await this.updateUserAccountDataAndUsersReserves_chunk(
+            null,
+            aaveNetworkInfo1.network
+        );
         return;
-
+*/
         await this.initializeAlchemy();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(
             Network.ARB_SEPOLIA
         );
 
-        const numbers: any[] = [31, 32, 33, 34, 35];
+        const numbers: any[] = [37, 38];
 
         await multicallManager.multicall(
             aaveNetworkInfo.liquidationContractAddress,

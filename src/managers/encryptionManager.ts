@@ -159,17 +159,13 @@ class EncryptionManager {
      * Then use the PEM file to import the key into Azure Key Vault by following the procedure below:
      *
      * # (in WSL) First check if your current key can be read by OpenSSL
-     * openssl ec -inform PEM -in pkcs8_key.pem -text -noout
+     * openssl ec -inform PEM -in ec_key.pem -text -noout
      *
      *  # (in WSL) If the above works, convert to named curve format
-     * openssl ec -inform PEM -in pkcs8_key.pem -outform PEM -out named_curve_key.pem -param_enc named_curve
+     * openssl ec -inform PEM -in ec_key.pem -outform PEM -out named_curve_key.pem -param_enc named_curve
      *
-     * # (in Windows) Try importing with the new file
-     * az keyvault key import --vault-name liquidation \
-     *                --name ethereum-signing-key \
-     *                --pem-file named_curve_key.pem \
-     *                --kty EC \
-     *                --curve P-256K
+     * # (in WSL or Windows) Try importing with the new file
+     * az keyvault key import --vault-name liquidation --name privatekey --pem-file named_curve_key.pem --kty EC --curve P-256K
      *
      * @param hexPrivateKey The private key of the wallet in hex format
      */

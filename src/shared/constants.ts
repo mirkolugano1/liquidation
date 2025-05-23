@@ -44,7 +44,7 @@ class Constants {
         },
     ];
     CHUNK_SIZE = 300;
-    METAMASK_ADDRESS = "0x4be842eA1114870D749F7EfB22FcAac18891466A"; //liquidation metamask address
+    METAMASK_ADDRESS = "0x2FD3A8F9E52b113E51016755B61AC9d3d9EA6567"; //liquidation metamask address
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
     ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
     ABIS: any = {
