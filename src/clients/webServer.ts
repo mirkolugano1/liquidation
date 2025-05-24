@@ -158,28 +158,8 @@ app.use(async (err: any, req: any, res: any, next: any) => {
 
 // Start server
 app.listen(port, "0.0.0.0", async () => {
-    try {
-        console.log("Web server is up. Initializing engine...");
-        await engine.initializeWebServer();
-        console.log("Engine Initialized. Ready to receive requests...");
-        engine.setCloseEvent();
-
-        //initialize users reserves. In prod, this is done by the refresh api when the background function is done
-        if (!common.isProd) {
-            /*
-            await engine.test_updateUsersReserves().catch((error) => {
-                await logger.error(
-                    `Error in test_updateUsersReserves: ${error.message}`,
-                    error
-                );
-            });
-            */
-        }
-    } catch (error: any) {
-        await logger.error(
-            `Error during server initialization: ${error.message}`,
-            error
-        );
-        // In a real production app, you might want to implement restart logic here
-    }
+    console.log("Web server is up. Initializing engine...");
+    await engine.initializeWebServer();
+    console.log("Engine Initialized. Ready to receive requests...");
+    engine.setCloseEvent();
 });

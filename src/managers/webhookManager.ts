@@ -236,14 +236,6 @@ class WebhookManager {
 
                             await sqlManager.execQuery(query);
 
-                            await logger.log(
-                                "Addresses added to the database: " +
-                                    JSON.stringify(
-                                        repo.aave[key].batchAddressesList
-                                    ),
-                                "WebserverEngineProcessBlock"
-                            );
-
                             repo.aave[key].batchAddressesListSql = [];
                             repo.aave[key].batchAddressesList = [];
                             repo.aave[key].addresses = _.uniq(

@@ -177,6 +177,10 @@ class Engine {
                 }
             }
         }
+        if (isChunk) {
+            const queryUpdate = `UPDATE addresses SET status = 2 WHERE ${whereClause} AND status = 1`;
+            await sqlManager.execQuery(queryUpdate);
+        }
     }
 
     //#endregion initializeUsersReserves
@@ -579,12 +583,7 @@ class Engine {
             return;
         }
 
-        logger.log(
-            type,
-            "refreshTriggered",
-            LogType.Trace,
-            LoggingFramework.Table
-        );
+        await logger.log(type, "refreshTriggered");
 
         switch (type) {
             case "updateGasPrice":
@@ -1064,13 +1063,6 @@ class Engine {
                     return;
             }
         }
-
-        await logger.log(
-            `Sync in memory data for block ${block.blockNumber} completed`,
-            "syncInMemoryData",
-            LogType.Trace,
-            LoggingFramework.Table
-        );
     }
 
     //#endregion syncInMemoryData
@@ -1128,7 +1120,7 @@ class Engine {
         if (!userReserves) return false;
         const userReserve = userReserves[reserveAddress];
         if (!userReserve) return false;
-        return userReserve.status == 1;
+        return userReserve.status && userReserve.status >= 1;
     }
 
     //#endregion blockShouldBeApplied
@@ -1438,188 +1430,6 @@ class Engine {
         await this.initializeAlchemy();
         await this.initializeReserves();
         await this.initializeAddresses();
-    }
-
-    async updateUserAccountDataAndUsersReserves_loop(
-        context: InvocationContext | null,
-        network: Network,
-        offset: number = 0
-    ): Promise<boolean> {
-        logger.initialize(
-            "function:updateUserAccountDataAndUsersReserves",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-        await logger.log(
-            `Start loop updateUserAccountDataAndUsersReserves for network ${network} with offset ${offset}`,
-            "functionAppExecution"
-        );
-
-        try {
-            const key = network.toString();
-            const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
-            let deleteAddressesQueries: string[] = [];
-            const dbAddressesArr = await sqlManager.execQuery(
-                `SELECT * FROM addresses WHERE network = '${key}'
-             ORDER BY addedOn OFFSET ${offset} ROWS FETCH NEXT ${Constants.CHUNK_SIZE} ROWS ONLY
-        `
-            );
-
-            if (dbAddressesArr.length == 0) return false;
-            const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
-
-            const results = await this.getUserAccountDataForAddresses(
-                _addresses,
-                aaveNetworkInfo.network
-            );
-
-            const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
-                return o.healthFactor > 2;
-            });
-            let deleteAddresses = _.map(
-                userAccountDataHFGreaterThan2,
-                (o) => o.address
-            );
-            const addressesUserAccountDataHFLowerThan2 = _.filter(
-                results,
-                (o) => {
-                    return o.healthFactor <= 2;
-                }
-            );
-
-            await this.updateUserConfiguration(
-                _.map(addressesUserAccountDataHFLowerThan2, (o) => o.address),
-                aaveNetworkInfo.network
-            );
-
-            for (
-                let i = 0;
-                i < addressesUserAccountDataHFLowerThan2.length;
-                i++
-            ) {
-                const userAddress =
-                    addressesUserAccountDataHFLowerThan2[i].address;
-                addressesUserAccountDataHFLowerThan2[i].userConfiguration =
-                    repo.aave[key].addressesObjects[
-                        userAddress
-                    ].userConfiguration;
-            }
-
-            await this.updateUsersReservesData(
-                addressesUserAccountDataHFLowerThan2,
-                aaveNetworkInfo
-            );
-
-            //Save data to the DB:
-            //NOTE: it is not necessary to save the totalDebtBase to the DB, since
-            //it will be calculated anyway from the usersReserves data.
-            //I leave it here anyway for now, since it is not a big deal to save it
-            const chunks = _.chunk(results, Constants.CHUNK_SIZE);
-            for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-
-                let query =
-                    chunk.length > 0
-                        ? `
-        UPDATE addresses 
-        SET 
-            modifiedOn = GETUTCDATE(),
-            healthFactor = CASE
-                {0}
-            ELSE healthFactor
-            END,                                        
-            currentLiquidationThreshold = CASE
-                {1}
-            ELSE currentLiquidationThreshold
-            END,
-            totalCollateralBase = CASE
-                {2}
-            ELSE totalCollateralBase
-            END,
-            totalDebtBase = CASE
-                {3}
-            ELSE totalDebtBase
-            END
-        WHERE address IN ({4}) AND network = '${key}';
-    `
-                        : "";
-
-                let arr0 = [];
-                let arr1 = [];
-                let arr2 = [];
-                let arr3 = [];
-                let arr4 = [];
-                for (let i = 0; i < chunk.length; i++) {
-                    if (chunk[i].healthFactor < 2) {
-                        arr0.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
-                        );
-                        arr1.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
-                        );
-                        arr2.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
-                        );
-                        arr3.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
-                        );
-                        arr4.push(`'${chunk[i].address}'`);
-                    } else {
-                        deleteAddresses.push(chunk[i].address);
-                    }
-                }
-
-                query = query.replace("{0}", arr0.join(" "));
-                query = query.replace("{1}", arr1.join(" "));
-                query = query.replace("{2}", arr2.join(" "));
-                query = query.replace("{3}", arr3.join(" "));
-                query = query.replace("{4}", arr4.join(","));
-
-                if (query) await sqlManager.execQuery(query);
-            }
-
-            //delete addresses from the DB where health factor is > 2
-            deleteAddresses = _.uniq(deleteAddresses);
-            if (deleteAddresses.length > 0) {
-                const chunks = _.chunk(deleteAddresses, Constants.CHUNK_SIZE);
-                for (let i = 0; i < chunks.length; i++) {
-                    const sqlQuery = `
-            DELETE FROM addresses WHERE address IN ('${chunks[i].join(
-                "','"
-            )}') AND network = '${key}';
-            DELETE FROM usersReserves WHERE address IN ('${chunks[i].join(
-                "','"
-            )}') AND network = '${key}';
-            `;
-                    deleteAddressesQueries.push(sqlQuery);
-                }
-            }
-
-            for (const deleteAddressesQuery of deleteAddressesQueries) {
-                await sqlManager.execQuery(deleteAddressesQuery);
-            }
-
-            const hasMoreResults =
-                dbAddressesArr.length == Constants.CHUNK_SIZE;
-            if (!hasMoreResults) {
-                await this.triggerWebServerAction("updateUsersReserves", key);
-
-                await logger.log(
-                    "End updateUserAccountDataAndUsersReserves",
-                    "functionAppExecution"
-                );
-            }
-
-            return hasMoreResults;
-        } catch (error: any) {
-            await logger.log(
-                `Error in updateUserAccountDataAndUsersReserves: ${JSON.stringify(
-                    error
-                )}`,
-                "functionAppExecution"
-            );
-            return false;
-        }
     }
 
     async updateUserAccountDataAndUsersReserves_chunk(
@@ -2033,17 +1843,10 @@ class Engine {
             Network.ARB_MAINNET
         );
         await this.initializeReserves();
-        let offset = 0;
-        let hasMoreResults = true;
-        do {
-            hasMoreResults =
-                await this.updateUserAccountDataAndUsersReserves_loop(
-                    null,
-                    aaveNetworkInfo.network,
-                    offset
-                );
-            offset += Constants.CHUNK_SIZE;
-        } while (hasMoreResults);
+        await this.updateUserAccountDataAndUsersReserves_chunk(
+            null,
+            aaveNetworkInfo.network
+        );
     }
 
     async doTest() {
