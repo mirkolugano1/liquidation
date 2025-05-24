@@ -17,6 +17,7 @@ import { r } from "tar";
 import repo from "../shared/repo";
 import liquidationManager from "../managers/liquidationManager";
 import multicallManager from "../managers/multicallManager";
+import moment from "moment";
 
 //#endregion Imports
 
@@ -72,14 +73,10 @@ class Engine {
 
         await this.initializeAlchemy();
         await this.initializeAddresses();
-
-        //set this to true if you want to update the reserves and users reserves on start
-        //mainly for testing purposes. In prod, info will be fetched by scheduled tasks
-        if (false) {
-            await this.initializeReserves();
-            await this.initializeGasPrice();
-            await this.initializeUsersReserves();
-        }
+        await this.initializeReserves();
+        await this.initializeGasPrice();
+        await this.resetUsersReservesStatus();
+        await this.initializeUsersReserves();
 
         repo.isWebServerInitialized = true;
     }
@@ -110,30 +107,32 @@ class Engine {
 
     async initializeUsersReserves(
         network: Network | string | null = null,
-        isChunk: boolean = false
+        isOnlyLoadProcessedChunk: boolean = false
     ) {
         if (!repo.aave) throw new Error("Aave object not initialized");
         const _key = network?.toString() ?? null;
-        const whereClause = _key ? `network = '${_key}'` : "1=1";
-        let hasAddressesToBeLoaded = true;
-        let query = `SELECT * FROM usersReserves WHERE ${whereClause}`;
-        if (isChunk) {
-            const queryAddresses = `SELECT address FROM addresses WHERE ${whereClause} AND status = 1`;
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
+            const key = aaveNetworkInfo.network.toString();
+            if (_key && key != _key) continue;
+            let hasAddressesToBeLoaded = true;
+
+            //if a chunk is being processed, we only want to load addresses with status = 1
+            //and only update those one in the webserver. Otherwise, we load all addresses
+            //whose user reserves have already been synced (status = 2)
+            const operator = isOnlyLoadProcessedChunk ? "=" : ">";
+
+            const queryAddresses = `SELECT address FROM addresses WHERE network = '${key}' AND status ${operator} 1`;
             const chunkAddresses = await sqlManager.execQuery(queryAddresses);
             hasAddressesToBeLoaded = chunkAddresses.length > 0;
-            query += ` AND address IN (${_.map(
+            const query = `SELECT * FROM usersReserves WHERE network = '${key}' AND address IN (${_.map(
                 chunkAddresses,
                 (o) => `'${o.address}'`
             ).join(",")})`;
-        }
-        if (hasAddressesToBeLoaded) {
-            const dbUsersReserves = await sqlManager.execQuery(query);
-            if (dbUsersReserves.length > 0) {
-                let usersReserves: any = {};
-                for (const aaveNetworkInfo of common.getNetworkInfos()) {
-                    const key = aaveNetworkInfo.network.toString();
-                    if (_key && key != _key) continue;
 
+            if (hasAddressesToBeLoaded) {
+                const dbUsersReserves = await sqlManager.execQuery(query);
+                if (dbUsersReserves.length > 0) {
+                    let usersReserves: any = {};
                     const networkUsersReserves = _.filter(dbUsersReserves, {
                         network: key,
                     });
@@ -176,11 +175,14 @@ class Engine {
                     }
                 }
             }
+
+            if (isOnlyLoadProcessedChunk) {
+                const queryUpdate = `UPDATE addresses SET status = 2 WHERE network = '${key}' AND status = 1`;
+                await sqlManager.execQuery(queryUpdate);
+            }
         }
-        if (isChunk) {
-            const queryUpdate = `UPDATE addresses SET status = 2 WHERE ${whereClause} AND status = 1`;
-            await sqlManager.execQuery(queryUpdate);
-        }
+
+        await logger.log(`Users reserves initialized for network ${_key}`);
     }
 
     //#endregion initializeUsersReserves
@@ -573,6 +575,26 @@ class Engine {
 
     //#endregion triggerWebServerAction
 
+    //#region resetUsersReservesStatus
+
+    /**
+     * Resets the status of all users reserves to 1 (active) in the database.
+     * This is useful to reinitialize the users reserves data in the webServer, so that
+     * all users reserves which are flagged as 2 (loaded) can be reloaded.
+     */
+    async resetUsersReservesStatus() {
+        if (!repo.aave) throw new Error("Aave object not initialized");
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
+            const key = aaveNetworkInfo.network.toString();
+            repo.aave[key].usersReserves = {};
+            await sqlManager.execQuery(
+                `UPDATE addresses SET status = 2 WHERE network = '${key}' AND status > 1`
+            );
+        }
+    }
+
+    //#endregion resetUsersReservesStatus
+
     //#region refresh
 
     async refresh(req: any, res: any) {
@@ -595,7 +617,7 @@ class Engine {
             case "updateReservesPrices":
                 await this.initializeReserves(network);
                 await this.initializeGasPrice(network);
-                await this.initializeUsersReserves(network);
+                //await this.initializeUsersReserves(network); //not needed I think, since only prices have changed here
                 await liquidationManager.checkLiquidateAddresses(network);
             case "updateUsersReserves":
                 await this.initializeReserves(network);
@@ -1461,28 +1483,56 @@ class Engine {
             "functionAppExecution"
         );
 
-        const chunkSize = Constants.CHUNK_SIZE / 2;
+        const chunkSize = Constants.CHUNK_SIZE;
         try {
             const key = network.toString();
             const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
             let deleteAddressesQueries: string[] = [];
+            const timestampQuery =
+                "SELECT * FROM config WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves'";
+            const timestampResult = await sqlManager.execQuery(timestampQuery);
+            const timestamp = timestampResult[0].value;
+
             const dbAddressesArr = await sqlManager.execQuery(
-                `SELECT * FROM addresses WHERE healthFactor IS NOT NULL AND network = '${key}' AND (STATUS IS NULL OR STATUS < 1)
+                `SELECT * FROM addresses WHERE network = '${key}' AND (STATUS IS NULL OR STATUS < 1) AND addedOn < ${timestamp}
              ORDER BY addedOn OFFSET 0 ROWS FETCH NEXT ${chunkSize} ROWS ONLY
         `
             );
 
             if (dbAddressesArr.length == 0) {
                 if (!isRecursiveCall) {
-                    const query = `UPDATE addresses SET status = NULL WHERE network = '${key}'`;
+                    //if we come here, it means that we have already processed all addresses
+                    //and we can set the status to null for all addresses
+                    //and update the lastUpdateUserAccountDataAndUsersReserves timestamp in the config, so that
+                    //updates can start over again
+                    const utcNow = moment().utc().format("YYYY-MM-DD HH:mm:ss");
+                    const query = `
+                        UPDATE addresses SET status = NULL WHERE network = '${key}'; 
+                        UPDATE config SET [value] = '${utcNow}' WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves';`;
                     await sqlManager.execQuery(query);
+
+                    //run the update again, it should start over again
                     await this.updateUserAccountDataAndUsersReserves_chunk(
                         context,
                         network,
                         true
                     );
+                } else {
+                    await logger.log(
+                        "Recursive call (1) should never fall into here. Addresses: " +
+                            dbAddressesArr.length,
+                        "warning"
+                    );
                 }
             } else {
+                if (isRecursiveCall) {
+                    await logger.log(
+                        "Recursive call (2) should never fall into here. Addresses: " +
+                            dbAddressesArr.length,
+                        "warning"
+                    );
+                }
+
                 const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
                 const results = await this.getUserAccountDataForAddresses(
@@ -1864,6 +1914,12 @@ class Engine {
     }
 
     async doTest() {
+        /*
+        const timestampQuery =
+            "SELECT value FROM config WHERE [key] = 'lastUpdateUserAccountData'";
+        const timestampResult = await sqlManager.execQuery(timestampQuery);
+        return;
+        */
         //const a = formatUnits(719413754570120506n, 18);
         /*
         await this.updateUserAccountDataAndUsersReserves_initialization();

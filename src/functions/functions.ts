@@ -268,7 +268,7 @@ df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
 
 // Register timer function
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
-    schedule: "*/15 * * * *", // Cron expression for every 15 minutes
+    schedule: "*/5 * * * *", // Cron expression for every n minutes
     extraInputs: [df.input.durableClient()],
     handler: updateUserAccountDataAndUsersReservesTimer,
 });

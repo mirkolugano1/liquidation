@@ -6,6 +6,7 @@ import webhookManager from "../managers/webhookManager";
 import common from "../shared/common";
 import Constants from "../shared/constants";
 import repo from "../shared/repo";
+import moment from "moment";
 
 // Handle unhandled promise rejections
 process.on("unhandledRejection", async (reason, promise) => {
@@ -158,8 +159,11 @@ app.use(async (err: any, req: any, res: any, next: any) => {
 
 // Start server
 app.listen(port, "0.0.0.0", async () => {
-    console.log("Web server is up. Initializing engine...");
-    await engine.initializeWebServer();
-    console.log("Engine Initialized. Ready to receive requests...");
+    //not awaiting this to allow the server to start immediately
+    engine.initializeWebServer();
+
     engine.setCloseEvent();
+    await logger.log(
+        `Web server started: ${moment.utc().format("YYYY-MM-DD HH:mm:ss")}`
+    );
 });
