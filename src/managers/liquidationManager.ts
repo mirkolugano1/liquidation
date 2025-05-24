@@ -293,7 +293,8 @@ class LiquidationManager {
                             );
                             */
                         await logger.log(
-                            profitableLiquidations,
+                            "checkLiquidateAddressesFromInMemoryObjects: " +
+                                JSON.stringify(profitableLiquidations),
                             LoggingFramework.Table
                         );
                     }

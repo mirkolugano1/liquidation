@@ -100,7 +100,6 @@ const updateReservesDataOrchestrator: OrchestrationHandler = function* (
             network: aaveNetworkInfo.network,
         });
     }
-    logger.log("End updateReservesDataOrchestrator");
 };
 
 // Activity function for updating reserves data
@@ -193,9 +192,6 @@ app.timer("updateReservesPricesTimer", {
 // Orchestrator
 const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     function* (context: OrchestrationContext) {
-        yield context.df.callActivity(
-            "updateUserAccountDataAndUsersReservesActivity_initialization"
-        );
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
             yield context.df.callActivity(
                 "updateUserAccountDataAndUsersReservesActivity_chunk",
@@ -205,13 +201,6 @@ const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     };
 
 // Activity function
-const updateUserAccountDataAndUsersReservesActivity_initialization: ActivityHandler =
-    async (input: unknown, context: InvocationContext) => {
-        await engine.updateUserAccountDataAndUsersReserves_initialization(
-            context
-        );
-    };
-
 const updateUserAccountDataAndUsersReservesActivity_chunk: ActivityHandler =
     async (
         input: { network: Network; offset: number },
@@ -238,12 +227,6 @@ const updateUserAccountDataAndUsersReservesTimer = async (
 df.app.orchestration(
     "updateUserAccountDataAndUsersReservesOrchestrator",
     updateUserAccountDataAndUsersReservesOrchestrator
-);
-df.app.activity(
-    "updateUserAccountDataAndUsersReservesActivity_initialization",
-    {
-        handler: updateUserAccountDataAndUsersReservesActivity_initialization,
-    }
 );
 df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
     handler: updateUserAccountDataAndUsersReservesActivity_chunk,
