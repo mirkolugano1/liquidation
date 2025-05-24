@@ -675,7 +675,7 @@ class Engine {
                             ].currentVariableDebt -= debtToCover;
                         }
 
-                        await this.checkUserReservesData(
+                        await this.checkUserReservesDataConsistencyAndUpdateDB(
                             eventHash,
                             userLiquidated,
                             liquidationDebtAsset,
@@ -703,7 +703,7 @@ class Engine {
                         //not necessary to update userConfiguration. If reserve was already set as collateral,
                         //this does not change anyway.
 
-                        await this.checkUserReservesData(
+                        await this.checkUserReservesDataConsistencyAndUpdateDB(
                             eventHash,
                             userLiquidated,
                             liquidationDebtAsset,
@@ -744,7 +744,7 @@ class Engine {
                             depositReserve
                         ].currentATokenBalance += depositAmount;
 
-                        await this.checkUserReservesData(
+                        await this.checkUserReservesDataConsistencyAndUpdateDB(
                             eventHash,
                             userLiquidated,
                             liquidationDebtAsset,
@@ -785,7 +785,7 @@ class Engine {
                             ].currentVariableDebt += borrowedAmount;
                         }
 
-                        await this.checkUserReservesData(
+                        await this.checkUserReservesDataConsistencyAndUpdateDB(
                             eventHash,
                             userLiquidated,
                             liquidationDebtAsset,
@@ -827,7 +827,7 @@ class Engine {
                             repayReserve
                         ].currentATokenBalance -= amountRepayed;
 
-                        await this.checkUserReservesData(
+                        await this.checkUserReservesDataConsistencyAndUpdateDB(
                             eventHash,
                             userLiquidated,
                             liquidationDebtAsset,
@@ -868,7 +868,7 @@ class Engine {
                             ].currentStableDebt -= amountRepayed;
                         }
 
-                        await this.checkUserReservesData(
+                        await this.checkUserReservesDataConsistencyAndUpdateDB(
                             eventHash,
                             userLiquidated,
                             liquidationDebtAsset,
@@ -922,7 +922,7 @@ class Engine {
                                 reserve
                             ].currentATokenBalance += amount;
 
-                            await this.checkUserReservesData(
+                            await this.checkUserReservesDataConsistencyAndUpdateDB(
                                 eventHash,
                                 userLiquidated,
                                 liquidationDebtAsset,
@@ -1037,7 +1037,7 @@ class Engine {
                                 reserve
                             ].currentATokenBalance -= amountWithdrawn;
 
-                            await this.checkUserReservesData(
+                            await this.checkUserReservesDataConsistencyAndUpdateDB(
                                 eventHash,
                                 userLiquidated,
                                 liquidationDebtAsset,
@@ -1067,16 +1067,30 @@ class Engine {
 
     //#endregion syncInMemoryData
 
-    async checkUserReservesData(
+    async checkUserReservesDataConsistencyAndUpdateDB(
         eventHash: string,
         userAddress: string,
         reserveAddress: string,
         aaveNetworkInfo: any,
         propertiesToCheck: string[]
     ) {
-        //TODO remove this to test consistency of data
-        return;
+        if (propertiesToCheck.length == 0) return;
 
+        //update the user reserves data in the DB
+        let valuesQuery = "";
+        for (let i = 0; i < propertiesToCheck.length; i++) {
+            const property = propertiesToCheck[i];
+            valuesQuery += `${property} = ${aaveNetworkInfo.usersReserves[userAddress][reserveAddress][property]}`;
+            if (i < propertiesToCheck.length - 1) {
+                valuesQuery += ", ";
+            }
+        }
+        const query = `UPDATE usersReserves 
+        SET ${valuesQuery}
+        WHERE address = '${userAddress}' AND tokenAddress = '${reserveAddress}' AND network = '${aaveNetworkInfo.network}'`;
+        await sqlManager.execQuery(query);
+
+        //check if the user reserves data in the DB is consistent with the one in the contract
         const userReserveData = await multicallManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             [[reserveAddress, userAddress]],
