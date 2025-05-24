@@ -56,8 +56,7 @@ test("hf_initializeHealthFactorEngine", { only: true }, async () => {
 
 test("logger_logsCorrectly", { only: false }, async () => {
     const text = Math.random().toString();
-    logger.useTableLogging();
-    await logger.log(text, "test");
+    await logger.log("test");
     const result = await sqlManager.execQuery(
         "SELECT TOP 1 * FROM dbo.logs WHERE loglevel = 'test' ORDER BY timestamp DESC"
     );

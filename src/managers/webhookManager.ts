@@ -1,12 +1,8 @@
 import _ from "lodash";
 import engine from "../engines/engine";
 import common from "../shared/common";
-import logger from "../shared/logger";
 import repo from "../shared/repo";
-import liquidationManager from "./liquidationManager";
 import sqlManager from "./sqlManager";
-import moment from "moment";
-import { LoggingFramework, LogType } from "../shared/enums";
 
 class WebhookManager {
     private static instance: WebhookManager;

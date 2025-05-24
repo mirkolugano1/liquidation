@@ -2,7 +2,7 @@ import logger from "../shared/logger";
 import Big from "big.js";
 import { Network } from "alchemy-sdk";
 import _ from "lodash";
-import { LogType, LoggingFramework } from "../shared/enums";
+import { LoggingFramework } from "../shared/enums";
 import repo from "../shared/repo";
 import multicallManager from "./multicallManager";
 import common from "../shared/common";
@@ -149,9 +149,8 @@ class LiquidationManager {
                 );
 
                 await logger.log(
-                    JSON.stringify(userAccountDatasObjects),
-                    "liquidationTriggered",
-                    LogType.Trace,
+                    "checkLiquidateAddressesFromInMemoryObjects: " +
+                        JSON.stringify(userAccountDatasObjects),
                     LoggingFramework.Table
                 );
             }
@@ -249,13 +248,12 @@ class LiquidationManager {
                     }
 
                     await logger.log(
-                        JSON.stringify({
-                            liquidatableAddressesCount:
-                                liquidatableAddresses.length,
-                            profitableLiquidations: profitableLiquidations,
-                        }),
-                        "liquidationTriggered",
-                        LogType.Trace,
+                        "checkLiquidateAddressesFromInMemoryObjects: " +
+                            JSON.stringify({
+                                liquidatableAddressesCount:
+                                    liquidatableAddresses.length,
+                                profitableLiquidations: profitableLiquidations,
+                            }),
                         LoggingFramework.Table
                     );
                 }
@@ -295,9 +293,7 @@ class LiquidationManager {
                             );
                             */
                         await logger.log(
-                            JSON.stringify(profitableLiquidations),
-                            "liquidationTriggered",
-                            LogType.Trace,
+                            profitableLiquidations,
                             LoggingFramework.Table
                         );
                     }
@@ -356,9 +352,7 @@ class LiquidationManager {
         }
         if (str.length > 0) {
             await logger.log(
-                `User account data mismatch for address ${address}: ${str}`,
-                "checkUserAccountDataBeforeLiquidation",
-                LogType.Trace,
+                `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${address}: ${str}`,
                 LoggingFramework.Table
             );
         }

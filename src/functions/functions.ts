@@ -7,10 +7,8 @@ import {
 } from "durable-functions";
 import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
-import Constants from "../shared/constants";
 import common from "../shared/common";
 import logger from "../shared/logger";
-import { LoggingFramework } from "../shared/enums";
 
 // =========== Gas Price Update ===========
 // Orchestrator for gas price update
@@ -53,7 +51,6 @@ app.timer("updateGasPriceTimer", {
 const deleteOldTablesEntriesOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    // Call the activity function to delete old table entries
     yield context.df.callActivity("deleteOldTablesEntriesActivity");
 };
 
@@ -97,13 +94,6 @@ app.timer("deleteOldTablesEntriesTimer", {
 const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    logger.initialize(
-        "updateReservesDataOrchestrator",
-        LoggingFramework.ApplicationInsights,
-        context
-    );
-
-    logger.log("Start updateReservesDataOrchestrator");
     yield context.df.callActivity("updateReservesDataActivity_initialization");
     for (const aaveNetworkInfo of common.getNetworkInfos()) {
         yield context.df.callActivity("updateReservesDataActivity_loop", {
@@ -203,20 +193,13 @@ app.timer("updateReservesPricesTimer", {
 // Orchestrator
 const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     function* (context: OrchestrationContext) {
-        try {
+        yield context.df.callActivity(
+            "updateUserAccountDataAndUsersReservesActivity_initialization"
+        );
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
             yield context.df.callActivity(
-                "updateUserAccountDataAndUsersReservesActivity_initialization"
-            );
-            for (const aaveNetworkInfo of common.getNetworkInfos()) {
-                yield context.df.callActivity(
-                    "updateUserAccountDataAndUsersReservesActivity_chunk",
-                    { network: aaveNetworkInfo.network }
-                );
-            }
-        } catch (error: any) {
-            logger.log(
-                `Error in updateUserAccountDataAndUsersReservesOrchestrator: ${error.message}`,
-                error
+                "updateUserAccountDataAndUsersReservesActivity_chunk",
+                { network: aaveNetworkInfo.network }
             );
         }
     };

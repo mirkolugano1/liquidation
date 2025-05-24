@@ -8,7 +8,7 @@ import { ethers, formatUnits } from "ethers";
 import Big from "big.js";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
-import { LoggingFramework, LogType } from "../shared/enums";
+import { LoggingFramework } from "../shared/enums";
 import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
 import emailManager from "../managers/emailManager";
@@ -85,19 +85,31 @@ class Engine {
 
     //#region initializeAddresses
 
-    async initializeAddresses() {
-        const initAddresses = await sqlManager.execQuery(
-            "SELECT * FROM addresses"
-        );
-        for (const address of initAddresses) {
-            if (!repo.aave[address.network].hasOwnProperty("addresses"))
-                repo.aave[address.network].addresses = [];
-            repo.aave[address.network].addresses.push(address.address);
+    async initializeAddresses(network: Network | string | null = null) {
+        if (!repo.aave) throw new Error("Aave object not initialized");
+        const _key = network?.toString() ?? null;
 
-            if (!repo.aave[address.network].hasOwnProperty("addressesObjects"))
-                repo.aave[address.network].addressesObjects = {};
-            repo.aave[address.network].addressesObjects[address.address] =
-                address;
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
+            const key = aaveNetworkInfo.network.toString();
+            if (_key && key != _key) continue;
+
+            const initAddresses = await sqlManager.execQuery(
+                `SELECT * FROM addresses WHERE network = '${key}'`
+            );
+            for (const address of initAddresses) {
+                if (!repo.aave[address.network].hasOwnProperty("addresses"))
+                    repo.aave[address.network].addresses = [];
+                repo.aave[address.network].addresses.push(address.address);
+
+                if (
+                    !repo.aave[address.network].hasOwnProperty(
+                        "addressesObjects"
+                    )
+                )
+                    repo.aave[address.network].addressesObjects = {};
+                repo.aave[address.network].addressesObjects[address.address] =
+                    address;
+            }
         }
     }
 
@@ -182,7 +194,9 @@ class Engine {
             }
         }
 
-        await logger.log(`Users reserves initialized for network ${_key}`);
+        await logger.log(
+            `initializeUsersReserves: Users reserves initialized for network ${_key}`
+        );
     }
 
     //#endregion initializeUsersReserves
@@ -192,22 +206,22 @@ class Engine {
     async initializeReserves(network: Network | string | null = null) {
         if (!repo.aave) throw new Error("Aave object not initialized");
         const _key = network?.toString() ?? null;
-        const whereClause = _key ? ` WHERE network = '${_key}'` : "";
-        let query = `SELECT * FROM reserves ${whereClause} ORDER BY sorting`;
-
-        const dbReserves = await sqlManager.execQuery(query);
-        if (!dbReserves || dbReserves.length == 0) {
-            await logger.log(
-                "No reserves found in DB. Please run the updateReservesData function first.",
-                "functionAppExecution"
-            );
-            return;
-        }
 
         let reserves: any = {};
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
             const key = aaveNetworkInfo.network.toString();
             if (_key && key != _key) continue;
+
+            const whereClause = _key ? ` WHERE network = '${_key}'` : "";
+            let query = `SELECT * FROM reserves ${whereClause} ORDER BY sorting`;
+
+            const dbReserves = await sqlManager.execQuery(query);
+            if (!dbReserves || dbReserves.length == 0) {
+                await logger.log(
+                    "initializeReserves: No reserves found in DB. Please run the updateReservesData function first."
+                );
+                return;
+            }
 
             const networkReserves = _.filter(dbReserves, { network: key });
             for (let networkReserve of networkReserves) {
@@ -235,7 +249,7 @@ class Engine {
 
     //#region initializeAlchemy
 
-    async initializeAlchemy() {
+    async initializeAlchemy(network: Network | string | null = null) {
         if (repo.aave) return;
         repo.aave = {};
 
@@ -247,14 +261,14 @@ class Engine {
 
         if (!alchemyKey) {
             await logger.log(
-                "No Alchemy key found. Please set the ALCHEMYKEYENCRYPTED environment variable.",
-                "functionAppExecution"
+                "initializeAlchemy: No Alchemy key found. Please set the ALCHEMYKEYENCRYPTED environment variable."
             );
             return;
         }
 
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
             const key = aaveNetworkInfo.network.toString();
+            if (network && key != network.toString()) continue;
 
             const config = {
                 apiKey: alchemyKey, // Replace with your API key
@@ -286,8 +300,7 @@ class Engine {
 
             if (!addresses) {
                 await logger.log(
-                    `No addresses found for network ${aaveNetworkInfo.network.toString()}. Please check the Aave addresses provider.`,
-                    "functionAppExecution"
+                    `initializeAlchemy: No addresses found for network ${aaveNetworkInfo.network.toString()}. Please check the Aave addresses provider.`
                 );
                 return;
             }
@@ -605,7 +618,7 @@ class Engine {
             return;
         }
 
-        await logger.log(type, "refreshTriggered");
+        await logger.log("refresh: endpoint called for type: " + type);
 
         switch (type) {
             case "updateGasPrice":
@@ -1136,10 +1149,8 @@ class Engine {
             }
         }
         if (str.length > 0) {
-            await logger.log(
+            await logger.warning(
                 `User reserve data for ${userAddress} and ${reserveAddress} on event hash ${eventHash} is not consistent: ${str}`,
-                "checkUserReservesData",
-                LogType.Trace,
                 LoggingFramework.Table
             );
         }
@@ -1226,13 +1237,7 @@ class Engine {
     async updateReservesData_initialization(
         context: InvocationContext | null = null
     ) {
-        logger.initialize(
-            "function:updateReservesData",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-
-        await logger.log("Start updateReservesData", "functionAppExecution");
+        logger.initialize("function:updateReservesData", context);
         await this.initializeAlchemy();
     }
 
@@ -1448,26 +1453,6 @@ class Engine {
      * - userReserves (for each user, for each token)
      * for all addresses in the DB with health factor < 2
      */
-    async updateUserAccountDataAndUsersReserves_initialization(
-        context: InvocationContext | null = null
-    ) {
-        //initialization
-        logger.initialize(
-            "function:updateUserAccountDataAndUsersReserves",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-
-        await logger.log(
-            "Start updateUserAccountDataAndUsersReserves",
-            "functionAppExecution"
-        );
-
-        await this.initializeAlchemy();
-        await this.initializeReserves();
-        await this.initializeAddresses();
-    }
-
     async updateUserAccountDataAndUsersReserves_chunk(
         context: InvocationContext | null,
         network: Network,
@@ -1475,122 +1460,117 @@ class Engine {
     ) {
         logger.initialize(
             "function:updateUserAccountDataAndUsersReserves",
-            LoggingFramework.ApplicationInsights,
             context
         );
         await logger.log(
-            `Start updateUserAccountDataAndUsersReserves_chunk for network ${network}`,
-            "functionAppExecution"
+            `Start updateUserAccountDataAndUsersReserves_chunk for network ${network}`
         );
 
+        await this.initializeAlchemy(network);
+        await this.initializeReserves(network);
+        await this.initializeAddresses(network);
+
         const chunkSize = Constants.CHUNK_SIZE;
-        try {
-            const key = network.toString();
-            const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
-            let deleteAddressesQueries: string[] = [];
-            const timestampQuery =
-                "SELECT * FROM config WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves'";
-            const timestampResult = await sqlManager.execQuery(timestampQuery);
-            const timestamp = timestampResult[0].value;
+        const key = network.toString();
+        const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
+        let deleteAddressesQueries: string[] = [];
+        const timestampQuery =
+            "SELECT * FROM config WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves'";
+        const timestampResult = await sqlManager.execQuery(timestampQuery);
+        const timestamp = timestampResult[0].value;
 
-            const dbAddressesArr = await sqlManager.execQuery(
-                `SELECT * FROM addresses WHERE network = '${key}' AND (STATUS IS NULL OR STATUS < 1) AND addedOn < ${timestamp}
-             ORDER BY addedOn OFFSET 0 ROWS FETCH NEXT ${chunkSize} ROWS ONLY
-        `
-            );
+        const dbAddressesArr = await sqlManager.execQuery(
+            `SELECT TOP ${chunkSize} * FROM addresses WHERE network = '${key}' AND (STATUS IS NULL OR STATUS < 1) AND addedOn < ${timestamp}
+             ORDER BY addedOn`
+        );
 
-            if (dbAddressesArr.length == 0) {
-                if (!isRecursiveCall) {
-                    //if we come here, it means that we have already processed all addresses
-                    //and we can set the status to null for all addresses
-                    //and update the lastUpdateUserAccountDataAndUsersReserves timestamp in the config, so that
-                    //updates can start over again
-                    const utcNow = moment().utc().format("YYYY-MM-DD HH:mm:ss");
-                    const query = `
+        if (dbAddressesArr.length == 0) {
+            if (!isRecursiveCall) {
+                //if we come here, it means that we have already processed all addresses
+                //and we can set the status to null for all addresses
+                //and update the lastUpdateUserAccountDataAndUsersReserves timestamp in the config, so that
+                //updates can start over again
+                const utcNow = moment().utc().format("YYYY-MM-DD HH:mm:ss");
+                const query = `
                         UPDATE addresses SET status = NULL WHERE network = '${key}'; 
                         UPDATE config SET [value] = '${utcNow}' WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves';`;
-                    await sqlManager.execQuery(query);
+                await sqlManager.execQuery(query);
 
-                    //run the update again, it should start over again
-                    await this.updateUserAccountDataAndUsersReserves_chunk(
-                        context,
-                        network,
-                        true
-                    );
-                } else {
-                    await logger.log(
-                        "Recursive call (1) should never fall into here. Addresses: " +
-                            dbAddressesArr.length,
-                        "warning"
-                    );
-                }
+                //run the update again, it should start over again
+                await this.updateUserAccountDataAndUsersReserves_chunk(
+                    context,
+                    network,
+                    true
+                );
             } else {
-                if (isRecursiveCall) {
-                    await logger.log(
-                        "Recursive call (2) should never fall into here. Addresses: " +
-                            dbAddressesArr.length,
-                        "warning"
-                    );
+                await logger.warning(
+                    "Recursive call (1) should never fall into here. Addresses: " +
+                        dbAddressesArr.length
+                );
+            }
+        } else {
+            if (isRecursiveCall) {
+                await logger.warning(
+                    "Recursive call (2) should never fall into here. Addresses: " +
+                        dbAddressesArr.length
+                );
+            }
+
+            const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+
+            const results = await this.getUserAccountDataForAddresses(
+                _addresses,
+                aaveNetworkInfo.network
+            );
+
+            const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
+                return o.healthFactor > 2;
+            });
+            let deleteAddresses = _.map(
+                userAccountDataHFGreaterThan2,
+                (o) => o.address
+            );
+            const addressesUserAccountDataHFLowerThan2 = _.filter(
+                results,
+                (o) => {
+                    return o.healthFactor <= 2;
                 }
+            );
 
-                const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
+            await this.updateUserConfiguration(
+                _.map(addressesUserAccountDataHFLowerThan2, (o) => o.address),
+                aaveNetworkInfo.network
+            );
 
-                const results = await this.getUserAccountDataForAddresses(
-                    _addresses,
-                    aaveNetworkInfo.network
-                );
+            for (
+                let i = 0;
+                i < addressesUserAccountDataHFLowerThan2.length;
+                i++
+            ) {
+                const userAddress =
+                    addressesUserAccountDataHFLowerThan2[i].address;
+                addressesUserAccountDataHFLowerThan2[i].userConfiguration =
+                    repo.aave[key].addressesObjects[
+                        userAddress
+                    ].userConfiguration;
+            }
 
-                const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
-                    return o.healthFactor > 2;
-                });
-                let deleteAddresses = _.map(
-                    userAccountDataHFGreaterThan2,
-                    (o) => o.address
-                );
-                const addressesUserAccountDataHFLowerThan2 = _.filter(
-                    results,
-                    (o) => {
-                        return o.healthFactor <= 2;
-                    }
-                );
+            await this.updateUsersReservesData(
+                addressesUserAccountDataHFLowerThan2,
+                aaveNetworkInfo
+            );
 
-                await this.updateUserConfiguration(
-                    _.map(
-                        addressesUserAccountDataHFLowerThan2,
-                        (o) => o.address
-                    ),
-                    aaveNetworkInfo.network
-                );
+            //Save data to the DB:
+            //NOTE: it is not necessary to save the totalDebtBase to the DB, since
+            //it will be calculated anyway from the usersReserves data.
+            //I leave it here anyway for now, since it is not a big deal to save it
+            const chunks = _.chunk(results, chunkSize);
+            for (let i = 0; i < chunks.length; i++) {
+                const chunk = chunks[i];
 
-                for (
-                    let i = 0;
-                    i < addressesUserAccountDataHFLowerThan2.length;
-                    i++
-                ) {
-                    const userAddress =
-                        addressesUserAccountDataHFLowerThan2[i].address;
-                    addressesUserAccountDataHFLowerThan2[i].userConfiguration =
-                        repo.aave[key].addressesObjects[
-                            userAddress
-                        ].userConfiguration;
-                }
-
-                await this.updateUsersReservesData(
-                    addressesUserAccountDataHFLowerThan2,
-                    aaveNetworkInfo
-                );
-
-                //Save data to the DB:
-                //NOTE: it is not necessary to save the totalDebtBase to the DB, since
-                //it will be calculated anyway from the usersReserves data.
-                //I leave it here anyway for now, since it is not a big deal to save it
-                const chunks = _.chunk(results, chunkSize);
-                for (let i = 0; i < chunks.length; i++) {
-                    const chunk = chunks[i];
-
-                    let query =
-                        chunk.length > 0
-                            ? `
+                let query =
+                    chunk.length > 0
+                        ? `
         UPDATE addresses 
         SET 
             modifiedOn = GETUTCDATE(),
@@ -1612,48 +1592,48 @@ class Engine {
             END
         WHERE address IN ({4}) AND network = '${key}';
     `
-                            : "";
+                        : "";
 
-                    let arr0 = [];
-                    let arr1 = [];
-                    let arr2 = [];
-                    let arr3 = [];
-                    let arr4 = [];
-                    for (let i = 0; i < chunk.length; i++) {
-                        if (chunk[i].healthFactor < 2) {
-                            arr0.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
-                            );
-                            arr1.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
-                            );
-                            arr2.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
-                            );
-                            arr3.push(
-                                `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
-                            );
-                            arr4.push(`'${chunk[i].address}'`);
-                        } else {
-                            deleteAddresses.push(chunk[i].address);
-                        }
+                let arr0 = [];
+                let arr1 = [];
+                let arr2 = [];
+                let arr3 = [];
+                let arr4 = [];
+                for (let i = 0; i < chunk.length; i++) {
+                    if (chunk[i].healthFactor < 2) {
+                        arr0.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
+                        );
+                        arr1.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
+                        );
+                        arr2.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
+                        );
+                        arr3.push(
+                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
+                        );
+                        arr4.push(`'${chunk[i].address}'`);
+                    } else {
+                        deleteAddresses.push(chunk[i].address);
                     }
-
-                    query = query.replace("{0}", arr0.join(" "));
-                    query = query.replace("{1}", arr1.join(" "));
-                    query = query.replace("{2}", arr2.join(" "));
-                    query = query.replace("{3}", arr3.join(" "));
-                    query = query.replace("{4}", arr4.join(","));
-
-                    if (query) await sqlManager.execQuery(query);
                 }
 
-                //delete addresses from the DB where health factor is > 2
-                deleteAddresses = _.uniq(deleteAddresses);
-                if (deleteAddresses.length > 0) {
-                    const chunks = _.chunk(deleteAddresses, chunkSize);
-                    for (let i = 0; i < chunks.length; i++) {
-                        const sqlQuery = `
+                query = query.replace("{0}", arr0.join(" "));
+                query = query.replace("{1}", arr1.join(" "));
+                query = query.replace("{2}", arr2.join(" "));
+                query = query.replace("{3}", arr3.join(" "));
+                query = query.replace("{4}", arr4.join(","));
+
+                if (query) await sqlManager.execQuery(query);
+            }
+
+            //delete addresses from the DB where health factor is > 2
+            deleteAddresses = _.uniq(deleteAddresses);
+            if (deleteAddresses.length > 0) {
+                const chunks = _.chunk(deleteAddresses, chunkSize);
+                for (let i = 0; i < chunks.length; i++) {
+                    const sqlQuery = `
             DELETE FROM addresses WHERE address IN ('${chunks[i].join(
                 "','"
             )}') AND network = '${key}';
@@ -1661,39 +1641,25 @@ class Engine {
                 "','"
             )}') AND network = '${key}';
             `;
-                        deleteAddressesQueries.push(sqlQuery);
-                    }
-                }
-
-                for (const deleteAddressesQuery of deleteAddressesQueries) {
-                    await sqlManager.execQuery(deleteAddressesQuery);
-                }
-
-                const addressesPresent = _.without(
-                    _addresses,
-                    ...deleteAddresses
-                );
-                if (addressesPresent.length > 0) {
-                    const query1 = `UPDATE addresses SET status = 1 WHERE address IN ('${addressesPresent.join(
-                        "','"
-                    )}') AND network = '${key}';`;
-                    await sqlManager.execQuery(query1);
+                    deleteAddressesQueries.push(sqlQuery);
                 }
             }
-            await this.triggerWebServerAction("updateUsersReserves", key);
 
-            await logger.log(
-                "End updateUserAccountDataAndUsersReserves_chunk",
-                "functionAppExecution"
-            );
-        } catch (error: any) {
-            await logger.log(
-                `Error in updateUserAccountDataAndUsersReserves_chunk: ${JSON.stringify(
-                    error
-                )}`,
-                "functionAppExecution"
-            );
+            for (const deleteAddressesQuery of deleteAddressesQueries) {
+                await sqlManager.execQuery(deleteAddressesQuery);
+            }
+
+            const addressesPresent = _.without(_addresses, ...deleteAddresses);
+            if (addressesPresent.length > 0) {
+                const query1 = `UPDATE addresses SET status = 1 WHERE address IN ('${addressesPresent.join(
+                    "','"
+                )}') AND network = '${key}';`;
+                await sqlManager.execQuery(query1);
+            }
         }
+        await this.triggerWebServerAction("updateUsersReserves", key);
+
+        await logger.log("updateUserAccountDataAndUsersReserves_chunk: End");
     }
 
     //#endregion updateUserAccountDataAndUserReserves
@@ -1701,11 +1667,7 @@ class Engine {
     //#region updateGasPrice
 
     async updateGasPrice(context: InvocationContext | null = null) {
-        logger.initialize(
-            "function:updateGasPrice",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
+        logger.initialize("function:updateGasPrice", context);
         await this.initializeAlchemy();
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
             await this.triggerWebServerAction(
@@ -1713,7 +1675,7 @@ class Engine {
                 aaveNetworkInfo.network
             );
         }
-        await logger.log("End updateGasPrice", "functionAppExecution");
+        await logger.log("updateGasPrice: End");
     }
 
     //#endregion updateCloseFactor
@@ -1735,14 +1697,10 @@ class Engine {
         context: InvocationContext | null = null,
         network: Network | null = null //if network is not defined, loop through all networks
     ) {
-        logger.initialize(
-            "function:updateReservesPrices",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-        await logger.log("Start updateReservesPrices");
+        logger.initialize("function:updateReservesPrices", context);
+        await logger.log("updateReservesPrices: Start");
 
-        await this.initializeAlchemy();
+        await this.initializeAlchemy(network);
         await this.initializeReserves(network);
 
         //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
@@ -1751,7 +1709,9 @@ class Engine {
         );
 
         if (allAddressesDb.length == 0) {
-            await logger.log("No addresses found in DB with health factor < 2");
+            await logger.log(
+                "updateReservesPrices: No addresses found in DB with health factor < 2"
+            );
         } else {
             for (const aaveNetworkInfo of common.getNetworkInfos()) {
                 if (network && network != aaveNetworkInfo.network) continue;
@@ -1764,7 +1724,7 @@ class Engine {
 
                 if (addressesDb.length == 0) {
                     await logger.log(
-                        `Network: ${key} No addresses found in DB with health factor < 2`
+                        `updateReservesPrices: Network: ${key} No addresses found in DB with health factor < 2`
                     );
                     return;
                 }
@@ -1869,7 +1829,7 @@ class Engine {
                 }
             }
         }
-        await logger.log("End updateReservesPrices");
+        await logger.log("updateReservesPrices: End");
     }
 
     //#endregion updateReservesPrices
@@ -1883,17 +1843,11 @@ class Engine {
      * @param context the InvocationContext of the function app (for Application Insights logging)
      */
     async deleteOldTablesEntries(context: InvocationContext | null = null) {
-        logger.initialize(
-            "function:deleteOldTablesEntries",
-            LoggingFramework.ApplicationInsights,
-            context
-        );
-        await logger.log("Started function deleteOldTablesEntries");
+        logger.initialize("function:deleteOldTablesEntries", context);
         const query = `
             DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());            
         `;
         await sqlManager.execQuery(query);
-        await logger.log("Ended function deleteOldTablesEntries");
     }
 
     //#endregion Function: deleteOldTablesEntries

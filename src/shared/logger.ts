@@ -2,26 +2,22 @@ import _ from "lodash";
 import sqlManager from "../managers/sqlManager";
 import { table } from "table";
 import * as applicationInsights from "applicationinsights";
-import { LoggingFramework, LogType, OutputType } from "../shared/enums";
+import { LoggingFramework, LogLevel, OutputType } from "../shared/enums";
 import { InvocationContext } from "@azure/functions";
 import moment from "moment";
+import { TelemetryClient } from "applicationinsights";
 
 class Logger {
     private clientAppName: string = "";
-    private originalLoggingFramework: LoggingFramework =
-        LoggingFramework.ApplicationInsights;
-    private loggingFramework: LoggingFramework =
-        LoggingFramework.ApplicationInsights;
     private outputType: OutputType = OutputType.Console;
     public isInitialized: boolean = false;
-    private applicationInsightsClient: any = null;
+    private applicationInsightsClient: TelemetryClient | null = null;
     private static instance: Logger;
     private context: InvocationContext | null = null;
     private constructor() {}
 
     initialize(
         clientAppName: string,
-        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights,
         context: InvocationContext | null = null
     ) {
         if (this.isInitialized) return;
@@ -31,71 +27,16 @@ class Logger {
 
         applicationInsights
             .setup()
-            .setAutoDependencyCorrelation(true)
-            .setAutoCollectRequests(true)
+            .setAutoDependencyCorrelation(false)
+            .setAutoCollectRequests(false)
             .setAutoCollectPerformance(false, false)
             .setAutoCollectExceptions(true)
-            .setAutoCollectDependencies(true)
+            .setAutoCollectDependencies(false)
             .setAutoCollectConsole(false)
-            .setUseDiskRetryCaching(true)
+            .setUseDiskRetryCaching(false)
             .setSendLiveMetrics(false)
             .start();
         this.applicationInsightsClient = applicationInsights.defaultClient;
-
-        process.on("beforeExit", () => {
-            // Flush any remaining telemetry data before the application exits
-            this.applicationInsightsClient.flush({
-                callback: (response: any) => {
-                    console.log("Telemetry data flushed successfully.");
-                },
-            });
-        });
-
-        this.loggingFramework = loggingFramework;
-        if (loggingFramework === LoggingFramework.Table)
-            this.initializeErrorHandler();
-    }
-
-    errorHandlerInitialized: boolean = false;
-
-    initializeErrorHandler() {
-        if (this.errorHandlerInitialized) return;
-        if (this.loggingFramework === LoggingFramework.Table) {
-            process.on("uncaughtException", async (error: Error) => {
-                await this.logError({
-                    error: error.message,
-                    stack: error.stack,
-                });
-            });
-
-            // Unhandled Promise Rejection Handler
-            process.on(
-                "unhandledRejection",
-                async (reason: any, promise: Promise<any>) => {
-                    await this.logError({
-                        reason:
-                            reason instanceof Error
-                                ? reason.message
-                                : String(reason),
-                        stack:
-                            reason instanceof Error
-                                ? reason.stack
-                                : "No stack trace available",
-                    });
-                }
-            );
-
-            this.errorHandlerInitialized = true;
-        }
-    }
-
-    useTableLogging() {
-        this.loggingFramework = LoggingFramework.Table;
-        this.initializeErrorHandler();
-    }
-
-    useApplicationInsightsLogging() {
-        this.loggingFramework = LoggingFramework.ApplicationInsights;
     }
 
     setOutputTypeConsole() {
@@ -106,33 +47,23 @@ class Logger {
         this.outputType = OutputType.HTML;
     }
 
-    async getLogLevels() {
-        const query = `SELECT DISTINCT loglevel FROM dbo.logs`;
-        const data = await sqlManager.execQuery(query);
-        this.viewDataAsTable(data);
-    }
-
     async viewErrors(env: string = process.env.LIQUIDATIONENVIRONMENT!) {
-        await this.viewLogs("error", env);
-    }
-
-    async viewLogById(id: number) {
-        const query = `SELECT * FROM dbo.logs WHERE id = @id`;
-        const data = await sqlManager.execQuery(query, { id: id });
-        console.log(data);
+        await this.viewLogs(LogLevel.Error, env);
     }
 
     async viewLogs(
-        logLevel: string = "",
+        logLevel: LogLevel = LogLevel.Info,
         env: string = process.env.LIQUIDATIONENVIRONMENT!
     ) {
-        const logLevelClause = logLevel ? `AND logLevel = '${logLevel}'` : "";
+        const logLevelClause = logLevel
+            ? `AND logLevel = '${logLevel.toString()}'`
+            : "";
         const query = `SELECT TOP 100 * FROM dbo.logs WHERE env = @env ${logLevelClause} ORDER BY timestamp DESC`;
         let parameters: any = {
             env: env,
         };
         if (logLevel) {
-            parameters["logLevel"] = logLevel;
+            parameters["logLevel"] = logLevel.toString();
         }
         const data = await sqlManager.execQuery(query, parameters);
         _.each(data, (log) => {
@@ -183,94 +114,119 @@ class Logger {
         return table;
     }
 
-    async logError(log: any) {
-        await this.log(log, "error");
+    async trace(
+        log: any,
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
+    ) {
+        await this.log(log, loggingFramework, LogLevel.Trace);
     }
 
-    async logEvent(log: any, logLevel: string = "info") {
-        await this.log(log, logLevel, LogType.Event);
+    async debug(
+        log: any,
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
+    ) {
+        await this.log(log, loggingFramework, LogLevel.Debug);
+    }
+
+    async info(
+        log: any,
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
+    ) {
+        await this.log(log, loggingFramework, LogLevel.Info);
+    }
+
+    async warning(
+        log: any,
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
+    ) {
+        await this.log(log, loggingFramework, LogLevel.Warning);
     }
 
     async error(
         log: any,
-        logLevel: string = "error",
-        logType: LogType = LogType.Trace,
-        forceLoggingFramework: LoggingFramework | null = null
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights
     ) {
-        return await this.log(log, logLevel, logType, forceLoggingFramework);
+        return await this.log(log, loggingFramework, LogLevel.Error);
     }
 
     async log(
-        log: any,
-        logLevel: string = "info",
-        logType: LogType = LogType.Trace,
-        forceLoggingFramework: LoggingFramework | null = null
+        log: any | Error,
+        loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights,
+        logLevel: LogLevel = LogLevel.Info
     ) {
-        const date = moment.utc().toDate(); //test change
-
-        // Prepare AI parameters
-        const aiParameters = {
-            log: typeof log === "string" ? log : JSON.stringify(log),
-            env: process.env.LIQUIDATIONENVIRONMENT,
-            clientAppName: this.clientAppName,
-        };
-
-        // Prepare DB parameters
-        const dbParameters = {
-            logLevel: logLevel,
-            timestamp: date.toISOString(),
-            log: typeof log === "string" ? log : log, // Keep raw log if it's an object
-            env: aiParameters.env,
-            clientAppName: aiParameters.clientAppName,
-        };
-
-        // Avoid multi-line logs in console
-        console.log("Logger", JSON.stringify(dbParameters));
-
-        if (forceLoggingFramework != null) {
-            this.originalLoggingFramework = this.loggingFramework;
-            this.loggingFramework = forceLoggingFramework;
-        }
+        console.log("### Log entry ###", log);
 
         // Application Insights logging
-        if (this.loggingFramework === LoggingFramework.ApplicationInsights) {
+        if (loggingFramework === LoggingFramework.ApplicationInsights) {
             if (!this.applicationInsightsClient) {
                 throw new Error("Application Insights client not initialized");
             }
 
             if (this.context) {
-                // Use context logging for Azure Functions
-                this.context.log({
-                    log,
-                    logLevel,
-                    env: aiParameters.env,
-                });
+                const aiParameters = {
+                    log: typeof log === "string" ? log : JSON.stringify(log),
+                    env: process.env.LIQUIDATIONENVIRONMENT,
+                    clientAppName: this.clientAppName,
+                };
+
+                switch (logLevel) {
+                    case LogLevel.Trace:
+                        this.context.trace(aiParameters);
+                        break;
+                    case LogLevel.Debug:
+                        this.context.debug(aiParameters);
+                        break;
+                    case LogLevel.Info:
+                        this.context.info(aiParameters);
+                        break;
+                    case LogLevel.Warning:
+                        this.context.warn(aiParameters);
+                        break;
+                    case LogLevel.Error:
+                        this.context.error(aiParameters);
+                        break;
+                }
             } else {
-                // Use trackTrace or trackEvent for Application Insights
-                if (logType === LogType.Event) {
-                    this.applicationInsightsClient.trackEvent({
-                        name: logLevel,
-                        properties: aiParameters,
-                    });
-                } else {
-                    this.applicationInsightsClient.trackTrace({
-                        message:
-                            typeof log === "string" ? log : JSON.stringify(log),
-                        properties: aiParameters,
-                    });
+                const _log =
+                    typeof log === "string" ? log : JSON.stringify(log);
+                const aiParameters = {
+                    env: process.env.LIQUIDATIONENVIRONMENT,
+                    clientAppName: this.clientAppName,
+                };
+
+                switch (logLevel) {
+                    case LogLevel.Trace:
+                    case LogLevel.Debug:
+                    case LogLevel.Info:
+                    case LogLevel.Warning:
+                        this.applicationInsightsClient.trackTrace({
+                            message: _log,
+                            properties: aiParameters,
+                        });
+                        break;
+                    case LogLevel.Error:
+                        this.applicationInsightsClient.trackException({
+                            exception: new Error(_log),
+                            properties: aiParameters,
+                        });
+                        break;
                 }
             }
         } else {
+            const dbParameters = {
+                logLevel: logLevel.toString(),
+                timestamp: moment.utc().format("YYYY-MM-DD HH:mm:ss"),
+                log: typeof log === "string" ? log : JSON.stringify(log), // Keep raw log if it's an object
+                env: process.env.LIQUIDATIONENVIRONMENT,
+                clientAppName: this.clientAppName,
+            };
+
             // Database logging
             const query = `
-            INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientAppName)
-            VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)
-        `;
+                INSERT INTO dbo.logs (timestamp, log, logLevel, env, clientAppName)
+                VALUES (@timestamp, @log, @logLevel, @env, @clientAppName)
+            `;
             await sqlManager.execQuery(query, dbParameters);
-        }
-
-        if (forceLoggingFramework) {
-            this.loggingFramework = this.originalLoggingFramework;
         }
     }
 
