@@ -439,7 +439,7 @@ class Engine {
 
                 allUserReserveObjects.push(...userReservesObjects);
 
-                //update usersReserves in memory
+                //update usersReserves that are in memory
                 if (!repo.aave[key].hasOwnProperty("usersReserves"))
                     repo.aave[key].usersReserves = {};
                 for (let i = 0; i < allUserReserveObjects.length; i++) {
