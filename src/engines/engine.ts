@@ -1480,7 +1480,7 @@ class Engine {
         const timestamp = timestampResult[0].value;
 
         const dbAddressesArr = await sqlManager.execQuery(
-            `SELECT TOP ${chunkSize} * FROM addresses WHERE network = '${key}' AND (STATUS IS NULL OR STATUS < 1) AND addedOn < ${timestamp}
+            `SELECT TOP ${chunkSize} * FROM addresses WHERE network = '${key}' AND (STATUS IS NULL OR STATUS < 1) AND addedOn < '${timestamp}'
              ORDER BY addedOn`
         );
 
@@ -1875,9 +1875,13 @@ class Engine {
         return;
         */
         //const a = formatUnits(719413754570120506n, 18);
-        /*
-        await this.updateUserAccountDataAndUsersReserves_initialization();
 
+        await this.updateUserAccountDataAndUsersReserves_chunk(
+            null,
+            Network.ARB_MAINNET
+        );
+        return;
+        /*
         const aaveNetworkInfo1 = await common.getAaveNetworkInfo(
             Network.ARB_MAINNET
         );
@@ -1887,7 +1891,7 @@ class Engine {
             aaveNetworkInfo1.network
         );
         return;
-*/
+
         await this.initializeAlchemy();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(
             Network.ARB_SEPOLIA
@@ -1913,6 +1917,7 @@ class Engine {
         );
         const res = parseInt(result[0]);
         console.log(res);
+        */
     }
 
     //#endregion Testing methods

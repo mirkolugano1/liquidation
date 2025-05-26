@@ -43,16 +43,7 @@ app.get("/healthcheck", async (req, res) => {
 });
 
 app.get("/refresh", async (req, res) => {
-    // Start the process but don't wait for it
-    engine.refresh(req, res).catch(async (error) => {
-        await logger.error(
-            `Error in background refresh operation: ${error.message}`,
-            error
-        );
-    });
-
-    // Return immediately
-    res.status(200).send("Refresh process started");
+    await engine.refresh(req, res);
 });
 
 app.post("/aaveEvent", async (req: any, res: any) => {
