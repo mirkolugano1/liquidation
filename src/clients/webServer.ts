@@ -5,6 +5,8 @@ import engine from "../engines/engine";
 import webhookManager from "../managers/webhookManager";
 import repo from "../shared/repo";
 import moment from "moment";
+import common from "../shared/common";
+import encryptionManager from "../managers/encryptionManager";
 
 dotenv.config();
 logger.initialize("webServer");
@@ -48,6 +50,65 @@ app.get("/refresh", async (req, res) => {
 
 app.post("/aaveEvent", async (req: any, res: any) => {
     await webhookManager.processAaveEvent(req, res);
+});
+
+app.get("/sandbox", (req: any, res: any) => {
+    res.send(`
+        <html>
+            <body>
+                <form method="post" action="/eval">
+                    <label>JS Code:</label><br/>
+                    <textarea name="code" rows="6" cols="60"></textarea><br/>
+                    <label>Pwd:</label><br/>
+                    <input type="text" name="pwd" /><br/>
+                    <button type="submit">Run</button>
+                </form>
+            </body>
+        </html>
+    `);
+});
+
+app.post("/eval", async (req: any, res: any) => {
+    const code = req.body?.code;
+    const pwd = req.body?.pwd;
+
+    const sandboxPasswordEncrypted = await common.getAppSetting(
+        "SANDBOXPASSWORDENCRYPTED"
+    );
+    const sandboxPassword = await encryptionManager.decrypt(
+        sandboxPasswordEncrypted
+    );
+    if (common.isProd && pwd !== sandboxPassword) {
+        res.status(403).send("Forbidden: Invalid password.");
+        return;
+    }
+
+    if (!code) {
+        res.status(400).send("No code provided.");
+        return;
+    }
+    try {
+        // Use a Function instead of eval for better context control
+        // eslint-disable-next-line no-new-func
+        const fn = new Function(
+            "engine",
+            "logger",
+            "repo",
+            "webhookManager",
+            "moment",
+            `"use strict"; return (async () => { ${code} })()`
+        );
+        const result = await fn(engine, logger, repo, webhookManager, moment);
+        res.send(
+            `<pre>${common.escapeHtml(JSON.stringify(result, null, 2))}</pre>`
+        );
+    } catch (e: any) {
+        res.status(500).send(
+            `<pre style="color:red">${common.escapeHtml(
+                e.stack || e.message || e.toString()
+            )}</pre>`
+        );
+    }
 });
 
 // Start server

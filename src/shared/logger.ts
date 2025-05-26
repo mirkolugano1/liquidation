@@ -8,6 +8,7 @@ import moment from "moment";
 import { TelemetryClient } from "applicationinsights";
 
 class Logger {
+    private internalLog: string = "";
     private clientAppName: string = "";
     private outputType: OutputType = OutputType.Console;
     public isInitialized: boolean = false;
@@ -112,6 +113,19 @@ class Logger {
 
         table += "</tbody></table>";
         return table;
+    }
+
+    appendToInternalLog(log: string) {
+        this.internalLog += log + "\n";
+    }
+
+    async flushInternalLog(
+        loggingFramework: LoggingFramework = LoggingFramework.Table
+    ) {
+        if (this.internalLog) {
+            await this.log(this.internalLog, loggingFramework);
+            this.internalLog = "";
+        }
     }
 
     async trace(

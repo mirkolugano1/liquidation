@@ -85,6 +85,24 @@ class Common {
 
     //#endregion normalizeAddress
 
+    //#region escapeHtml
+
+    escapeHtml(str: string) {
+        return str.replace(
+            /[&<>'"]/g,
+            (c) =>
+                ({
+                    "&": "&amp;",
+                    "<": "&lt;",
+                    ">": "&gt;",
+                    "'": "&#39;",
+                    '"': "&quot;",
+                }[c] || c)
+        );
+    }
+
+    //#endregion escapeHtml
+
     //#region getHealthFactorFromUserAccountData
 
     getHealthFactorFromUserAccountData(userAccountData: any) {
