@@ -4,8 +4,10 @@ import { Network } from "alchemy-sdk";
 import _ from "lodash";
 import { LoggingFramework } from "../shared/enums";
 import repo from "../shared/repo";
-import multicallManager from "./multicallManager";
+import transactionManager from "./transactionManager";
 import common from "../shared/common";
+import Constants from "../shared/constants";
+import emailManager from "./emailManager";
 
 class LiquidationManager {
     private static instance: LiquidationManager;
@@ -56,9 +58,13 @@ class LiquidationManager {
 
     async checkLiquidateAddressesFromInMemoryObjects(
         aaveNetworkInfo: any,
-        userAddressesObjects: any[],
+        userAddressesObjects: any[] | null = null,
         usersReserves: any[] | null = null
     ) {
+        if (!userAddressesObjects) {
+            userAddressesObjects = _.values(aaveNetworkInfo.addressesObjects);
+        }
+
         let userAddressesObjectsAddresses = _.map(
             userAddressesObjects,
             (o) => o.address
@@ -113,10 +119,10 @@ class LiquidationManager {
             /////
             //only for testing purposes, to compare calculated data with on-chain data
             if (!common.isProd) {
-                const userAccountDatas = await multicallManager.multicall(
+                const userAccountDatas = await transactionManager.multicall(
                     aaveNetworkInfo.aaveAddresses.pool,
                     userAddressesObjectsAddresses,
-                    "POOL_ABI",
+                    Constants.ABIS.POOL_ABI,
                     "getUserAccountData",
                     aaveNetworkInfo.network
                 );
@@ -234,10 +240,10 @@ class LiquidationManager {
                         profitableLiquidations,
                         (o) => o.address
                     );
-                    const uads = await multicallManager.multicall(
+                    const uads = await transactionManager.multicall(
                         aaveNetworkInfo.aaveAddresses.pool,
                         profitableLiquidationsAddresses,
-                        "POOL_ABI",
+                        Constants.ABIS.POOL_ABI,
                         "getUserAccountData",
                         aaveNetworkInfo.network
                     );
@@ -259,46 +265,47 @@ class LiquidationManager {
                 }
 
                 if (profitableLiquidations.length > 0) {
-                    const liquidationsEnabled = false;
-                    if (liquidationsEnabled) {
-                        const liquidationsParameters = _.map(
+                    if (repo.liquidationsEnabled) {
+                        const liquidationsPromises = _.map(
                             profitableLiquidations,
                             (o) => {
-                                return [
-                                    o.collateralAsset,
-                                    o.debtAsset,
-                                    o.address,
-                                    o.debtToCover,
-                                    true, //receive aTokens
-                                ];
+                                return transactionManager.sendSingleTransaction(
+                                    aaveNetworkInfo,
+                                    "requestFlashLoan",
+                                    [
+                                        o.collateralAsset,
+                                        o.debtAsset,
+                                        o.address,
+                                        o.debtToCover,
+                                        true, //receive aTokens
+                                    ]
+                                );
                             }
                         );
 
-                        //TODO MIRKO Call requestFlashLoan method of the liquidation contract
-
-                        /*
-                        await multicallManager.multicall(
-                            aaveNetworkInfo.liquidationContractAddress,
-                            liquidationsParameters,
-                            "LIQUIDATION_ABI",
-                            "requestFlashLoan",
-                            aaveNetworkInfo.network
-                        );
-                        */
-                    } else {
-                        /*
-                            await emailManager.sendLogEmail(
-                                "Liquidation triggered",
-                                "Data: " + JSON.stringify(profitableLiquidations)
+                        if (liquidationsPromises.length > 0) {
+                            const liquidationsResults = await Promise.all(
+                                liquidationsPromises
                             );
-                            */
-                        await logger.log(
-                            "checkLiquidateAddressesFromInMemoryObjects: " +
-                                JSON.stringify(profitableLiquidations),
-                            LoggingFramework.Table
+                            await logger.log(
+                                "Liquidations results: " +
+                                    JSON.stringify(liquidationsResults),
+                                LoggingFramework.Table
+                            );
+                        }
+                    } else {
+                        await emailManager.sendLogEmail(
+                            "Liquidation triggered",
+                            "Data: " + JSON.stringify(profitableLiquidations)
                         );
                     }
                 }
+
+                await logger.log(
+                    "checkLiquidateAddressesFromInMemoryObjects: " +
+                        JSON.stringify(profitableLiquidations),
+                    LoggingFramework.Table
+                );
             }
         }
     }
@@ -317,10 +324,10 @@ class LiquidationManager {
         const userAccountData = aaveNetworkInfo.addressesObjects[address];
         if (!userAccountData) return;
 
-        const userAccountDataFromChain = await multicallManager.multicall(
+        const userAccountDataFromChain = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.pool,
             address,
-            "POOL_ABI",
+            Constants.ABIS.POOL_ABI,
             "getUserAccountData",
             aaveNetworkInfo.network
         );

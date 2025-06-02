@@ -21,5 +21,6 @@ class Repo {
     public ifaceLiquidationCall: any;
     public ifaceRepay: any;
     public ifaceFlashLoan: any;
+    public liquidationsEnabled: boolean = false;
 }
 export default Repo.getInstance();

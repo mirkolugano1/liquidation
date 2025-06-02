@@ -3,17 +3,21 @@ import { Network } from "alchemy-sdk";
 import common from "../shared/common";
 import _, { chunk } from "lodash";
 import encryptionManager from "./encryptionManager";
+import { ethers } from "ethers";
+import logger from "../shared/logger";
+import Big from "big.js";
 
-class MulticallManager {
-    private static instance: MulticallManager;
+class TransactionManager {
+    private static instance: TransactionManager;
     private lastNonce: number | null = null;
     private nonceLock = false;
+    private liquidationContract: any;
 
-    public static getInstance(): MulticallManager {
-        if (!MulticallManager.instance) {
-            MulticallManager.instance = new MulticallManager();
+    public static getInstance(): TransactionManager {
+        if (!TransactionManager.instance) {
+            TransactionManager.instance = new TransactionManager();
         }
-        return MulticallManager.instance;
+        return TransactionManager.instance;
     }
 
     private constructor() {}
@@ -28,25 +32,26 @@ class MulticallManager {
      * @param contractABI the smartContract ABI of the function to be called
      * @param methodName the method name to be called
      * @param network the blockchain network from the AlchemySDK e.g. Network.ETH_MAINNET
+     * @param usePrivateTransaction whether to use a private transaction, which is, every transaction which changes chain state (default: false)
+     * @param estimateGas whether to estimate gas for the multicall (default: false)
      * @returns
      */
     async multicall(
         targetAddresses: string | string[],
         params: any | any[] | null,
-        contractABIsKeys: string | string[],
+        contractABI: any,
         methodNames: string | string[],
         network: Network,
         usePrivateTransaction: boolean = false,
         estimateGas: boolean = false
     ) {
-        [targetAddresses, params, contractABIsKeys, methodNames] =
-            this.checkMulticallInputs(
-                targetAddresses,
-                params,
-                contractABIsKeys,
-                methodNames,
-                network
-            );
+        [targetAddresses, params, methodNames] = this.checkMulticallInputs(
+            targetAddresses,
+            params,
+            contractABI,
+            methodNames,
+            network
+        );
 
         const multicallContract = common.getContract(
             Constants.MULTICALL3_ADDRESS,
@@ -57,9 +62,8 @@ class MulticallManager {
         const calls = _.map(
             targetAddresses,
             (targetAddress: string, index: number) => {
-                const contractInterface = common.getContractInterface(
-                    Constants.ABIS[contractABIsKeys[index]]
-                );
+                const contractInterface =
+                    common.getContractInterface(contractABI);
 
                 let currentParams = params ? params[index] : null;
                 let calldata;
@@ -108,14 +112,16 @@ class MulticallManager {
                 to: Constants.MULTICALL3_ADDRESS,
                 value: 0n, // If no ETH is being sent (BigInt for ethers v6)
                 gasLimit: 2000000n, // Estimate gas limit (BigInt for ethers v6)
-                gasPrice: 5n * 10n ** 9n, // (Optional if using EIP-1559)
+                //gasPrice: 5n * 10n ** 9n, // (Optional if using EIP-1559)
                 maxFeePerGas: 30n * 10n ** 9n, // Maximum fee per gas (EIP-1559)
                 maxPriorityFeePerGas: 2n * 10n ** 9n, // Maximum tip (EIP-1559)
                 chainId: chainId,
             };
 
+            const transactionSimulationErrors: Map<string, any> = new Map();
+
             // Execute each chunk
-            const chunkPromises = callBatches.map(async (callBatch) => {
+            const chunkPromises = callBatches.map(async (callBatch, index) => {
                 if (usePrivateTransaction) {
                     const calldata =
                         multicallContract.interface.encodeFunctionData(
@@ -137,16 +143,30 @@ class MulticallManager {
                         tx
                     );
 
+                    //Simulate the transaction
+                    const simulatedTx = {
+                        ...tx,
+                        from: Constants.METAMASK_ADDRESS,
+                    };
+                    const simulationResult = await this.simulateTransaction(
+                        aaveNetworkInfo.alchemyProvider.connection.url,
+                        simulatedTx
+                    );
+                    if (!simulationResult.success) {
+                        transactionSimulationErrors.set(
+                            index.toString(),
+                            simulationResult.error
+                        );
+                        return null;
+                    }
+
                     switch (network) {
                         case Network.ETH_MAINNET:
                         case Network.ETH_SEPOLIA:
                         case Network.ETH_GOERLI:
                             // For Ethereum mainnet and Sepolia, use Alchemy's private transaction
-                            return aaveNetworkInfo.alchemyProvider.send(
-                                "eth_sendPrivateTransaction",
-                                [
-                                    { tx: signedTx, maxBlockNumber: null }, // Optional: Specify maxBlockNumber
-                                ]
+                            return aaveNetworkInfo.alchemy.transact.sendPrivateTransaction(
+                                signedTx
                             );
                         default:
                             // For other networks, use Flashbots (alchemy does not support private transactions other than mainnet, sepolia and goerli)
@@ -157,8 +177,23 @@ class MulticallManager {
                 } else return multicallContract.aggregate(callBatch);
             });
 
-            const chunkResults = await Promise.all(chunkPromises);
-            if (usePrivateTransaction) return chunkResults;
+            //exclude transactions that failed simulation from execution
+            const chunkPromisesToExecute = chunkPromises.map(
+                (promise: any, index) => promise
+            );
+
+            const chunkResults = await Promise.all(chunkPromisesToExecute);
+            if (usePrivateTransaction) {
+                if (transactionSimulationErrors.size > 0) {
+                    await logger.warning(
+                        `Transaction simulation errors: ${JSON.stringify(
+                            Object.fromEntries(transactionSimulationErrors)
+                        )} `
+                    );
+                }
+
+                return chunkPromisesToExecute.length === 0 ? [] : chunkResults;
+            }
 
             // Process results from each chunk
             const allDecodedResults = [];
@@ -174,9 +209,8 @@ class MulticallManager {
                 // Decode each result in this chunk
                 for (let i = 0; i < chunkReturnData.length; i++) {
                     const originalIndex = originalIndices[i];
-                    const contractInterface = common.getContractInterface(
-                        Constants.ABIS[contractABIsKeys[originalIndex]]
-                    );
+                    const contractInterface =
+                        common.getContractInterface(contractABI);
 
                     const decodedResult =
                         contractInterface.decodeFunctionResult(
@@ -194,6 +228,126 @@ class MulticallManager {
     }
 
     //#endregion multicall
+
+    //#region simulateTransaction
+
+    async simulateTransaction(rpcUrl: string, transaction: any) {
+        try {
+            // Create a provider using the RPC URL
+            const provider = new ethers.JsonRpcProvider(rpcUrl);
+
+            // Prepare the transaction object
+            const txObject = {
+                from: transaction.from || Constants.METAMASK_ADDRESS,
+                to: transaction.to,
+                data: transaction.data,
+                value: transaction.value || "0x0",
+                // Note: We're intentionally omitting gas parameters
+                // to let the node estimate them
+            };
+
+            // Use eth_call to simulate the transaction
+            const result = await provider.call(txObject);
+
+            return {
+                success: true,
+                result: result,
+            };
+        } catch (error: any) {
+            return {
+                success: false,
+                error: error.message || String(error),
+            };
+        }
+    }
+
+    //#endregion simulateTransaction
+
+    //#region sendSingleTransaction
+
+    async sendSingleTransaction(
+        aaveNetworkInfo: any,
+        methodName: string,
+        methodParams: any
+    ) {
+        if (!Array.isArray(methodParams)) methodParams = [methodParams];
+
+        if (!this.liquidationContract) {
+            this.liquidationContract = common.getContract(
+                aaveNetworkInfo.liquidationContractAddress,
+                Constants.ABIS.LIQUIDATION_ABI,
+                aaveNetworkInfo.network
+            );
+        }
+
+        const nonce = await this.getAndLockNonce(
+            aaveNetworkInfo.alchemyProvider,
+            Constants.METAMASK_ADDRESS
+        );
+
+        const gasEstimate = await this.liquidationContract[
+            methodName
+        ].estimateGas(...methodParams);
+
+        // Build the transaction
+        const tx = await this.liquidationContract[
+            methodName
+        ].populateTransaction(...methodParams);
+
+        tx.gasLimit =
+            typeof gasEstimate === "bigint"
+                ? gasEstimate
+                : BigInt(gasEstimate.toString());
+        tx.nonce = nonce;
+        tx.chainId = aaveNetworkInfo.chainId;
+
+        const feeData = await aaveNetworkInfo.alchemyProvider.getFeeData();
+        tx.maxFeePerGas =
+            typeof feeData.maxFeePerGas === "bigint"
+                ? feeData.maxFeePerGas
+                : BigInt(feeData.maxFeePerGas.toString());
+
+        tx.maxPriorityFeePerGas =
+            typeof feeData.maxPriorityFeePerGas === "bigint"
+                ? feeData.maxPriorityFeePerGas
+                : BigInt(feeData.maxPriorityFeePerGas.toString());
+
+        // Sign the transaction
+        const signedTx = await encryptionManager.signTransaction(tx);
+
+        //Simulate the transaction
+        const simulatedTx = {
+            ...tx,
+            from: Constants.METAMASK_ADDRESS,
+        };
+        const simulationResult = await this.simulateTransaction(
+            aaveNetworkInfo.alchemyProvider.connection.url,
+            simulatedTx
+        );
+        if (!simulationResult.success) {
+            await logger.warning(
+                `Transaction simulation failed: ${simulationResult.error}`
+            );
+            return simulationResult;
+        }
+
+        switch (aaveNetworkInfo.network) {
+            case Network.ETH_MAINNET:
+            case Network.ETH_SEPOLIA:
+            case Network.ETH_GOERLI:
+                // For Ethereum mainnet and Sepolia, use Alchemy's private transaction
+                return aaveNetworkInfo.alchemy.transact.sendPrivateTransaction(
+                    signedTx
+                );
+            default:
+                // For other networks, use Flashbots (alchemy does not support private transactions other than mainnet, sepolia and goerli)
+                return aaveNetworkInfo.flashbotsProvider.broadcastTransaction(
+                    signedTx
+                );
+        }
+    }
+
+    //#endregion sendSingleTransaction
 
     //#region getAndLockNonce
 
@@ -231,7 +385,7 @@ class MulticallManager {
     //#region multicallEstimateGas
 
     async multicallEstimateGas(
-        targetAddresses: string | string[],
+        targetAddresses: string,
         paramAddresses: string | string[] | null,
         contractABIsKeys: string | string[],
         methodNames: string | string[],
@@ -255,10 +409,10 @@ class MulticallManager {
     checkMulticallInputs(
         targetAddresses: string | string[],
         params: string | string[] | null,
-        contractABIsKeys: string | string[],
+        contractABI: any,
         methodNames: string | string[],
         network: Network
-    ): [string[], string[], string[], string[]] {
+    ): [string[], string[], string[]] {
         if (!network) throw new Error("No network provided");
         if (!params) params = [];
 
@@ -314,30 +468,11 @@ class MulticallManager {
             throw new Error("targetAddresses and methodNames length mismatch");
         }
 
-        if (!contractABIsKeys || contractABIsKeys.length == 0)
-            throw new Error("No contractABIs provided");
+        if (!contractABI) throw new Error("No contractABI provided");
 
-        if (!Array.isArray(contractABIsKeys))
-            contractABIsKeys = [contractABIsKeys];
-
-        if (
-            contractABIsKeys.length == 1 &&
-            targetAddresses &&
-            Array.isArray(targetAddresses) &&
-            targetAddresses.length > 1
-        ) {
-            contractABIsKeys = Array(targetAddresses.length).fill(
-                contractABIsKeys[0]
-            );
-        }
-
-        if (targetAddresses.length != contractABIsKeys.length) {
-            throw new Error("targetAddresses and contractABIs length mismatch");
-        }
-
-        return [targetAddresses, params, contractABIsKeys, methodNames];
+        return [targetAddresses, params, methodNames];
     }
 
     //#endregion checkMulticallInputs
 }
-export default MulticallManager.getInstance();
+export default TransactionManager.getInstance();

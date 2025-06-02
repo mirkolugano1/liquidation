@@ -4,9 +4,11 @@ import common from "../shared/common";
 import repo from "../shared/repo";
 import sqlManager from "./sqlManager";
 import liquidationManager from "./liquidationManager";
-import multicallManager from "./multicallManager";
+import transactionManager from "./transactionManager";
 import logger from "../shared/logger";
-import { LoggingFramework } from "../shared/enums";
+import Constants from "../shared/constants";
+import emailManager from "./emailManager";
+import Big from "big.js";
 
 class WebhookManager {
     private static instance: WebhookManager;
@@ -37,10 +39,58 @@ class WebhookManager {
             let addressesToAdd: string[] = [];
             let from = log.transaction?.from?.address;
 
-            logger.appendToInternalLog(
-                "ProcessBlock - eventHash: " + eventHash
-            );
+            logger.appendToInternalLog("EventHash: " + eventHash);
             switch (eventHash) {
+                case "0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f": //AnswerUpdated
+                    const priceOracleAggregatorAddress = log.account.address;
+                    const aaveNetworkInfo = repo.aave[key];
+
+                    //check if the price oracle aggregator address is already in the reserves, otherwise
+                    //email me to change the webhook
+                    const aggregators = _.map(aaveNetworkInfo.reserves, (r) =>
+                        r.priceOracleAggregatorAddress?.toLowerCase()
+                    );
+                    if (
+                        !_.includes(
+                            aggregators,
+                            priceOracleAggregatorAddress.toLowerCase()
+                        )
+                    ) {
+                        logger.appendToInternalLog(
+                            `Price Oracle Aggregator address ${priceOracleAggregatorAddress} not found in reserves.`
+                        );
+                        await emailManager.sendLogEmail(
+                            "Price Oracle Aggregator address not found",
+                            `The Price Oracle Aggregator address ${priceOracleAggregatorAddress} was not found in the reserves of the Aave network ${key}. Please update the webhook.`
+                        );
+                    } else {
+                        const data = log.data;
+                        const price = Number(BigInt(data)) / 1e8;
+
+                        for (const reserve of _.values(
+                            aaveNetworkInfo.reserves
+                        )) {
+                            if (
+                                reserve.priceOracleAggregatorAddress?.toLowerCase() ===
+                                priceOracleAggregatorAddress.toLowerCase()
+                            ) {
+                                repo.aave[key].reserves[reserve.address].price =
+                                    price;
+                            }
+                        }
+                        await liquidationManager.checkLiquidateAddressesFromInMemoryObjects(
+                            repo.aave[key]
+                        );
+
+                        //update price in the database
+                        const priceUpdateQuery = `
+                            UPDATE reserves SET price = ${price}
+                            WHERE priceOracleAggregatorAddress = '${priceOracleAggregatorAddress}' AND network = '${key}';
+                        `;
+                        await sqlManager.execQuery(priceUpdateQuery);
+                    }
+                    return; //we return here because the event is not relevant for addresses
+
                 case "0x9c369e2bdbd7c7a5b5c8c0b9e6f5f4b1a8dc9b3f2e5c123c3a9e3b4d3e0c4a9f": //SwapBorrowRateMode
                     addressesToAdd.push(log.topics[2]);
                     break;
@@ -763,10 +813,10 @@ class WebhookManager {
         await sqlManager.execQuery(query);
 
         //check if the user reserves data in the DB is consistent with the one in the contract
-        const userReserveData = await multicallManager.multicall(
+        const userReserveData = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             [[reserveAddress, userAddress]],
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getUserReserveData",
             aaveNetworkInfo.network
         );

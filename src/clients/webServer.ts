@@ -15,6 +15,7 @@ logger.setOutputTypeHTML();
 const port = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.get("/", async (req: any, res: any) => {
     res.send("Web server is up.");
@@ -58,7 +59,7 @@ app.get("/sandbox", (req: any, res: any) => {
             <body>
                 <form method="post" action="/eval">
                     <label>JS Code:</label><br/>
-                    <textarea name="code" rows="6" cols="60"></textarea><br/>
+                    <textarea name="code" rows="15" cols="100"></textarea><br/>
                     <label>Pwd:</label><br/>
                     <input type="text" name="pwd" /><br/>
                     <button type="submit">Run</button>
@@ -72,15 +73,17 @@ app.post("/eval", async (req: any, res: any) => {
     const code = req.body?.code;
     const pwd = req.body?.pwd;
 
-    const sandboxPasswordEncrypted = await common.getAppSetting(
-        "SANDBOXPASSWORDENCRYPTED"
-    );
-    const sandboxPassword = await encryptionManager.decrypt(
-        sandboxPasswordEncrypted
-    );
-    if (common.isProd && pwd !== sandboxPassword) {
-        res.status(403).send("Forbidden: Invalid password.");
-        return;
+    if (common.isProd) {
+        const sandboxPasswordEncrypted = await common.getAppSetting(
+            "SANDBOXPASSWORDENCRYPTED"
+        );
+        const sandboxPassword = await encryptionManager.decrypt(
+            sandboxPasswordEncrypted
+        );
+        if (pwd !== sandboxPassword) {
+            res.status(403).send("Forbidden: Invalid password.");
+            return;
+        }
     }
 
     if (!code) {
@@ -99,9 +102,10 @@ app.post("/eval", async (req: any, res: any) => {
             `"use strict"; return (async () => { ${code} })()`
         );
         const result = await fn(engine, logger, repo, webhookManager, moment);
-        res.send(
-            `<pre>${common.escapeHtml(JSON.stringify(result, null, 2))}</pre>`
-        );
+        if (result) {
+            const val = JSON.stringify(result, null, 2);
+            res.send(`<pre>${common.escapeHtml(val)}</pre>`);
+        }
     } catch (e: any) {
         res.status(500).send(
             `<pre style="color:red">${common.escapeHtml(

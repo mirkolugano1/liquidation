@@ -37,13 +37,13 @@ class Constants {
             },
             averageLiquidationGasUnits: 170000,
             liquidationContractAddress:
-                "0x775F2CD4c2b942076988068D8B7762b430345Ed1",
+                "0x775F2CD4c2b942076988068D8B7762b430345Ed1", //presently this is just a simple storage contract
             flashbotsProviderUrl: "https://arbitrum-sepolia.public.blastapi.io",
             chainId: 421614,
             isActive: false,
         },
     ];
-    CHUNK_SIZE = 500;
+    CHUNK_SIZE = 300;
     METAMASK_ADDRESS = "0x2FD3A8F9E52b113E51016755B61AC9d3d9EA6567"; //liquidation metamask address
     MULTICALL3_ADDRESS = "0xcA11bde05977b3631167028862bE2a173976CA11"; //same across all EVM chains
     ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -95,6 +95,7 @@ class Constants {
 
         AAVE_ORACLE_ABI: [
             "function getAssetsPrices(address[] calldata assets) external view returns (uint256[] memory)",
+            "function getSourceOfAsset(address asset) external view returns (address)",
         ],
 
         TOKEN_ABI: ["function balanceOf(address) view returns (uint256)"],
@@ -113,6 +114,7 @@ class Constants {
             "function getPoolDataProvider() external view returns (address)",
             "function getPool() external view returns (address)",
             "function getPriceOracle() external view returns (address)",
+            "function getFallbackOracle() external view returns (address)",
         ],
 
         PRICE_FEED_ABI: [
@@ -149,6 +151,12 @@ class Constants {
 
         FLASHLOAN_EVENT_ABI: [
             "event FlashLoan(address indexed target, address indexed initiator, address indexed asset, uint256 amount, uint256 interestRateMode, uint256 premium, uint16 referralCode)",
+        ],
+
+        AGGREGATOR_ABI: [
+            "function aggregator() external view returns (address)",
+            "function BASE_TO_USD_AGGREGATOR() view returns (address)",
+            "function ASSET_TO_USD_AGGREGATOR() view returns (address)",
         ],
 
         AGGREGATOR_V3_INTERFACE_ABI: [

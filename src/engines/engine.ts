@@ -13,10 +13,10 @@ import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
 import emailManager from "../managers/emailManager";
 import axios from "axios";
-import { r } from "tar";
+import { c, r } from "tar";
 import repo from "../shared/repo";
 import liquidationManager from "../managers/liquidationManager";
-import multicallManager from "../managers/multicallManager";
+import transactionManager from "../managers/transactionManager";
 import moment from "moment";
 
 //#endregion Imports
@@ -192,11 +192,11 @@ class Engine {
                 const queryUpdate = `UPDATE addresses SET status = 2 WHERE network = '${key}' AND status = 1`;
                 await sqlManager.execQuery(queryUpdate);
             }
-        }
 
-        await logger.log(
-            `initializeUsersReserves: Users reserves initialized for network ${_key}`
-        );
+            await logger.log(
+                `initializeUsersReserves: Users reserves initialized for network ${key}`
+            );
+        }
     }
 
     //#endregion initializeUsersReserves
@@ -290,10 +290,10 @@ class Engine {
 
             if (!common.isProd && !networkInfo.isActive) continue;
 
-            const addresses = await multicallManager.multicall(
+            const addresses = await transactionManager.multicall(
                 aaveNetworkInfo.aaveAddresses.poolAddressesProvider,
                 null,
-                "ADDRESSES_PROVIDER_ABI",
+                Constants.ABIS.ADDRESSES_PROVIDER_ABI,
                 ["getPoolDataProvider", "getPriceOracle", "getPool"],
                 aaveNetworkInfo.network
             );
@@ -341,10 +341,10 @@ class Engine {
     ) {
         if (!Array.isArray(addresses)) addresses = [addresses];
         const aaveNetworkInfo = common.getAaveNetworkInfo(network);
-        const userConfigurations = await multicallManager.multicall(
+        const userConfigurations = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.pool,
             addresses,
-            "POOL_ABI",
+            Constants.ABIS.POOL_ABI,
             "getUserConfiguration",
             aaveNetworkInfo.network
         );
@@ -392,10 +392,10 @@ class Engine {
             }
         }
 
-        const results = await multicallManager.multicall(
+        const results = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             multicallUserReserveDataParameters,
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getUserReserveData",
             aaveNetworkInfo.network
         );
@@ -656,10 +656,10 @@ class Engine {
         if (!_addresses || _addresses.length == 0) return [];
         const networkInfo = await common.getAaveNetworkInfo(network);
 
-        const userAccountData = await multicallManager.multicall(
+        const userAccountData = await transactionManager.multicall(
             networkInfo.aaveAddresses.pool,
             _addresses,
-            "POOL_ABI",
+            Constants.ABIS.POOL_ABI,
             "getUserAccountData",
             network
         );
@@ -689,6 +689,87 @@ class Engine {
     }
 
     //#endregion getUserAccountDataForAddresses
+
+    //#region updateReservePriceOracleAggregatorAddresses
+
+    async updateReservePriceOracleAggregatorAddresses(aaveNetworkInfo: any) {
+        const reservesAddressesQuery = `SELECT address FROM reserves WHERE network = '${aaveNetworkInfo.network.toString()}';`;
+        const reservesAddressesResults = await sqlManager.execQuery(
+            reservesAddressesQuery
+        );
+        const reservesAddresses = _.map(
+            reservesAddressesResults,
+            (o) => o.address
+        );
+        const priceOracles = await transactionManager.multicall(
+            aaveNetworkInfo.aaveAddresses.aaveOracle,
+            reservesAddresses,
+            Constants.ABIS.AAVE_ORACLE_ABI,
+            "getSourceOfAsset",
+            aaveNetworkInfo.network
+        );
+
+        let aggregators: any[] = [];
+        let sqlQuery = "";
+        for (let i = 0; i < priceOracles.length; i++) {
+            const sourceOfAsset = priceOracles[i][0].toString();
+
+            const contract = common.getContract(
+                sourceOfAsset,
+                Constants.ABIS.AGGREGATOR_ABI,
+                aaveNetworkInfo.network
+            );
+
+            let aggregatorAddress: string;
+            try {
+                aggregatorAddress = await contract.aggregator();
+            } catch (error) {
+                try {
+                    const assetToUsdAggregator =
+                        await contract.ASSET_TO_USD_AGGREGATOR();
+                    const assetToUsdAggregatorContract = common.getContract(
+                        assetToUsdAggregator,
+                        Constants.ABIS.AGGREGATOR_ABI,
+                        aaveNetworkInfo.network
+                    );
+                    aggregatorAddress =
+                        await assetToUsdAggregatorContract.aggregator();
+                } catch (error) {
+                    try {
+                        const baseToUsdAggregator =
+                            await contract.BASE_TO_USD_AGGREGATOR();
+                        const baseToUsdAggregatorContract = common.getContract(
+                            baseToUsdAggregator,
+                            Constants.ABIS.AGGREGATOR_ABI,
+                            aaveNetworkInfo.network
+                        );
+                        aggregatorAddress =
+                            await baseToUsdAggregatorContract.aggregator();
+                    } catch (error) {
+                        aggregatorAddress = "";
+                    }
+                }
+            }
+
+            if (aggregatorAddress) {
+                aggregators.push({
+                    token: reservesAddresses[i],
+                    aggregator: aggregatorAddress.toString(),
+                });
+
+                sqlQuery += `WHEN address = '${
+                    reservesAddresses[i]
+                }' AND network = '${aaveNetworkInfo.network.toString()}' THEN '${aggregatorAddress}'`;
+            }
+        }
+
+        if (aggregators.length > 0) {
+            const query = `UPDATE reserves SET priceOracleAggregatorAddress = CASE ${sqlQuery} ELSE null END;`;
+            await sqlManager.execQuery(query);
+        }
+    }
+
+    //#endregion updateReservePriceOracleAggregatorAddresses
 
     //#endregion Helper methods
 
@@ -723,10 +804,10 @@ class Engine {
         const key = network.toString();
         const aaveNetworkInfo = common.getAaveNetworkInfo(key);
 
-        const results = await multicallManager.multicall(
+        const results = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             null,
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getAllReservesTokens",
             aaveNetworkInfo.network
         );
@@ -739,10 +820,10 @@ class Engine {
             };
         });
 
-        const reserveTokenAddress = await multicallManager.multicall(
+        const reserveTokenAddress = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             _.map(allReserveTokens, (o) => o.address),
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getReserveTokensAddresses",
             aaveNetworkInfo.network
         );
@@ -762,10 +843,10 @@ class Engine {
             (o) => o.address
         );
 
-        const reservesData = await multicallManager.multicall(
+        const reservesData = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             allReserveTokensAddresses,
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getReserveData",
             aaveNetworkInfo.network
         );
@@ -784,19 +865,19 @@ class Engine {
                 reservesData[i][4].toString();
         }
 
-        const reservesConfigData = await multicallManager.multicall(
+        const reservesConfigData = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             allReserveTokensAddresses,
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getReserveConfigurationData",
             aaveNetworkInfo.network
         );
 
         //update reserves liquidationProtocolFee
-        const liquidationProtocolFees = await multicallManager.multicall(
+        const liquidationProtocolFees = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             allReserveTokensAddresses,
-            "POOL_DATA_PROVIDER_ABI",
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getLiquidationProtocolFee",
             aaveNetworkInfo.network
         );
@@ -910,6 +991,11 @@ class Engine {
                 `;
 
             await sqlManager.execQuery(sqlQuery);
+
+            //update price oracle aggregators for reserves
+            await this.updateReservePriceOracleAggregatorAddresses(
+                aaveNetworkInfo
+            );
 
             await this.triggerWebServerAction("updateReserves", key);
         }
@@ -1331,67 +1417,20 @@ class Engine {
 
     //#region #Testing
 
-    async test_updateUsersReserves() {
-        const aaveNetworkInfo = await common.getAaveNetworkInfo(
-            Network.ARB_MAINNET
-        );
-        await this.initializeReserves();
-        await this.updateUserAccountDataAndUsersReserves_chunk(
-            null,
-            aaveNetworkInfo.network
-        );
-    }
-
     async doTest() {
-        /*
-        const timestampQuery =
-            "SELECT value FROM config WHERE [key] = 'lastUpdateUserAccountData'";
-        const timestampResult = await sqlManager.execQuery(timestampQuery);
-        return;
-        */
-        //const a = formatUnits(719413754570120506n, 18);
-
-        await this.updateUserAccountDataAndUsersReserves_chunk(
-            null,
-            Network.ARB_MAINNET
-        );
-        return;
-        /*
-        const aaveNetworkInfo1 = await common.getAaveNetworkInfo(
-            Network.ARB_MAINNET
-        );
-
-        await this.updateUserAccountDataAndUsersReserves_chunk(
-            null,
-            aaveNetworkInfo1.network
-        );
-        return;
-
         await this.initializeAlchemy();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(
-            Network.ARB_SEPOLIA
+            Network.ARB_MAINNET
         );
 
-        const numbers: any[] = [37, 38];
-
-        await multicallManager.multicall(
-            aaveNetworkInfo.liquidationContractAddress,
-            numbers,
-            "LIQUIDATION_ABI",
+        await this.updateReservePriceOracleAggregatorAddresses(aaveNetworkInfo);
+        /*
+        const result = await transactionManager.sendSingleTransaction(
+            aaveNetworkInfo,
             "store",
-            aaveNetworkInfo.network,
-            true
+            6
         );
-
-        const result = await multicallManager.multicall(
-            aaveNetworkInfo.liquidationContractAddress,
-            null,
-            "LIQUIDATION_ABI",
-            "retrieve",
-            aaveNetworkInfo.network
-        );
-        const res = parseInt(result[0]);
-        console.log(res);
+        console.log(result);
         */
     }
 
