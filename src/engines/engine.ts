@@ -1277,106 +1277,66 @@ class Engine {
         await this.initializeAlchemy(network);
         await this.initializeReserves(network);
 
-        //load all addresses from the DB that have health factor < 2 since higher health factors are not interesting
-        const allAddressesDb = await sqlManager.execQuery(
-            `SELECT * FROM addresses WHERE healthFactor < 2 ORDER BY healthFactor;`
-        );
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
+            if (network && network != aaveNetworkInfo.network) continue;
+            const key = aaveNetworkInfo.network.toString();
 
-        if (allAddressesDb.length == 0) {
-            await logger.log(
-                "updateReservesPrices: No addresses found in DB with health factor < 2"
+            //get last saved reserves prices from the DB
+            let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
+                _.values(aaveNetworkInfo.reserves),
+                "address",
+                "price"
             );
-        } else {
-            for (const aaveNetworkInfo of common.getNetworkInfos()) {
-                if (network && network != aaveNetworkInfo.network) continue;
 
-                const key = aaveNetworkInfo.network.toString();
-                const addressesDb = _.filter(
-                    allAddressesDb,
-                    (o) => o.network == key
-                );
+            //get current reserves prices from the network
+            const aaveOracleContract = common.getContract(
+                aaveNetworkInfo.aaveAddresses.aaveOracle,
+                Constants.ABIS.AAVE_ORACLE_ABI,
+                aaveNetworkInfo.network
+            );
+            const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
+            const currentAssetsPrices =
+                await aaveOracleContract.getAssetsPrices(reservesAddresses);
 
-                if (addressesDb.length == 0) {
-                    await logger.log(
-                        `updateReservesPrices: Network: ${key} No addresses found in DB with health factor < 2`
-                    );
-                    return;
+            let newReservesPrices: any = {};
+            for (let i = 0; i < reservesAddresses.length; i++) {
+                const reserveAddress = reservesAddresses[i];
+                const price = currentAssetsPrices[i];
+                newReservesPrices[reserveAddress] = price;
+            }
+
+            let reservesDbUpdate: any[] = [];
+            for (const reserveAddress of reservesAddresses) {
+                const oldPrice = dbAssetsPrices[reserveAddress];
+                const newPrice =
+                    new Big(newReservesPrices[reserveAddress]).toNumber() / 1e8;
+                if (!oldPrice) {
+                    //mark current reserve to be updated in the DB since no previous price is defined
+                    reservesDbUpdate.push({
+                        address: reserveAddress,
+                        price: newPrice,
+                    });
+                    continue;
                 }
+                const normalizedChange = newPrice - oldPrice;
 
-                //get last saved reserves prices from the DB
-                let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
-                    _.values(aaveNetworkInfo.reserves),
-                    "address",
-                    "price"
-                );
-
-                //get current reserves prices from the network
-                const aaveOracleContract = common.getContract(
-                    aaveNetworkInfo.aaveAddresses.aaveOracle,
-                    Constants.ABIS.AAVE_ORACLE_ABI,
-                    aaveNetworkInfo.network
-                );
-                const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
-                const currentAssetsPrices =
-                    await aaveOracleContract.getAssetsPrices(reservesAddresses);
-
-                let newReservesPrices: any = {};
-                for (let i = 0; i < reservesAddresses.length; i++) {
-                    const reserveAddress = reservesAddresses[i];
-                    const price = currentAssetsPrices[i];
-                    newReservesPrices[reserveAddress] = price;
-                }
-
-                //by default we should not perform the check. If price changes are found, we do check
-                let reservesChangedCheck: any[] = [];
-                let reservesDbUpdate: any[] = [];
-
-                for (const reserveAddress of reservesAddresses) {
-                    const oldPrice = dbAssetsPrices[reserveAddress];
-                    const newPrice =
-                        new Big(newReservesPrices[reserveAddress]).toNumber() /
-                        1e8;
-                    if (!oldPrice) {
-                        //mark current reserve to be updated in the DB since no previous price is defined
-                        reservesDbUpdate.push({
-                            address: reserveAddress,
-                            price: newPrice,
-                        });
-                        continue;
-                    }
-                    const normalizedChange = newPrice - oldPrice;
-
-                    let check = "none";
-
-                    //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
-                    if (Math.abs(normalizedChange) > 0.5) {
-                        //mark current reserve to be updated in the DB since the change exceeds the treshold
-                        reservesDbUpdate.push({
-                            address: reserveAddress,
-                            price: newPrice,
-                        });
-
-                        //add current reserve to the list of changed reserves and check if it should be checked as collateral or a debt
-                        check = normalizedChange < 0 ? "collateral" : "debt";
-                    }
-
-                    //add the reserve to the list of changed reserves. If no price change for this reserve has happened, the check will be "none"
-                    reservesChangedCheck.push({
-                        reserve: reserveAddress,
-                        check: check,
+                //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
+                if (Math.abs(normalizedChange) > 0.5) {
+                    //mark current reserve to be updated in the DB since the change exceeds the treshold
+                    reservesDbUpdate.push({
+                        address: reserveAddress,
+                        price: newPrice,
                     });
                 }
+            }
 
-                if (reservesDbUpdate.length > 0) {
-                    let reservesSQLList: string[] = _.map(
-                        reservesDbUpdate,
-                        (o) => {
-                            return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
-                        }
-                    );
+            if (reservesDbUpdate.length > 0) {
+                let reservesSQLList: string[] = _.map(reservesDbUpdate, (o) => {
+                    return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
+                });
 
-                    if (reservesSQLList.length > 0) {
-                        const sqlQuery = `
+                if (reservesSQLList.length > 0) {
+                    const sqlQuery = `
                     MERGE INTO reserves AS target
                     USING (VALUES 
                         ${reservesSQLList.join(",")}
@@ -1388,21 +1348,21 @@ class Engine {
                         price = source.price;                        
                         `;
 
-                        await sqlManager.execQuery(sqlQuery);
+                    await sqlManager.execQuery(sqlQuery);
 
-                        await this.triggerWebServerAction(
-                            "updateReservesPrices",
-                            key
-                        );
-                    } else {
-                        //we should actually never come here, but just in case
-                        throw new Error(
-                            "reservesSQLList is empty despite reservesDbUpdate being not empty"
-                        );
-                    }
+                    await this.triggerWebServerAction(
+                        "updateReservesPrices",
+                        key
+                    );
+                } else {
+                    //we should actually never come here, but just in case
+                    throw new Error(
+                        "reservesSQLList is empty despite reservesDbUpdate being not empty"
+                    );
                 }
             }
         }
+
         await logger.log("updateReservesPrices: End");
     }
 

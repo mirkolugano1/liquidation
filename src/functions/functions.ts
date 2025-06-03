@@ -183,7 +183,7 @@ df.app.activity("updateReservesPricesActivity", {
 
 // Register timer function
 app.timer("updateReservesPricesTimer", {
-    schedule: "15 0 * * *", // Cron expression for every day at 00:15 h
+    schedule: "*/15 * * * *", // Cron expression for every day at 00:15 h
     extraInputs: [df.input.durableClient()],
     handler: updateReservesPricesTimer,
 });
