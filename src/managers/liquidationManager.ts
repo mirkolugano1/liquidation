@@ -11,7 +11,7 @@ import emailManager from "./emailManager";
 
 class LiquidationManager {
     private static instance: LiquidationManager;
-
+    private liquidationServerEnvironment: string = "";
     public static getInstance(): LiquidationManager {
         if (!LiquidationManager.instance) {
             LiquidationManager.instance = new LiquidationManager();
@@ -316,10 +316,12 @@ class LiquidationManager {
         address: string,
         aaveNetworkInfo: any
     ) {
-        const liquidationServerEnvironment = await common.getAppSetting(
-            "LIQUIDATIONSERVERENVIRONMENT"
-        );
-        if (liquidationServerEnvironment == "function") return;
+        if (!this.liquidationServerEnvironment) {
+            this.liquidationServerEnvironment = await common.getAppSetting(
+                "LIQUIDATIONSERVERENVIRONMENT"
+            );
+        }
+        if (this.liquidationServerEnvironment == "function") return;
 
         const userAccountData = aaveNetworkInfo.addressesObjects[address];
         if (!userAccountData) return;
@@ -359,10 +361,12 @@ class LiquidationManager {
             }
         }
         if (str.length > 0) {
+            /*
             await logger.log(
                 `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${address}: ${str}`,
                 LoggingFramework.Table
             );
+            */
         }
     }
 

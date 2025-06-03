@@ -75,7 +75,6 @@ class Engine {
         await this.initializeAddresses();
         await this.initializeReserves();
         await this.initializeGasPrice();
-        await this.resetUsersReservesStatus();
         await this.initializeUsersReserves();
 
         console.log("Web server initialized");
@@ -593,27 +592,6 @@ class Engine {
     }
 
     //#endregion triggerWebServerAction
-
-    //#region resetUsersReservesStatus
-
-    /**
-     * Resets the status of all users reserves to 1 (updated, still to be loaded in web server)
-     * in the database.
-     * This is useful to reinitialize the users reserves data in the webServer, so that
-     * all users reserves already set to 2 (synced with local model) can be reloaded.
-     */
-    async resetUsersReservesStatus() {
-        if (!repo.aave) throw new Error("Aave object not initialized");
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            const key = aaveNetworkInfo.network.toString();
-            repo.aave[key].usersReserves = {};
-            await sqlManager.execQuery(
-                `UPDATE addresses SET status = 1 WHERE network = '${key}' AND status > 1`
-            );
-        }
-    }
-
-    //#endregion resetUsersReservesStatus
 
     //#region refresh
 
