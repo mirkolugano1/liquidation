@@ -138,7 +138,7 @@ class Constants {
         ],
 
         LIQUIDATION_CALL_EVENT_ABI: [
-            "event LiquidationCall(address indexed collateral, address indexed reserve, address indexed user, uint256 purchaseAmount, uint256 debtToCover, bool receiveAToken)",
+            "event LiquidationCall(address indexed collateralAsset, address indexed debtAsset, address indexed user, uint256 debtToCover, uint256 liquidatedCollateralAmount, address liquidator, bool receiveAToken)",
         ],
 
         SUPPLY_EVENT_ABI: [

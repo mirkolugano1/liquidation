@@ -61,7 +61,7 @@ app.get("/sandbox", (req: any, res: any) => {
                     <label>JS Code:</label><br/>
                     <textarea name="code" rows="15" cols="100"></textarea><br/>
                     <label>Pwd:</label><br/>
-                    <input type="text" name="pwd" /><br/>
+                    <input type="password" name="pwd" /><br/>
                     <button type="submit">Run</button>
                 </form>
             </body>
@@ -73,17 +73,15 @@ app.post("/eval", async (req: any, res: any) => {
     const code = req.body?.code;
     const pwd = req.body?.pwd;
 
-    if (common.isProd) {
-        const sandboxPasswordEncrypted = await common.getAppSetting(
-            "SANDBOXPASSWORDENCRYPTED"
-        );
-        const sandboxPassword = await encryptionManager.decrypt(
-            sandboxPasswordEncrypted
-        );
-        if (pwd !== sandboxPassword) {
-            res.status(403).send("Forbidden: Invalid password.");
-            return;
-        }
+    const sandboxPasswordEncrypted = await common.getAppSetting(
+        "SANDBOXPASSWORDENCRYPTED"
+    );
+    const sandboxPassword = await encryptionManager.decrypt(
+        sandboxPasswordEncrypted
+    );
+    if (pwd !== sandboxPassword) {
+        res.status(403).send("Forbidden: Invalid password.");
+        return;
     }
 
     if (!code) {
@@ -102,10 +100,8 @@ app.post("/eval", async (req: any, res: any) => {
             `"use strict"; return (async () => { ${code} })()`
         );
         const result = await fn(engine, logger, repo, webhookManager, moment);
-        if (result) {
-            const val = JSON.stringify(result, null, 2);
-            res.send(`<pre>${common.escapeHtml(val)}</pre>`);
-        }
+        const val = JSON.stringify(result ?? "no result", null, 2);
+        res.send(`<pre>${common.escapeHtml(val)}</pre>`);
     } catch (e: any) {
         res.status(500).send(
             `<pre style="color:red">${common.escapeHtml(

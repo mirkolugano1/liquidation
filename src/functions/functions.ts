@@ -202,10 +202,7 @@ const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
 
 // Activity function
 const updateUserAccountDataAndUsersReservesActivity_chunk: ActivityHandler =
-    async (
-        input: { network: Network; offset: number },
-        context: InvocationContext
-    ) => {
+    async (input: { network: Network }, context: InvocationContext) => {
         await engine.updateUserAccountDataAndUsersReserves_chunk(
             context,
             input.network
@@ -234,7 +231,7 @@ df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
 
 // Register timer function
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
-    schedule: "*/5 * * * *", // Cron expression for every n minutes
+    schedule: "*/3 * * * *", // Cron expression for every n minutes
     extraInputs: [df.input.durableClient()],
     handler: updateUserAccountDataAndUsersReservesTimer,
 });
