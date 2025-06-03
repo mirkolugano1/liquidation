@@ -1193,13 +1193,18 @@ class Engine {
                     }
                 }
 
-                query = query.replace("{0}", arr0.join(" "));
-                query = query.replace("{1}", arr1.join(" "));
-                query = query.replace("{2}", arr2.join(" "));
-                query = query.replace("{3}", arr3.join(" "));
-                query = query.replace("{4}", arr4.join(","));
+                //check if we have any addresses to update
+                //arr1, arr2, arr3, arr4 should not be empty as well if arr0 is not empty
+                //if arr0 is empty, it means that there are no addresses with health factor < 2
+                if (arr0.length > 0) {
+                    query = query.replace("{0}", arr0.join(" "));
+                    query = query.replace("{1}", arr1.join(" "));
+                    query = query.replace("{2}", arr2.join(" "));
+                    query = query.replace("{3}", arr3.join(" "));
+                    query = query.replace("{4}", arr4.join(","));
 
-                if (query) await sqlManager.execQuery(query);
+                    if (query) await sqlManager.execQuery(query);
+                }
             }
 
             //delete addresses from the DB where health factor is > 2
