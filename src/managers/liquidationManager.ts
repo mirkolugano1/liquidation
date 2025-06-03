@@ -42,7 +42,7 @@ class LiquidationManager {
             const userReserves = aaveNetworkInfo.usersReserves[address];
             if (!userReserves || userReserves.length == 0) continue;
             userAddressesObjects.push(userAddressesObject);
-            usersReserves.push(...userReserves);
+            usersReserves = _.concat(usersReserves, userReserves);
         }
 
         await this.checkLiquidateAddressesFromInMemoryObjects(
