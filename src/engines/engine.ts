@@ -18,6 +18,7 @@ import repo from "../shared/repo";
 import liquidationManager from "../managers/liquidationManager";
 import transactionManager from "../managers/transactionManager";
 import moment from "moment";
+import redisManager from "../managers/redisManager";
 
 //#endregion Imports
 
@@ -1374,6 +1375,39 @@ class Engine {
     //#region #Testing
 
     async doTest() {
+        await redisManager.initialize();
+        await redisManager.set("test:key", "Hello Redis!");
+        await redisManager.getValue("test:key");
+
+        await redisManager.set("test:key2", ["Hello", "Redis", "!"]);
+        const value = await redisManager.getArray("test:key2");
+        console.log(value); // Should print: ["Hello", "Redis", "!"]
+
+        const object = { key: "value", number: 42 };
+        await redisManager.set("test:object", object);
+        const retrievedObject = await redisManager.getObject("test:object");
+        console.log(retrievedObject); // Should print: { key: "value", number: 42 }
+
+        const retrievedObjectValue = await redisManager.getValue(
+            "test:object",
+            "key"
+        );
+        console.log(retrievedObjectValue); // Should print: "value"
+
+        const o1 = {
+            key: "value",
+            number: 42,
+        };
+        const o2 = {
+            key: "value2",
+            number: 43,
+        };
+
+        await redisManager.set(["test:object1", "test:object2"], [o1, o2]);
+        const retrievedObjects = await redisManager.getMultiple("test:object*");
+        console.log(retrievedObjects); // Should print: [{ key: "value", number: 42 }, { key: "value2", number: 43 }]
+        return;
+
         await this.updateUserAccountDataAndUsersReserves_chunk(
             null,
             Network.ARB_MAINNET
