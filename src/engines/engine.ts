@@ -19,6 +19,9 @@ import liquidationManager from "../managers/liquidationManager";
 import transactionManager from "../managers/transactionManager";
 import moment from "moment";
 import redisManager from "../managers/redisManager";
+import { sql } from "@azure/functions/types/app";
+import { query } from "mssql";
+import { red } from "bn.js";
 
 //#endregion Imports
 
@@ -93,9 +96,8 @@ class Engine {
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
             const key = aaveNetworkInfo.network.toString();
             if (_key && key != _key) continue;
-
-            const initAddresses = await sqlManager.execQuery(
-                `SELECT * FROM addresses WHERE network = '${key}'`
+            const initAddresses = await redisManager.getList(
+                `addresses:${key}:*`
             );
             for (const address of initAddresses) {
                 if (!repo.aave[address.network].hasOwnProperty("addresses"))
@@ -127,18 +129,29 @@ class Engine {
             let hasAddressesToBeLoaded = true;
 
             do {
-                const queryAddresses = `SELECT TOP ${Constants.CHUNK_SIZE} address FROM addresses WHERE network = '${key}' AND status = 1`;
-                const chunkAddresses = await sqlManager.execQuery(
-                    queryAddresses
+                const queryAddresses: any = await redisManager.call(
+                    "FT.SEARCH",
+                    "idx:addresses",
+                    `@status:[1 1] @network:{${key}}`,
+                    "LIMIT",
+                    "0",
+                    `${Constants.CHUNK_SIZE}`
                 );
-                hasAddressesToBeLoaded = chunkAddresses.length > 0;
-                const query = `SELECT * FROM usersReserves WHERE network = '${key}' AND address IN (${_.map(
-                    chunkAddresses,
-                    (o) => `'${o.address}'`
-                ).join(",")})`;
+                const addressList = _.map(
+                    queryAddresses,
+                    (o) => o.address
+                ).join("|");
 
+                hasAddressesToBeLoaded = queryAddresses.length > 0;
                 if (hasAddressesToBeLoaded) {
-                    const dbUsersReserves = await sqlManager.execQuery(query);
+                    const dbUsersReserves: any = await redisManager.call(
+                        "FT.SEARCH",
+                        "idx:usersReserves",
+                        `@network:{${key}} @address:{${addressList}}`,
+                        "LIMIT",
+                        "0",
+                        "9999999"
+                    );
                     if (dbUsersReserves.length > 0) {
                         let usersReserves: any = {};
                         const networkUsersReserves = _.filter(dbUsersReserves, {
@@ -192,11 +205,11 @@ class Engine {
                     }
                 }
 
-                const queryUpdate = `UPDATE addresses SET status = 2 WHERE network = '${key}' AND status = 1 AND address IN (${_.map(
-                    chunkAddresses,
-                    (o) => `'${o.address}'`
-                ).join(",")})`;
-                await sqlManager.execQuery(queryUpdate);
+                //set status to 2 for all addresses that have been loaded
+                _.each(queryAddresses, (o) => {
+                    o.status = 2;
+                });
+                await redisManager.setArrayProperties(queryAddresses, "status");
             } while (hasAddressesToBeLoaded);
 
             await logger.log(
@@ -218,10 +231,11 @@ class Engine {
             const key = aaveNetworkInfo.network.toString();
             if (_key && key != _key) continue;
 
-            const whereClause = _key ? ` WHERE network = '${_key}'` : "";
-            let query = `SELECT * FROM reserves ${whereClause} ORDER BY sorting`;
+            const dbReserves: any = await redisManager.getList(
+                `reserves:${key}:*`,
+                "sorting"
+            );
 
-            const dbReserves = await sqlManager.execQuery(query);
             if (!dbReserves || dbReserves.length == 0) {
                 await logger.log(
                     "initializeReserves: No reserves found in DB. Please run the updateReservesData function first."
@@ -354,22 +368,28 @@ class Engine {
             "getUserConfiguration",
             aaveNetworkInfo.network
         );
-        let ucQuery = `UPDATE addresses SET userConfiguration = CASE `;
+
+        const addressList = addresses.join("|");
+        const addressesToUpdate: any = await redisManager.call(
+            "FT.SEARCH",
+            "idx:addresses",
+            `@network:{${aaveNetworkInfo.network.toString()}} @status:[1 1] @address:{${addressList}}`,
+            "LIMIT",
+            "0",
+            "1000000"
+        );
+
         for (let i = 0; i < userConfigurations.length; i++) {
-            const userAddress = addresses[i];
             const userConfiguration = new Big(userConfigurations[i])
                 .toNumber()
                 .toString(2);
-
-            repo.aave[network].addressesObjects[userAddress].userConfiguration =
-                userConfiguration;
-
-            ucQuery += `WHEN address = '${userAddress}' THEN '${userConfiguration}' `;
+            addressesToUpdate[i].userConfiguration = userConfiguration;
         }
-        ucQuery += `ELSE userConfiguration END WHERE address IN ('${addresses.join(
-            "','"
-        )}');`;
-        await sqlManager.execQuery(ucQuery);
+
+        await redisManager.setArrayProperties(
+            addressesToUpdate,
+            "userConfiguration"
+        );
     }
 
     //#endregion updateUserConfiguration
@@ -407,95 +427,41 @@ class Engine {
         );
 
         let sqlQueries: string[] = [];
-        const userReserveDataChunks = _.chunk(
-            results,
-            reservesAddresses.length * 10
-        );
-        const allUserReserveObjects: any[] = [];
-        for (let j = 0; j < userReserveDataChunks.length; j++) {
-            const userReserveDataChunk: any = userReserveDataChunks[j];
 
-            if (userReserveDataChunk.length > 0) {
-                let userReservesObjects: any[] = _.map(
-                    userReserveDataChunk,
-                    (userReserveData, i) => {
-                        const userAddress =
-                            multicallUserReserveDataParameters[i][1].toString();
-                        const reserveAddress =
-                            multicallUserReserveDataParameters[i][0].toString();
-                        return {
-                            tokenAddress: reserveAddress,
-                            userAddress: userAddress,
-                            currentATokenBalance: userReserveData[0],
-                            currentStableDebt: userReserveData[1],
-                            currentVariableDebt: userReserveData[2],
-                            principalStableDebt: userReserveData[3],
-                            scaledVariableDebt: userReserveData[4],
-                            stableBorrowRate: userReserveData[5],
-                            liquidityRate: userReserveData[6],
-                            stableRateLastUpdated:
-                                userReserveData[7].toString(),
-                            usageAsCollateralEnabled:
-                                sqlManager.getBitFromBoolean(
-                                    userReserveData[8].toString()
-                                ),
-                        };
-                    }
-                );
+        let userReservesObjects: any[] = [];
+        if (results.length > 0) {
+            userReservesObjects = _.map(results, (userReserveData, i) => {
+                const userAddress =
+                    multicallUserReserveDataParameters[i][1].toString();
+                const reserveAddress =
+                    multicallUserReserveDataParameters[i][0].toString();
+                return {
+                    tokenAddress: reserveAddress,
+                    userAddress: userAddress,
+                    currentATokenBalance: userReserveData[0],
+                    currentStableDebt: userReserveData[1],
+                    currentVariableDebt: userReserveData[2],
+                    principalStableDebt: userReserveData[3],
+                    scaledVariableDebt: userReserveData[4],
+                    stableBorrowRate: userReserveData[5],
+                    liquidityRate: userReserveData[6],
+                    stableRateLastUpdated: userReserveData[7].toString(),
+                    usageAsCollateralEnabled: sqlManager.getBitFromBoolean(
+                        userReserveData[8].toString()
+                    ),
+                };
+            });
 
-                allUserReserveObjects.push(...userReservesObjects);
-
-                //update usersReserves that are in memory
-                if (!repo.aave[key].hasOwnProperty("usersReserves"))
-                    repo.aave[key].usersReserves = {};
-                for (let i = 0; i < allUserReserveObjects.length; i++) {
-                    const userReservesObject = allUserReserveObjects[i];
-                    if (
-                        !repo.aave[key].hasOwnProperty(
-                            userReservesObject.userAddress
-                        )
-                    )
-                        repo.aave[key].usersReserves[
-                            userReservesObject.userAddress
-                        ] = [];
-                    repo.aave[key].usersReserves[
-                        userReservesObject.userAddress
-                    ].push(userReservesObject);
-                }
-
-                let sqlQuery = `                        
-                        MERGE INTO usersReserves AS target
-                        USING (VALUES 
-                            ${_.map(
-                                userReservesObjects,
-                                (o) =>
-                                    `('${o.userAddress}', '${o.tokenAddress}', '${key}', '${o.currentATokenBalance}', '${o.currentStableDebt}', '${o.currentVariableDebt}', '${o.principalStableDebt}', '${o.scaledVariableDebt}', '${o.stableBorrowRate}', '${o.liquidityRate}', '${o.stableRateLastUpdated}', ${o.usageAsCollateralEnabled}, GETUTCDATE())`
-                            ).join(",")}
-                        ) AS source (address, tokenAddress, network, currentATokenBalance, currentStableDebt, currentVariableDebt, principalStableDebt, scaledVariableDebt, stableBorrowRate, liquidityRate, stableRateLastUpdated, usageAsCollateralEnabled, modifiedOn)
-                        ON (target.address = source.address AND target.tokenAddress = source.tokenAddress AND target.network = source.network)
-                        WHEN MATCHED THEN
-                        UPDATE SET                        
-                            currentATokenBalance = source.currentATokenBalance,
-                            currentStableDebt = source.currentStableDebt,
-                            currentVariableDebt = source.currentVariableDebt,
-                            principalStableDebt = source.principalStableDebt,
-                            scaledVariableDebt = source.scaledVariableDebt,
-                            stableBorrowRate = source.stableBorrowRate,
-                            liquidityRate = source.liquidityRate,
-                            stableRateLastUpdated = source.stableRateLastUpdated,
-                            usageAsCollateralEnabled = source.usageAsCollateralEnabled,
-                            modifiedOn = source.modifiedOn
-                            WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, tokenAddress, network, currentATokenBalance, currentStableDebt, currentVariableDebt, principalStableDebt, scaledVariableDebt, stableBorrowRate, liquidityRate, stableRateLastUpdated, usageAsCollateralEnabled, modifiedOn)
-                        VALUES (source.address, source.tokenAddress, source.network, source.currentATokenBalance, source.currentStableDebt, source.currentVariableDebt, source.principalStableDebt, source.scaledVariableDebt, source.stableBorrowRate, source.liquidityRate, source.stableRateLastUpdated, source.usageAsCollateralEnabled, source.modifiedOn);
-                            `;
-
-                sqlQueries.push(sqlQuery);
-            }
+            const redisUserReservesKeys = _.map(
+                userReservesObjects,
+                (o: any) =>
+                    `usersReserves:${key}:${o.userAddress}:${o.tokenAddress}`
+            );
+            await redisManager.set(redisUserReservesKeys, userReservesObjects);
         }
 
         const allUserReserveObjectsAddresses = _.uniq(
-            _.map(allUserReserveObjects, (o) => o.userAddress)
+            _.map(userReservesObjects, (o) => o.userAddress)
         );
         const liquidatableUserAddressObjects = _.filter(
             userAddressesObjects,
@@ -507,7 +473,7 @@ class Engine {
             liquidatableUserAddressObjects,
             (o) => o.address
         );
-        const liquidatableUserReserves = _.filter(allUserReserveObjects, (o) =>
+        const liquidatableUserReserves = _.filter(userReservesObjects, (o) =>
             liquidatableUserAddressObjectsAddresses.includes(o.userAddress)
         );
 
@@ -552,87 +518,6 @@ class Engine {
     }
 
     //#endregion setCloseEvent
-
-    //#region triggerWebServerAction
-
-    async triggerWebServerAction(type: string, network: string) {
-        const liquidationServerEnvironment = await common.getAppSetting(
-            "LIQUIDATIONSERVERENVIRONMENT"
-        );
-        if (this.triggerWebServerActionDevDisabled && !common.isProd) {
-            console.log(
-                `Skipped triggering web server action ${type} for network ${network}`
-            );
-            return;
-        }
-        if (liquidationServerEnvironment == "webServer") {
-            await this.refresh(
-                {
-                    query: {
-                        type: type,
-                        network: network,
-                    },
-                },
-                {
-                    status: (code: number) => {
-                        return {
-                            send: (message: string) => {
-                                console.log(
-                                    `Triggered web server action ${type} for network ${network} with response code ${code} and message ${message}`
-                                );
-                            },
-                        };
-                    },
-                }
-            );
-        } else {
-            await axios.get(
-                `${this.webappUrl}/refresh?type=${type}&network=${network}`
-            );
-        }
-    }
-
-    //#endregion triggerWebServerAction
-
-    //#region refresh
-
-    async refresh(req: any, res: any) {
-        const type = req.query.type;
-        const network = req.query.network ?? "eth-mainnet";
-        if (!type) {
-            res.status(400).send("No type provided");
-            return;
-        }
-
-        await logger.log("refresh: endpoint called for type: " + type);
-
-        switch (type) {
-            case "updateGasPrice":
-                await this.initializeGasPrice(network);
-                break;
-            case "updateReserves":
-                await this.initializeReserves(network);
-                break;
-            case "updateReservesPrices":
-                await this.initializeReserves(network);
-                await this.initializeGasPrice(network);
-                //await this.initializeUsersReserves(network); //not needed I think, since only prices have changed here
-                await liquidationManager.checkLiquidateAddresses(network);
-            case "updateUsersReserves":
-                await this.initializeReserves(network);
-                await this.initializeGasPrice(network);
-                await this.initializeUsersReserves(network);
-                await liquidationManager.checkLiquidateAddresses(network);
-                break;
-            default:
-                res.status(400).send("Invalid type provided");
-                return;
-        }
-
-        res.status(200).send("OK");
-    }
-
-    //#endregion refresh
 
     //#region getUserAccountDataForAddresses
 
@@ -680,9 +565,9 @@ class Engine {
     //#region updateReservePriceOracleAggregatorAddresses
 
     async updateReservePriceOracleAggregatorAddresses(aaveNetworkInfo: any) {
-        const reservesAddressesQuery = `SELECT address FROM reserves WHERE network = '${aaveNetworkInfo.network.toString()}';`;
-        const reservesAddressesResults = await sqlManager.execQuery(
-            reservesAddressesQuery
+        const reservesAddressesResults: any = redisManager.getList(
+            `reserves:${aaveNetworkInfo.network.toString()}:*`,
+            "sorting"
         );
         const reservesAddresses = _.map(
             reservesAddressesResults,
@@ -697,7 +582,6 @@ class Engine {
         );
 
         let aggregators: any[] = [];
-        let sqlQuery = "";
         for (let i = 0; i < priceOracles.length; i++) {
             const sourceOfAsset = priceOracles[i][0].toString();
 
@@ -738,21 +622,26 @@ class Engine {
                 }
             }
 
-            if (aggregatorAddress) {
-                aggregators.push({
-                    token: reservesAddresses[i],
-                    aggregator: aggregatorAddress.toString(),
-                });
-
-                sqlQuery += `WHEN address = '${
-                    reservesAddresses[i]
-                }' AND network = '${aaveNetworkInfo.network.toString()}' THEN '${aggregatorAddress}'`;
+            if (
+                aggregatorAddress &&
+                aggregatorAddress.toString() !=
+                    reservesAddressesResults[i].priceOracleAggregatorAddress
+            ) {
+                reservesAddressesResults[i].priceOracleAggregatorAddress =
+                    aggregatorAddress;
+                aggregators.push(reservesAddressesResults[i]);
             }
         }
 
         if (aggregators.length > 0) {
-            const query = `UPDATE reserves SET priceOracleAggregatorAddress = CASE ${sqlQuery} ELSE null END;`;
-            await sqlManager.execQuery(query);
+            const keys = _.map(
+                aggregators,
+                (o) =>
+                    `reserves:${aaveNetworkInfo.network.toString()}:${
+                        o.address
+                    }`
+            );
+            await redisManager.set(keys, aggregators);
         }
     }
 
@@ -902,89 +791,17 @@ class Engine {
             (o) => o.address
         );
 
-        //delete reserves and usersReserves data where token address is not in the reserves list
-        const sqlQueryDelete = `DELETE FROM usersReserves WHERE tokenAddress NOT IN ('${fetchedReservesAddresses.join(
-            "','"
-        )}') AND network = '${key}';`;
-        await sqlManager.execQuery(sqlQueryDelete);
-
-        const sqlQuery = `DELETE FROM reserves WHERE address NOT IN ('${fetchedReservesAddresses.join(
-            "','"
-        )}') AND network = '${key}';`;
-        await sqlManager.execQuery(sqlQuery);
-
-        //prepare query to update reserves list in DB
-        //and update DB
-        let reservesSQLList: string[] = _.map(allReserveTokens, (o, index) => {
-            return `('${o.address}', '${key}', '${o.symbol}', ${o.decimals}, '${
-                o.reserveLiquidationThreshold
-            }', '${o.reserveLiquidationBonus}', '${o.reserveFactor}', ${
-                o.usageAsCollateralEnabled
-            }, ${sqlManager.getBitFromBoolean(
-                o.borrowingEnabled
-            )}, ${sqlManager.getBitFromBoolean(
-                o.stableBorrowRateEnabled
-            )}, ${sqlManager.getBitFromBoolean(
-                o.isActive
-            )}, ${sqlManager.getBitFromBoolean(o.isFrozen)}, '${
-                o.liquidationProtocolFee
-            }', '${o.liquidityIndex}', '${o.variableBorrowIndex}', '${
-                o.liquidityRate
-            }', '${o.variableBorrowRate}', '${o.lastUpdateTimestamp}', '${
-                o.atokenAddress
-            }','${o.variableDebttokenAddress}', '${
-                o.stableDebttokenAddress
-            }', '${o.totalStableDebt}', '${o.totalVariableDebt}', '${
-                o.ltv
-            }', ${index}, GETUTCDATE())`;
-        });
-
-        if (reservesSQLList.length > 0) {
-            const sqlQuery = `
-                    MERGE INTO reserves AS target
-                    USING (VALUES 
-                        ${reservesSQLList.join(",")}
-                    ) AS source (address, network, symbol, decimals, reserveLiquidationThreshold, reserveLiquidationBonus, reserveFactor, usageAsCollateralEnabled, borrowingEnabled, stableBorrowRateEnabled, isActive, isFrozen, liquidationProtocolFee, liquidityIndex, variableBorrowIndex, liquidityRate, variableBorrowRate, lastUpdateTimestamp, atokenAddress, variableDebttokenAddress, stableDebttokenAddress, totalStableDebt, totalVariableDebt, ltv, sorting, modifiedOn)
-                    ON (target.address = source.address AND target.network = source.network)
-                    WHEN MATCHED THEN
-                    UPDATE SET                        
-                        symbol = source.symbol,
-                        decimals = source.decimals,                        
-                        reserveLiquidationThreshold = source.reserveLiquidationThreshold,
-                        reserveLiquidationBonus = source.reserveLiquidationBonus,
-                        reserveFactor = source.reserveFactor,
-                        usageAsCollateralEnabled = source.usageAsCollateralEnabled,
-                        borrowingEnabled = source.borrowingEnabled,
-                        stableBorrowRateEnabled = source.stableBorrowRateEnabled,
-                        isActive = source.isActive,
-                        isFrozen = source.isFrozen,
-                        liquidationProtocolFee = source.liquidationProtocolFee,
-                        liquidityIndex = source.liquidityIndex,
-                        variableBorrowIndex = source.variableBorrowIndex,
-                        liquidityRate = source.liquidityRate,
-                        variableBorrowRate = source.variableBorrowRate,                        
-                        lastUpdateTimestamp = source.lastUpdateTimestamp,
-                        atokenAddress = source.atokenAddress,
-                        variableDebttokenAddress = source.variableDebttokenAddress,
-                        stableDebttokenAddress = source.stableDebttokenAddress,
-                        totalStableDebt = source.totalStableDebt,
-                        totalVariableDebt = source.totalVariableDebt,
-                        ltv = source.ltv,
-                        sorting = source.sorting,
-                        modifiedOn = source.modifiedOn
-                    WHEN NOT MATCHED BY TARGET THEN
-                        INSERT (address, network, symbol, decimals, reserveLiquidationThreshold, reserveLiquidationBonus, reserveFactor, usageAsCollateralEnabled, borrowingEnabled, stableBorrowRateEnabled, isActive, isFrozen, liquidationProtocolFee, liquidityIndex, variableBorrowIndex, liquidityRate, variableBorrowRate, lastUpdateTimestamp, atokenAddress, variableDebttokenAddress, stableDebttokenAddress, totalStableDebt, totalVariableDebt, ltv, sorting, modifiedOn)
-                        VALUES (source.address, source.network, source.symbol, source.decimals, source.reserveLiquidationThreshold, source.reserveLiquidationBonus, source.reserveFactor, source.usageAsCollateralEnabled, source.borrowingEnabled, source.stableBorrowRateEnabled, source.isActive, source.isFrozen, source.liquidationProtocolFee, source.liquidityIndex, source.variableBorrowIndex, source.liquidityRate, source.variableBorrowRate, source.lastUpdateTimestamp, source.atokenAddress, source.variableDebttokenAddress, source.stableDebttokenAddress, source.totalStableDebt, source.totalVariableDebt, source.ltv, source.sorting, source.modifiedOn);
-                `;
-
-            await sqlManager.execQuery(sqlQuery);
+        if (allReserveTokens.length > 0) {
+            const reservesKeys = _.map(
+                allReserveTokens,
+                (o) => `reserves:${o.network}:${o.address}`
+            );
+            await redisManager.set(reservesKeys, allReserveTokens);
 
             //update price oracle aggregators for reserves
             await this.updateReservePriceOracleAggregatorAddresses(
                 aaveNetworkInfo
             );
-
-            await this.triggerWebServerAction("updateReserves", key);
         }
     }
 
@@ -1022,14 +839,20 @@ class Engine {
         const key = network.toString();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
         let deleteAddressesQueries: string[] = [];
-        const timestampQuery =
-            "SELECT * FROM config WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves'";
-        const timestampResult = await sqlManager.execQuery(timestampQuery);
-        const timestamp = timestampResult[0].value;
+        const timestamp = await redisManager.getValue(
+            "config:lastUpdateUserAccountDataAndUsersReserves"
+        );
 
-        const dbAddressesArr = await sqlManager.execQuery(
-            `SELECT TOP ${chunkSize} * FROM addresses WHERE network = '${key}' AND (STATUS IS NULL OR STATUS < 1) AND addedOn < '${timestamp}'
-             ORDER BY addedOn`
+        const dbAddressesArr = await redisManager.call(
+            "FT.SEARCH",
+            "idx:addresses",
+            `@network:{${key}} (@status:{} | @status:{0}) @addedOn:{-inf (${timestamp}}`,
+            "SORTBY",
+            "addedOn",
+            "ASC",
+            "LIMIT",
+            "0",
+            chunkSize.toString()
         );
 
         if (dbAddressesArr.length == 0) {
@@ -1039,10 +862,16 @@ class Engine {
                 //and update the lastUpdateUserAccountDataAndUsersReserves timestamp in the config, so that
                 //updates can start over again
                 const utcNow = moment().utc().format("YYYY-MM-DD HH:mm:ss");
-                const query = `
-                        UPDATE addresses SET status = NULL WHERE network = '${key}'; 
-                        UPDATE config SET [value] = '${utcNow}' WHERE [key] = 'lastUpdateUserAccountDataAndUsersReserves';`;
-                await sqlManager.execQuery(query);
+                await redisManager.set(
+                    "config:lastUpdateUserAccountDataAndUsersReserves",
+                    utcNow
+                );
+
+                const allAddresses = await redisManager.getList(
+                    `addresses:${key}:*`
+                );
+                _.each(allAddresses, (address) => (address.status = null));
+                await redisManager.setArrayProperties(allAddresses, "status");
 
                 //run the update again, it should start over again
                 await this.updateUserAccountDataAndUsersReserves_chunk(
@@ -1105,6 +934,7 @@ class Engine {
                         repo.aave[key].addressesObjects[
                             userAddress
                         ].userConfiguration;
+                    addressesUserAccountDataHFLowerThan2[i].status = 1;
                 }
 
                 await this.updateUsersReservesData(
@@ -1117,105 +947,26 @@ class Engine {
             //NOTE: it is not necessary to save the totalDebtBase to the DB, since
             //it will be calculated anyway from the usersReserves data.
             //I leave it here anyway for now, since it is not a big deal to save it
-            const chunks = _.chunk(results, chunkSize);
-            for (let i = 0; i < chunks.length; i++) {
-                const chunk = chunks[i];
-
-                let query =
-                    chunk.length > 0
-                        ? `
-        UPDATE addresses 
-        SET 
-            modifiedOn = GETUTCDATE(),
-            healthFactor = CASE
-                {0}
-            ELSE healthFactor
-            END,                                        
-            currentLiquidationThreshold = CASE
-                {1}
-            ELSE currentLiquidationThreshold
-            END,
-            totalCollateralBase = CASE
-                {2}
-            ELSE totalCollateralBase
-            END,
-            totalDebtBase = CASE
-                {3}
-            ELSE totalDebtBase
-            END
-        WHERE address IN ({4}) AND network = '${key}';
-    `
-                        : "";
-
-                let arr0 = [];
-                let arr1 = [];
-                let arr2 = [];
-                let arr3 = [];
-                let arr4 = [];
-                for (let i = 0; i < chunk.length; i++) {
-                    if (chunk[i].healthFactor < 2) {
-                        arr0.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN ${chunk[i].healthFactor}`
-                        );
-                        arr1.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].currentLiquidationThreshold}'`
-                        );
-                        arr2.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalCollateralBase}'`
-                        );
-                        arr3.push(
-                            `WHEN address = '${chunk[i].address}' AND network = '${key}' THEN '${chunk[i].totalDebtBase}'`
-                        );
-                        arr4.push(`'${chunk[i].address}'`);
-                    } else {
-                        deleteAddresses.push(chunk[i].address);
-                    }
-                }
-
-                //check if we have any addresses to update
-                //arr1, arr2, arr3, arr4 should not be empty as well if arr0 is not empty
-                //if arr0 is empty, it means that there are no addresses with health factor < 2
-                if (arr0.length > 0) {
-                    query = query.replace("{0}", arr0.join(" "));
-                    query = query.replace("{1}", arr1.join(" "));
-                    query = query.replace("{2}", arr2.join(" "));
-                    query = query.replace("{3}", arr3.join(" "));
-                    query = query.replace("{4}", arr4.join(","));
-
-                    if (query) await sqlManager.execQuery(query);
-                }
-            }
+            const keys = _.map(
+                addressesUserAccountDataHFLowerThan2,
+                (o) => `addresses:${key}:${o.address}`
+            );
+            redisManager.set(keys, addressesUserAccountDataHFLowerThan2);
 
             //delete addresses from the DB where health factor is > 2
-            deleteAddresses = _.uniq(deleteAddresses);
-            if (deleteAddresses.length > 0) {
-                const chunks = _.chunk(deleteAddresses, chunkSize);
-                for (let i = 0; i < chunks.length; i++) {
-                    const sqlQuery = `
-            DELETE FROM addresses WHERE address IN ('${chunks[i].join(
-                "','"
-            )}') AND network = '${key}';
-            DELETE FROM usersReserves WHERE address IN ('${chunks[i].join(
-                "','"
-            )}') AND network = '${key}';
-            `;
-                    deleteAddressesQueries.push(sqlQuery);
-                }
-            }
-
-            for (const deleteAddressesQuery of deleteAddressesQueries) {
-                await sqlManager.execQuery(deleteAddressesQuery);
-            }
-
-            const addressesPresent = _.without(_addresses, ...deleteAddresses);
-            if (addressesPresent.length > 0) {
-                const query1 = `UPDATE addresses SET status = 1 WHERE address IN ('${addressesPresent.join(
-                    "','"
-                )}') AND network = '${key}';`;
-                await sqlManager.execQuery(query1);
-            }
+            const userAccountDataHFGreaterThan2AddressesString = _.map(
+                userAccountDataHFGreaterThan2,
+                (o) => o.address
+            ).join("|");
+            await redisManager.deleteByQuery(
+                "addresses",
+                `@network:{${key}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
+            );
+            await redisManager.deleteByQuery(
+                "usersReserves",
+                `@network:{${key}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
+            );
         }
-        await this.triggerWebServerAction("updateUsersReserves", key);
 
         await logger.log("updateUserAccountDataAndUsersReserves_chunk: End");
     }
@@ -1228,10 +979,7 @@ class Engine {
         logger.initialize("function:updateGasPrice", context);
         await this.initializeAlchemy();
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            await this.triggerWebServerAction(
-                "updateGasPrice",
-                aaveNetworkInfo.network
-            );
+            this.initializeGasPrice(aaveNetworkInfo.network);
         }
         await logger.log("updateGasPrice: End");
     }
@@ -1315,35 +1063,24 @@ class Engine {
             }
 
             if (reservesDbUpdate.length > 0) {
-                let reservesSQLList: string[] = _.map(reservesDbUpdate, (o) => {
-                    return `('${o.address}', '${key}', ${o.price}, GETUTCDATE())`;
+                const priceUpdateReserves: any = await redisManager.call(
+                    "FT.SEARCH",
+                    "idx:reserves",
+                    `@network:{${key}} @address:{${_.map(
+                        reservesDbUpdate,
+                        (o) => o.address
+                    ).join("|")}}`
+                );
+                _.each(priceUpdateReserves, (o) => {
+                    o.priceModifiedOn = moment
+                        .utc()
+                        .format("YYYY-MM-DD HH:mm:ss");
                 });
 
-                if (reservesSQLList.length > 0) {
-                    const sqlQuery = `
-                    MERGE INTO reserves AS target
-                    USING (VALUES 
-                        ${reservesSQLList.join(",")}
-                    ) AS source (address, network, price, priceModifiedOn)
-                    ON (target.address = source.address AND target.network = source.network)
-                    WHEN MATCHED THEN
-                    UPDATE SET                    
-                        priceModifiedOn = source.priceModifiedOn,    
-                        price = source.price;                        
-                        `;
-
-                    await sqlManager.execQuery(sqlQuery);
-
-                    await this.triggerWebServerAction(
-                        "updateReservesPrices",
-                        key
-                    );
-                } else {
-                    //we should actually never come here, but just in case
-                    throw new Error(
-                        "reservesSQLList is empty despite reservesDbUpdate being not empty"
-                    );
-                }
+                await redisManager.setArrayProperties(priceUpdateReserves, [
+                    "price",
+                    "priceModifiedOn",
+                ]);
             }
         }
 
@@ -1374,45 +1111,288 @@ class Engine {
 
     //#region #Testing
 
-    async doTest() {
-        await redisManager.initialize();
-        await redisManager.set("test:key", "Hello Redis!");
-        await redisManager.getValue("test:key");
+    async migrateDataToRedis() {
+        //migrate data from SQL to Redis
+        console.log("migrating data from SQL to Redis...");
+        await redisManager.deleteAllData();
 
-        await redisManager.set("test:key2", ["Hello", "Redis", "!"]);
-        const value = await redisManager.getArray("test:key2");
-        console.log(value); // Should print: ["Hello", "Redis", "!"]
+        let result = await sqlManager.execQuery("Select * from config");
+        let keys = _.map(result, (o) => `config:${o.key}`);
+        await redisManager.set(keys, result);
 
-        const object = { key: "value", number: 42 };
-        await redisManager.set("test:object", object);
-        const retrievedObject = await redisManager.getObject("test:object");
-        console.log(retrievedObject); // Should print: { key: "value", number: 42 }
+        result = await sqlManager.execQuery("Select * from addresses");
+        keys = _.map(result, (o) => `addresses:${o.network}:${o.address}`);
+        await redisManager.set(keys, result);
 
-        const retrievedObjectValue = await redisManager.getValue(
-            "test:object",
-            "key"
+        result = await sqlManager.execQuery("Select * from reserves");
+        keys = _.map(result, (o) => `reserves:${o.network}:${o.address}`);
+        await redisManager.set(keys, result);
+
+        console.log("successfully set data in redis");
+    }
+
+    async createRedisIndexes() {
+        //create indexes in Redis
+        console.log("creating indexes in Redis...");
+        redisManager.deleteAllIndexes();
+
+        await redisManager.call(
+            "FT.CREATE",
+            "idx:usersReserves",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "usersReserves:",
+            "SCHEMA",
+            "$.network",
+            "AS",
+            "network",
+            "TAG",
+            "$.address",
+            "AS",
+            "address",
+            "TAG",
+            "$.tokenAddress",
+            "AS",
+            "tokenAddress",
+            "TAG",
+            "$.currentATokenBalance",
+            "AS",
+            "currentATokenBalance",
+            "NUMERIC",
+            "$.currentStableDebt",
+            "AS",
+            "currentStableDebt",
+            "NUMERIC",
+            "$.currentVariableDebt",
+            "AS",
+            "currentVariableDebt",
+            "NUMERIC",
+            "$.principalStableDebt",
+            "AS",
+            "principalStableDebt",
+            "NUMERIC",
+            "$.scaledVariableDebt",
+            "AS",
+            "scaledVariableDebt",
+            "NUMERIC",
+            "$.stableBorrowRate",
+            "AS",
+            "stableBorrowRate",
+            "NUMERIC",
+            "$.liquidityRate",
+            "AS",
+            "liquidityRate",
+            "NUMERIC",
+            "$.stableRateLastUpdated",
+            "AS",
+            "stableRateLastUpdated",
+            "NUMERIC",
+            "$.usageAsCollateralEnabled",
+            "AS",
+            "usageAsCollateralEnabled",
+            "TAG",
+            "$.modifiedOn",
+            "AS",
+            "modifiedOn",
+            "TAG"
         );
-        console.log(retrievedObjectValue); // Should print: "value"
 
-        const o1 = {
-            key: "value",
-            number: 42,
-        };
-        const o2 = {
-            key: "value2",
-            number: 43,
-        };
+        await redisManager.call(
+            "FT.CREATE",
+            "idx:reserves",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "reserves:",
+            "SCHEMA",
+            "$.network",
+            "AS",
+            "network",
+            "TAG",
+            "$.address",
+            "AS",
+            "address",
+            "TAG",
+            "$.symbol",
+            "AS",
+            "symbol",
+            "TAG",
+            "$.decimals",
+            "AS",
+            "decimals",
+            "NUMERIC",
+            "$.reserveLiquidationThreshold",
+            "AS",
+            "reserveLiquidationThreshold",
+            "NUMERIC",
+            "$.reserveLiquidationBonus",
+            "AS",
+            "reserveLiquidationBonus",
+            "NUMERIC",
+            "$.reserveFactor",
+            "AS",
+            "reserveFactor",
+            "NUMERIC",
+            "$.usageAsCollateralEnabled",
+            "AS",
+            "usageAsCollateralEnabled",
+            "TAG",
+            "$.borrowingEnabled",
+            "AS",
+            "borrowingEnabled",
+            "TAG",
+            "$.stableBorrowRateEnabled",
+            "AS",
+            "stableBorrowRateEnabled",
+            "TAG",
+            "$.isActive",
+            "AS",
+            "isActive",
+            "TAG",
+            "$.isFrozen",
+            "AS",
+            "isFrozen",
+            "TAG",
+            "$.liquidityIndex",
+            "AS",
+            "liquidityIndex",
+            "NUMERIC",
+            "$.variableBorrowIndex",
+            "AS",
+            "variableBorrowIndex",
+            "NUMERIC",
+            "$.liquidityRate",
+            "AS",
+            "liquidityRate",
+            "NUMERIC",
+            "$.variableBorrowRate",
+            "AS",
+            "variableBorrowRate",
+            "NUMERIC",
+            "$.lastUpdateTimestamp",
+            "AS",
+            "lastUpdateTimestamp",
+            "NUMERIC",
+            "$.aTokenAddress",
+            "AS",
+            "aTokenAddress",
+            "TAG",
+            "$.totalStableDebt",
+            "AS",
+            "totalStableDebt",
+            "TAG",
+            "$.totalVariableDebt",
+            "AS",
+            "totalVariableDebt",
+            "TAG",
+            "$.ltv",
+            "AS",
+            "ltv",
+            "NUMERIC",
+            "$.price",
+            "AS",
+            "price",
+            "NUMERIC",
+            "$.variableDebtTokenAddress",
+            "AS",
+            "variableDebtTokenAddress",
+            "TAG",
+            "$.stableDebtTokenAddress",
+            "AS",
+            "stableDebtTokenAddress",
+            "TAG",
+            "$.sorting",
+            "AS",
+            "sorting",
+            "NUMERIC",
+            "$.modifiedOn",
+            "AS",
+            "modifiedOn",
+            "TAG",
+            "$.priceModifiedOn",
+            "AS",
+            "priceModifiedOn",
+            "TAG",
+            "$.liquidationProtocolFee",
+            "AS",
+            "liquidationProtocolFee",
+            "NUMERIC",
+            "$.priceOracleAggregatorAddress",
+            "AS",
+            "priceOracleAggregatorAddress",
+            "TAG"
+        );
 
-        await redisManager.set(["test:object1", "test:object2"], [o1, o2]);
-        const retrievedObjects = await redisManager.getMultiple("test:object*");
-        console.log(retrievedObjects); // Should print: [{ key: "value", number: 42 }, { key: "value2", number: 43 }]
-        return;
+        await redisManager.call(
+            "FT.CREATE",
+            "idx:addresses",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "addresses:",
+            "SCHEMA",
+            "$.network",
+            "AS",
+            "network",
+            "TAG",
+            "$.address",
+            "AS",
+            "address",
+            "TAG",
+            "$.healthFactor",
+            "AS",
+            "healthFactor",
+            "NUMERIC",
+            "$.totalDebtBase",
+            "AS",
+            "totalDebtBase",
+            "NUMERIC",
+            "$.totalCollateralBase",
+            "AS",
+            "totalCollateralBase",
+            "NUMERIC",
+            "$.currentLiquidationThreshold",
+            "AS",
+            "currentLiquidationThreshold",
+            "NUMERIC",
+            "$.addedOn",
+            "AS",
+            "addedOn",
+            "TAG",
+            "$.modifiedOn",
+            "AS",
+            "modifiedOn",
+            "TAG",
+            "$.userConfiguration",
+            "AS",
+            "userConfiguration",
+            "TAG",
+            "$.status",
+            "AS",
+            "status",
+            "NUMERIC"
+        );
 
+        console.log("successfully created indexes in redis");
+    }
+
+    async doTest() {
+        //await this.migrateDataToRedis();
+        //await this.createRedisIndexes();
+        const retrievedObjects = await redisManager.getList("addresses:*");
+        console.log(retrievedObjects.length); // Should print: [{ key: "value", number: 42 }, { key: "value2", number: 43 }]
+        //return;
+
+        /*
         await this.updateUserAccountDataAndUsersReserves_chunk(
             null,
             Network.ARB_MAINNET
         );
-        /*
+        
         const result = await transactionManager.sendSingleTransaction(
             aaveNetworkInfo,
             "store",

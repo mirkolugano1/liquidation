@@ -1,0 +1,20 @@
+name: redis-cache
+
+services:
+    redis:
+        container_name: redis-cache-container
+        image: redis/redis-stack:latest
+        ports:
+            - "6379:6379"
+            - "8001:8001" # Add this for RedisInsight UI
+        volumes:
+            - ./redis-data:/var/lib/redis-stack
+        command: redis-stack-server --appendonly yes --protected-mode no
+        restart: unless-stopped
+        networks:
+            - redis-network
+
+networks:
+    redis-network:
+        name: redis-network
+        driver: bridge

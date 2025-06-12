@@ -4,7 +4,7 @@
         {
             "label": "Kill Debug Session",
             "type": "shell",
-            "command": "sleep 1 && echo 'Terminating debugger...'",
+            "command": "timeout /t 1 && echo 'Terminating debugger...'",
             "presentation": {
                 "reveal": "never"
             },
@@ -14,7 +14,7 @@
         {
             "label": "Force Stop Debugging",
             "type": "shell",
-            "command": "echo aa && timeout /t 1 > nul",
+            "command": "timeout /t 1 > nul",
             "presentation": {
                 "reveal": "never"
             },

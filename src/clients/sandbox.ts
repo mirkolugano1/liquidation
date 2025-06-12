@@ -12,9 +12,11 @@ async function main() {
     try {
         //await encryptionManager.createPemFileFromPrivateKey();
         await engine.doTest();
-        //console.log("test");
+        console.log("test");
+        process.exit(0);
     } catch (error) {
         console.error("Error in main function:", error);
+        process.exit(1);
     }
 }
 
