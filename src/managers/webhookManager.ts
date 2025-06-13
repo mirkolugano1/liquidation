@@ -1,14 +1,15 @@
-import _ from "lodash";
+import _, { add } from "lodash";
 import engine from "../engines/engine";
 import common from "../shared/common";
 import repo from "../shared/repo";
-import sqlManager from "./sqlManager";
 import liquidationManager from "./liquidationManager";
 import transactionManager from "./transactionManager";
 import logger from "../shared/logger";
 import Constants from "../shared/constants";
 import emailManager from "./emailManager";
 import Big from "big.js";
+import redisManager from "./redisManager";
+import moment from "moment";
 
 class WebhookManager {
     private static instance: WebhookManager;
@@ -42,19 +43,19 @@ class WebhookManager {
             logger.appendToInternalLog("EventHash: " + eventHash);
             switch (eventHash) {
                 case "0x0559884fd3a460db3073b7fc896cc77986f16e378210ded43186175bf646fc5f": //AnswerUpdated
-                    const priceOracleAggregatorAddress = log.account.address;
-                    const aaveNetworkInfo = repo.aave[key];
+                    const priceOracleAggregatorAddress =
+                        log.account.address?.toLowerCase();
 
                     //check if the price oracle aggregator address is already in the reserves, otherwise
                     //email me to change the webhook
-                    const aggregators = _.map(aaveNetworkInfo.reserves, (r) =>
+                    const reserves: any = await redisManager.getList(
+                        `reserves:${key}:*`
+                    );
+                    const aggregators = _.map(reserves, (r) =>
                         r.priceOracleAggregatorAddress?.toLowerCase()
                     );
                     if (
-                        !_.includes(
-                            aggregators,
-                            priceOracleAggregatorAddress.toLowerCase()
-                        )
+                        !_.includes(aggregators, priceOracleAggregatorAddress)
                     ) {
                         logger.appendToInternalLog(
                             `Price Oracle Aggregator address ${priceOracleAggregatorAddress} not found in reserves.`
@@ -67,27 +68,33 @@ class WebhookManager {
                         const data = log.data;
                         const price = Number(BigInt(data)) / 1e8;
 
-                        for (const reserve of _.values(
-                            aaveNetworkInfo.reserves
-                        )) {
-                            if (
-                                reserve.priceOracleAggregatorAddress?.toLowerCase() ===
-                                priceOracleAggregatorAddress.toLowerCase()
-                            ) {
-                                repo.aave[key].reserves[reserve.address].price =
-                                    price;
-                            }
-                        }
-                        await liquidationManager.checkLiquidateAddressesFromInMemoryObjects(
-                            repo.aave[key]
+                        logger.appendToInternalLog(
+                            `Price updated for ${priceOracleAggregatorAddress} to ${price}`
                         );
 
                         //update price in the database
-                        const priceUpdateQuery = `
-                            UPDATE reserves SET price = ${price}
-                            WHERE priceOracleAggregatorAddress = '${priceOracleAggregatorAddress}' AND network = '${key}';
-                        `;
-                        await sqlManager.execQuery(priceUpdateQuery);
+                        const reserves: any = await redisManager.call(
+                            "FT.SEARCH",
+                            "idx:reserves",
+                            `@networkNormalized:{${common.normalizeRedisKey(
+                                key
+                            )}} @priceOracleAggregatorAddress:{${priceOracleAggregatorAddress}}`
+                        );
+
+                        _.each(reserves, (reserve: any) => {
+                            reserve.price = price;
+                            reserve.priceModifiedOn = moment
+                                .utc()
+                                .format("YYYY-MM-DD HH:mm:ss");
+                        });
+
+                        await redisManager.setArrayProperties(reserves, [
+                            "price",
+                            "priceModifiedOn",
+                        ]);
+                        await liquidationManager.checkLiquidateAddressesFromInMemoryObjects(
+                            repo.aave[key]
+                        );
                     }
                     return; //we return here because the event is not relevant for addresses
 
@@ -241,76 +248,24 @@ class WebhookManager {
                 //if there are any unique addresses to add, get their health factor and user configuration
                 if (uniqueAddresses.length > 0) {
                     logger.appendToInternalLog(
-                        `Has ${uniqueAddresses.length} unique addresses`
+                        `Adding ${uniqueAddresses.length} to DB`
                     );
-                    let addressesListSql: string[] = [];
-                    let addressesList: string[] = [];
 
-                    for (const address of uniqueAddresses) {
-                        addressesListSql.push(
-                            `('${address}', '${key}', null, GETUTCDATE())`
-                        );
-                        addressesList.push(address);
-                    }
-
-                    //if there are addresses with healthFactor < 2
-                    //add them to the batchAddressesListSql array for this network
-                    //to be monitored and saved in the database
-                    if (addressesListSql.length > 0) {
-                        logger.appendToInternalLog(
-                            `Has ${addressesListSql.length} addresses with HF < 2.`
-                        );
-                        if (
-                            !repo.aave[key].hasOwnProperty(
-                                "batchAddressesListSql"
-                            )
-                        ) {
-                            repo.aave[key].batchAddressesListSql = [];
-                        }
-                        if (!repo.aave[key].hasOwnProperty("addresses"))
-                            repo.aave[key].addresses = [];
-
-                        repo.aave[key].batchAddressesListSql = _.union(
-                            repo.aave[key].batchAddressesListSql,
-                            addressesListSql
-                        );
-                        repo.aave[key].batchAddressesList = _.union(
-                            repo.aave[key].batchAddressesList,
-                            addressesList
-                        );
-
-                        if (
-                            repo.aave[key].batchAddressesListSql.length >=
-                            repo.batchAddressesTreshold
-                        ) {
-                            logger.appendToInternalLog(
-                                `Adding ${repo.aave[key].batchAddressesListSql.length} addresses to DB.`
-                            );
-                            let query = `
-                                MERGE INTO addresses AS target
-                                USING (VALUES 
-                                    ${repo.aave[key].batchAddressesListSql.join(
-                                        ","
-                                    )}
-                                ) AS source (address, network, healthFactor, addedOn)
-                                ON (target.address = source.address AND target.network = source.network)
-                                WHEN NOT MATCHED BY TARGET THEN
-                                    INSERT (address, network, healthFactor, addedOn)
-                                    VALUES (source.address, source.network, source.healthFactor, source.addedOn);
-                            `;
-
-                            await sqlManager.execQuery(query);
-
-                            repo.aave[key].batchAddressesListSql = [];
-                            repo.aave[key].batchAddressesList = [];
-                            repo.aave[key].addresses = _.uniq(
-                                _.union(
-                                    repo.aave[key].addresses,
-                                    uniqueAddresses
-                                )
-                            );
-                        }
-                    }
+                    const dbAddresses = _.map(uniqueAddresses, (address) => {
+                        return {
+                            address: address,
+                            network: key,
+                            networkNormalized: common.normalizeRedisKey(key),
+                            healthFactor: null,
+                            status: null,
+                            addedOn: moment.utc().format("YYYY-MM-DD HH:mm:ss"),
+                        };
+                    });
+                    const addressesKeys = _.map(
+                        uniqueAddresses,
+                        (address) => `addresses:${key}:${address}`
+                    );
+                    await redisManager.set(addressesKeys, dbAddresses);
                 }
             }
 
@@ -798,19 +753,12 @@ class WebhookManager {
     ) {
         if (propertiesToCheck.length == 0) return;
 
-        //update the user reserves data in the DB
-        let valuesQuery = "";
-        for (let i = 0; i < propertiesToCheck.length; i++) {
-            const property = propertiesToCheck[i];
-            valuesQuery += `${property} = ${aaveNetworkInfo.usersReserves[userAddress][reserveAddress][property]}`;
-            if (i < propertiesToCheck.length - 1) {
-                valuesQuery += ", ";
-            }
-        }
-        const query = `UPDATE usersReserves 
-            SET ${valuesQuery}
-            WHERE address = '${userAddress}' AND tokenAddress = '${reserveAddress}' AND network = '${aaveNetworkInfo.network}'`;
-        await sqlManager.execQuery(query);
+        const userReserve =
+            aaveNetworkInfo.usersReserves[userAddress][reserveAddress];
+        await redisManager.set(
+            `usersReserves:${aaveNetworkInfo.network}:${userAddress}:${reserveAddress}`,
+            userReserve
+        );
 
         //check if the user reserves data in the DB is consistent with the one in the contract
         const userReserveData = await transactionManager.multicall(
@@ -822,8 +770,6 @@ class WebhookManager {
         );
 
         const userReserveDataObject = userReserveData[0];
-        const userReserve =
-            aaveNetworkInfo.usersReserves[userAddress][reserveAddress];
         if (!userReserve) return;
         const userReserveKeys = Object.keys(userReserve);
         let str = "";

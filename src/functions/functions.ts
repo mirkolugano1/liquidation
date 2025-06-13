@@ -150,15 +150,28 @@ app.timer("updateReservesDataTimer", {
 const updateReservesPricesOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    yield context.df.callActivity("updateReservesPricesActivity");
+    yield context.df.callActivity(
+        "updateReservesPricesActivity_initialization"
+    );
+    for (const aaveNetworkInfo of common.getNetworkInfos()) {
+        yield context.df.callActivity("updateReservesPricesActivity_loop", {
+            network: aaveNetworkInfo.network,
+        });
+    }
 };
 
 // Activity function for updating reserves prices
-const updateReservesPricesActivity: ActivityHandler = async (
+const updateReservesPricesActivity_initialization: ActivityHandler = async (
     input: unknown,
     context: InvocationContext
 ) => {
-    await engine.updateReservesPrices(context);
+    await engine.updateReservesPrices_initialization(context);
+};
+const updateReservesPricesActivity_loop: ActivityHandler = async (
+    input: { network: Network },
+    context: InvocationContext
+) => {
+    await engine.updateReservesPrices_loop(context, input.network);
 };
 
 // Timer trigger for updating reserves prices
@@ -177,8 +190,11 @@ df.app.orchestration(
     "updateReservesPricesOrchestrator",
     updateReservesPricesOrchestrator
 );
-df.app.activity("updateReservesPricesActivity", {
-    handler: updateReservesPricesActivity,
+df.app.activity("updateReservesPricesActivity_initialization", {
+    handler: updateReservesPricesActivity_initialization,
+});
+df.app.activity("updateReservesPricesActivity_loop", {
+    handler: updateReservesPricesActivity_loop,
 });
 
 // Register timer function

@@ -132,7 +132,9 @@ class Engine {
                 const queryAddresses: any = await redisManager.call(
                     "FT.SEARCH",
                     "idx:addresses",
-                    `@status:[1 1] @network:{${key}}`,
+                    `@status:[1 1] @networkNormalized:{${common.normalizeRedisKey(
+                        key
+                    )}}`,
                     "LIMIT",
                     "0",
                     `${Constants.CHUNK_SIZE}`
@@ -147,7 +149,9 @@ class Engine {
                     const dbUsersReserves: any = await redisManager.call(
                         "FT.SEARCH",
                         "idx:usersReserves",
-                        `@network:{${key}} @address:{${addressList}}`,
+                        `@networkNormalized:{${common.normalizeRedisKey(
+                            key
+                        )}} @address:{${addressList}}`,
                         "LIMIT",
                         "0",
                         "9999999"
@@ -236,12 +240,7 @@ class Engine {
                 "sorting"
             );
 
-            if (!dbReserves || dbReserves.length == 0) {
-                await logger.log(
-                    "initializeReserves: No reserves found in DB. Please run the updateReservesData function first."
-                );
-                return;
-            }
+            if (!dbReserves || dbReserves.length == 0) continue;
 
             const networkReserves = _.filter(dbReserves, { network: key });
             for (let networkReserve of networkReserves) {
@@ -310,7 +309,7 @@ class Engine {
 
             if (!common.isProd && !networkInfo.isActive) continue;
 
-            const addresses = await transactionManager.multicall(
+            const aaveAddresses = await transactionManager.multicall(
                 aaveNetworkInfo.aaveAddresses.poolAddressesProvider,
                 null,
                 Constants.ABIS.ADDRESSES_PROVIDER_ABI,
@@ -318,7 +317,7 @@ class Engine {
                 aaveNetworkInfo.network
             );
 
-            if (!addresses) {
+            if (!aaveAddresses) {
                 await logger.log(
                     `initializeAlchemy: No addresses found for network ${aaveNetworkInfo.network.toString()}. Please check the Aave addresses provider.`
                 );
@@ -326,9 +325,9 @@ class Engine {
             }
 
             networkInfo.aaveAddresses.poolDataProvider =
-                addresses[0]?.toString();
-            networkInfo.aaveAddresses.aaveOracle = addresses[1]?.toString();
-            networkInfo.aaveAddresses.pool = addresses[2]?.toString();
+                aaveAddresses[0]?.toString();
+            networkInfo.aaveAddresses.aaveOracle = aaveAddresses[1]?.toString();
+            networkInfo.aaveAddresses.pool = aaveAddresses[2]?.toString();
         }
     }
 
@@ -373,7 +372,9 @@ class Engine {
         const addressesToUpdate: any = await redisManager.call(
             "FT.SEARCH",
             "idx:addresses",
-            `@network:{${aaveNetworkInfo.network.toString()}} @status:[1 1] @address:{${addressList}}`,
+            `@networkNormalized:{${common.normalizeRedisKey(
+                aaveNetworkInfo.network.toString()
+            )}} @status:[1 1] @address:{${addressList}}`,
             "LIMIT",
             "0",
             "1000000"
@@ -436,6 +437,8 @@ class Engine {
                 const reserveAddress =
                     multicallUserReserveDataParameters[i][0].toString();
                 return {
+                    network: key,
+                    networkNormalized: common.normalizeRedisKey(key),
                     tokenAddress: reserveAddress,
                     userAddress: userAddress,
                     currentATokenBalance: userReserveData[0],
@@ -562,10 +565,10 @@ class Engine {
 
     //#endregion getUserAccountDataForAddresses
 
-    //#region updateReservePriceOracleAggregatorAddresses
+    //#region getReservePriceOracleAggregatorAddresses
 
-    async updateReservePriceOracleAggregatorAddresses(aaveNetworkInfo: any) {
-        const reservesAddressesResults: any = redisManager.getList(
+    async getReservePriceOracleAggregatorAddresses(aaveNetworkInfo: any) {
+        const reservesAddressesResults: any = await redisManager.getList(
             `reserves:${aaveNetworkInfo.network.toString()}:*`,
             "sorting"
         );
@@ -624,28 +627,21 @@ class Engine {
 
             if (
                 aggregatorAddress &&
-                aggregatorAddress.toString() !=
-                    reservesAddressesResults[i].priceOracleAggregatorAddress
+                aggregatorAddress.toLowerCase() !=
+                    reservesAddressesResults[
+                        i
+                    ].priceOracleAggregatorAddress?.toLowerCase()
             ) {
                 reservesAddressesResults[i].priceOracleAggregatorAddress =
-                    aggregatorAddress;
+                    aggregatorAddress.toLowerCase();
                 aggregators.push(reservesAddressesResults[i]);
             }
         }
 
-        if (aggregators.length > 0) {
-            const keys = _.map(
-                aggregators,
-                (o) =>
-                    `reserves:${aaveNetworkInfo.network.toString()}:${
-                        o.address
-                    }`
-            );
-            await redisManager.set(keys, aggregators);
-        }
+        return aggregators;
     }
 
-    //#endregion updateReservePriceOracleAggregatorAddresses
+    //#endregion getReservePriceOracleAggregatorAddresses
 
     //#endregion Helper methods
 
@@ -691,6 +687,7 @@ class Engine {
         const allReserveTokens: any[] = _.map(results[0][0], (o) => {
             return {
                 network: key,
+                networkNormalized: common.normalizeRedisKey(key),
                 symbol: o[0].toString(),
                 address: o[1].toString(),
             };
@@ -784,24 +781,35 @@ class Engine {
                 liquidationProtocolFees[i][0].toString();
         }
 
-        //check if there are reserves in the DB which are not in the reservesList
-        //and in case delete them from the DB
-        const fetchedReservesAddresses = _.map(
-            allReserveTokens,
-            (o) => o.address
-        );
-
         if (allReserveTokens.length > 0) {
+            _.each(allReserveTokens, (o) => {
+                o.modifiedOn = moment().utc().format("YYYY-MM-DD HH:mm:ss");
+            });
             const reservesKeys = _.map(
                 allReserveTokens,
                 (o) => `reserves:${o.network}:${o.address}`
             );
-            await redisManager.set(reservesKeys, allReserveTokens);
 
-            //update price oracle aggregators for reserves
-            await this.updateReservePriceOracleAggregatorAddresses(
-                aaveNetworkInfo
-            );
+            //get price oracle aggregators for reserves (if changed)
+            const reservesWithNewAggregators =
+                await this.getReservePriceOracleAggregatorAddresses(
+                    aaveNetworkInfo
+                );
+
+            if (reservesWithNewAggregators.length > 0) {
+                for (let i = 0; i < reservesWithNewAggregators.length; i++) {
+                    const reserve = reservesWithNewAggregators[i];
+                    allReserveTokens[
+                        _.findIndex(allReserveTokens, {
+                            address: reserve.address,
+                        })
+                    ].priceOracleAggregatorAddress =
+                        reserve.priceOracleAggregatorAddress.toLowerCase();
+                }
+            }
+
+            //save to redis
+            await redisManager.set(reservesKeys, allReserveTokens);
         }
     }
 
@@ -846,7 +854,9 @@ class Engine {
         const dbAddressesArr = await redisManager.call(
             "FT.SEARCH",
             "idx:addresses",
-            `@network:{${key}} (@status:{} | @status:{0}) @addedOn:{-inf (${timestamp}}`,
+            `@networkNormalized:{${common.normalizeRedisKey(
+                key
+            )}} (@status:{} | @status:{0}) @addedOn:{-inf (${timestamp}}`,
             "SORTBY",
             "addedOn",
             "ASC",
@@ -999,7 +1009,99 @@ class Engine {
      * @param network
      * @param context the InvocationContext of the function app on azure (for Application Insights logging)
      */
-    async updateReservesPrices(
+    async updateReservesPrices_loop(
+        context: InvocationContext | null = null,
+        network: Network
+    ) {
+        const aaveNetworkInfo = common.getAaveNetworkInfo(network);
+        const key = aaveNetworkInfo.network.toString();
+
+        //get last saved reserves prices from the DB
+        let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
+            _.values(aaveNetworkInfo.reserves),
+            "address",
+            "price"
+        );
+
+        //get current reserves prices from the network
+        const aaveOracleContract = common.getContract(
+            aaveNetworkInfo.aaveAddresses.aaveOracle,
+            Constants.ABIS.AAVE_ORACLE_ABI,
+            aaveNetworkInfo.network
+        );
+        const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
+        const currentAssetsPrices = await aaveOracleContract.getAssetsPrices(
+            reservesAddresses
+        );
+
+        let newReservesPrices: any = {};
+        for (let i = 0; i < reservesAddresses.length; i++) {
+            const reserveAddress = reservesAddresses[i];
+            const price = currentAssetsPrices[i];
+            newReservesPrices[reserveAddress] = price;
+        }
+
+        let reservesDbUpdate: any[] = [];
+        for (const reserveAddress of reservesAddresses) {
+            const oldPrice = dbAssetsPrices[reserveAddress];
+            const newPrice =
+                new Big(newReservesPrices[reserveAddress]).toNumber() / 1e8; //USD has 8 decimals
+            if (!oldPrice) {
+                //mark current reserve to be updated in the DB since no previous price is defined
+                reservesDbUpdate.push({
+                    address: reserveAddress,
+                    price: newPrice,
+                });
+                continue;
+            }
+            const normalizedChange = newPrice - oldPrice;
+
+            //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
+            if (Math.abs(normalizedChange) > 0.5) {
+                //mark current reserve to be updated in the DB since the change exceeds the treshold
+                reservesDbUpdate.push({
+                    address: reserveAddress,
+                    price: newPrice,
+                });
+            }
+        }
+
+        if (reservesDbUpdate.length > 0) {
+            const priceUpdateReservesKeys = _.map(
+                reservesDbUpdate,
+                (o) => `reserves:${key}:${o.address}`
+            );
+            const priceUpdateReserves: any =
+                await redisManager.redisClient.call(
+                    "JSON.MGET",
+                    ...priceUpdateReservesKeys,
+                    "$"
+                );
+
+            const priceUpdateReservesObjects = _.map(
+                priceUpdateReserves,
+                (o) => {
+                    let obj = JSON.parse(o)[0];
+                    return {
+                        ...obj,
+                        key: `reserves:${key}:${obj.address}`,
+                        priceModifiedOn: moment
+                            .utc()
+                            .format("YYYY-MM-DD HH:mm:ss"),
+                    };
+                }
+            );
+
+            await redisManager.setArrayProperties(priceUpdateReservesObjects, [
+                "price",
+                "priceModifiedOn",
+            ]);
+        }
+
+        await logger.log("updateReservesPrices: End");
+    }
+
+    async updateReservesPrices_initialization(
         context: InvocationContext | null = null,
         network: Network | null = null //if network is not defined, loop through all networks
     ) {
@@ -1008,83 +1110,6 @@ class Engine {
 
         await this.initializeAlchemy(network);
         await this.initializeReserves(network);
-
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            if (network && network != aaveNetworkInfo.network) continue;
-            const key = aaveNetworkInfo.network.toString();
-
-            //get last saved reserves prices from the DB
-            let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
-                _.values(aaveNetworkInfo.reserves),
-                "address",
-                "price"
-            );
-
-            //get current reserves prices from the network
-            const aaveOracleContract = common.getContract(
-                aaveNetworkInfo.aaveAddresses.aaveOracle,
-                Constants.ABIS.AAVE_ORACLE_ABI,
-                aaveNetworkInfo.network
-            );
-            const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
-            const currentAssetsPrices =
-                await aaveOracleContract.getAssetsPrices(reservesAddresses);
-
-            let newReservesPrices: any = {};
-            for (let i = 0; i < reservesAddresses.length; i++) {
-                const reserveAddress = reservesAddresses[i];
-                const price = currentAssetsPrices[i];
-                newReservesPrices[reserveAddress] = price;
-            }
-
-            let reservesDbUpdate: any[] = [];
-            for (const reserveAddress of reservesAddresses) {
-                const oldPrice = dbAssetsPrices[reserveAddress];
-                const newPrice =
-                    new Big(newReservesPrices[reserveAddress]).toNumber() / 1e8;
-                if (!oldPrice) {
-                    //mark current reserve to be updated in the DB since no previous price is defined
-                    reservesDbUpdate.push({
-                        address: reserveAddress,
-                        price: newPrice,
-                    });
-                    continue;
-                }
-                const normalizedChange = newPrice - oldPrice;
-
-                //if the normalized change is greater than the given treshold (for now 0.5 USD), we should perform the check
-                if (Math.abs(normalizedChange) > 0.5) {
-                    //mark current reserve to be updated in the DB since the change exceeds the treshold
-                    reservesDbUpdate.push({
-                        address: reserveAddress,
-                        price: newPrice,
-                    });
-                }
-            }
-
-            if (reservesDbUpdate.length > 0) {
-                const priceUpdateReserves: any = await redisManager.call(
-                    "FT.SEARCH",
-                    "idx:reserves",
-                    `@network:{${key}} @address:{${_.map(
-                        reservesDbUpdate,
-                        (o) => o.address
-                    ).join("|")}}`
-                );
-                _.each(priceUpdateReserves, (o) => {
-                    o.priceModifiedOn = moment
-                        .utc()
-                        .format("YYYY-MM-DD HH:mm:ss");
-                });
-
-                await redisManager.setArrayProperties(priceUpdateReserves, [
-                    "price",
-                    "priceModifiedOn",
-                ]);
-            }
-        }
-
-        await logger.log("updateReservesPrices: End");
     }
 
     //#endregion updateReservesPrices
@@ -1111,280 +1136,87 @@ class Engine {
 
     //#region #Testing
 
+    convertFieldValueToInteger(item: any, fieldName: string) {
+        if (item[fieldName] != null) {
+            item[fieldName] = parseInt(item[fieldName]);
+        }
+        return item;
+    }
+
     async migrateDataToRedis() {
         //migrate data from SQL to Redis
-        console.log("migrating data from SQL to Redis...");
+
+        console.log("deleting all data from redis");
         await redisManager.deleteAllData();
 
+        console.log("(re)creating Redis indexes...");
+        await redisManager.createRedisIndexes();
+
+        console.log("migrating data from SQL to Redis...");
         let result = await sqlManager.execQuery("Select * from config");
         let keys = _.map(result, (o) => `config:${o.key}`);
         await redisManager.set(keys, result);
 
         result = await sqlManager.execQuery("Select * from addresses");
+        _.each(
+            result,
+            (o) => (o.networkNormalized = common.normalizeRedisKey(o.network))
+        );
         keys = _.map(result, (o) => `addresses:${o.network}:${o.address}`);
         await redisManager.set(keys, result);
 
         result = await sqlManager.execQuery("Select * from reserves");
+        _.each(result, (o) => {
+            o.networkNormalized = common.normalizeRedisKey(o.network);
+            o = this.convertFieldValueToInteger(o, "reserveLiquidationBonus");
+            o = this.convertFieldValueToInteger(
+                o,
+                "reserveLiquidationThreshold"
+            );
+            o = this.convertFieldValueToInteger(o, "reserveFactor");
+            o = this.convertFieldValueToInteger(o, "decimals");
+            o = this.convertFieldValueToInteger(o, "liquidityIndex");
+            o = this.convertFieldValueToInteger(o, "variableBorrowIndex");
+            o = this.convertFieldValueToInteger(o, "liquidityRate");
+            o = this.convertFieldValueToInteger(o, "variableBorrowRate");
+            o = this.convertFieldValueToInteger(o, "totalStableDebt");
+            o = this.convertFieldValueToInteger(o, "totalVariableDebt");
+            o = this.convertFieldValueToInteger(o, "lastUpdateTimestamp");
+            o = this.convertFieldValueToInteger(o, "liquidationProtocolFee");
+            o = this.convertFieldValueToInteger(o, "ltv");
+
+            o.priceOracleAggregatorAddress =
+                o.priceOracleAggregatorAddress?.toLowerCase();
+        });
         keys = _.map(result, (o) => `reserves:${o.network}:${o.address}`);
         await redisManager.set(keys, result);
 
-        console.log("successfully set data in redis");
-    }
-
-    async createRedisIndexes() {
-        //create indexes in Redis
-        console.log("creating indexes in Redis...");
-        redisManager.deleteAllIndexes();
-
-        await redisManager.call(
-            "FT.CREATE",
-            "idx:usersReserves",
-            "ON",
-            "JSON",
-            "PREFIX",
-            "1",
-            "usersReserves:",
-            "SCHEMA",
-            "$.network",
-            "AS",
-            "network",
-            "TAG",
-            "$.address",
-            "AS",
-            "address",
-            "TAG",
-            "$.tokenAddress",
-            "AS",
-            "tokenAddress",
-            "TAG",
-            "$.currentATokenBalance",
-            "AS",
-            "currentATokenBalance",
-            "NUMERIC",
-            "$.currentStableDebt",
-            "AS",
-            "currentStableDebt",
-            "NUMERIC",
-            "$.currentVariableDebt",
-            "AS",
-            "currentVariableDebt",
-            "NUMERIC",
-            "$.principalStableDebt",
-            "AS",
-            "principalStableDebt",
-            "NUMERIC",
-            "$.scaledVariableDebt",
-            "AS",
-            "scaledVariableDebt",
-            "NUMERIC",
-            "$.stableBorrowRate",
-            "AS",
-            "stableBorrowRate",
-            "NUMERIC",
-            "$.liquidityRate",
-            "AS",
-            "liquidityRate",
-            "NUMERIC",
-            "$.stableRateLastUpdated",
-            "AS",
-            "stableRateLastUpdated",
-            "NUMERIC",
-            "$.usageAsCollateralEnabled",
-            "AS",
-            "usageAsCollateralEnabled",
-            "TAG",
-            "$.modifiedOn",
-            "AS",
-            "modifiedOn",
-            "TAG"
-        );
-
-        await redisManager.call(
-            "FT.CREATE",
-            "idx:reserves",
-            "ON",
-            "JSON",
-            "PREFIX",
-            "1",
-            "reserves:",
-            "SCHEMA",
-            "$.network",
-            "AS",
-            "network",
-            "TAG",
-            "$.address",
-            "AS",
-            "address",
-            "TAG",
-            "$.symbol",
-            "AS",
-            "symbol",
-            "TAG",
-            "$.decimals",
-            "AS",
-            "decimals",
-            "NUMERIC",
-            "$.reserveLiquidationThreshold",
-            "AS",
-            "reserveLiquidationThreshold",
-            "NUMERIC",
-            "$.reserveLiquidationBonus",
-            "AS",
-            "reserveLiquidationBonus",
-            "NUMERIC",
-            "$.reserveFactor",
-            "AS",
-            "reserveFactor",
-            "NUMERIC",
-            "$.usageAsCollateralEnabled",
-            "AS",
-            "usageAsCollateralEnabled",
-            "TAG",
-            "$.borrowingEnabled",
-            "AS",
-            "borrowingEnabled",
-            "TAG",
-            "$.stableBorrowRateEnabled",
-            "AS",
-            "stableBorrowRateEnabled",
-            "TAG",
-            "$.isActive",
-            "AS",
-            "isActive",
-            "TAG",
-            "$.isFrozen",
-            "AS",
-            "isFrozen",
-            "TAG",
-            "$.liquidityIndex",
-            "AS",
-            "liquidityIndex",
-            "NUMERIC",
-            "$.variableBorrowIndex",
-            "AS",
-            "variableBorrowIndex",
-            "NUMERIC",
-            "$.liquidityRate",
-            "AS",
-            "liquidityRate",
-            "NUMERIC",
-            "$.variableBorrowRate",
-            "AS",
-            "variableBorrowRate",
-            "NUMERIC",
-            "$.lastUpdateTimestamp",
-            "AS",
-            "lastUpdateTimestamp",
-            "NUMERIC",
-            "$.aTokenAddress",
-            "AS",
-            "aTokenAddress",
-            "TAG",
-            "$.totalStableDebt",
-            "AS",
-            "totalStableDebt",
-            "TAG",
-            "$.totalVariableDebt",
-            "AS",
-            "totalVariableDebt",
-            "TAG",
-            "$.ltv",
-            "AS",
-            "ltv",
-            "NUMERIC",
-            "$.price",
-            "AS",
-            "price",
-            "NUMERIC",
-            "$.variableDebtTokenAddress",
-            "AS",
-            "variableDebtTokenAddress",
-            "TAG",
-            "$.stableDebtTokenAddress",
-            "AS",
-            "stableDebtTokenAddress",
-            "TAG",
-            "$.sorting",
-            "AS",
-            "sorting",
-            "NUMERIC",
-            "$.modifiedOn",
-            "AS",
-            "modifiedOn",
-            "TAG",
-            "$.priceModifiedOn",
-            "AS",
-            "priceModifiedOn",
-            "TAG",
-            "$.liquidationProtocolFee",
-            "AS",
-            "liquidationProtocolFee",
-            "NUMERIC",
-            "$.priceOracleAggregatorAddress",
-            "AS",
-            "priceOracleAggregatorAddress",
-            "TAG"
-        );
-
-        await redisManager.call(
-            "FT.CREATE",
-            "idx:addresses",
-            "ON",
-            "JSON",
-            "PREFIX",
-            "1",
-            "addresses:",
-            "SCHEMA",
-            "$.network",
-            "AS",
-            "network",
-            "TAG",
-            "$.address",
-            "AS",
-            "address",
-            "TAG",
-            "$.healthFactor",
-            "AS",
-            "healthFactor",
-            "NUMERIC",
-            "$.totalDebtBase",
-            "AS",
-            "totalDebtBase",
-            "NUMERIC",
-            "$.totalCollateralBase",
-            "AS",
-            "totalCollateralBase",
-            "NUMERIC",
-            "$.currentLiquidationThreshold",
-            "AS",
-            "currentLiquidationThreshold",
-            "NUMERIC",
-            "$.addedOn",
-            "AS",
-            "addedOn",
-            "TAG",
-            "$.modifiedOn",
-            "AS",
-            "modifiedOn",
-            "TAG",
-            "$.userConfiguration",
-            "AS",
-            "userConfiguration",
-            "TAG",
-            "$.status",
-            "AS",
-            "status",
-            "NUMERIC"
-        );
-
-        console.log("successfully created indexes in redis");
+        console.log("successfully migrated data to redis");
     }
 
     async doTest() {
+        //await redisManager.createRedisIndexes(true);
         //await this.migrateDataToRedis();
-        //await this.createRedisIndexes();
-        const retrievedObjects = await redisManager.getList("addresses:*");
-        console.log(retrievedObjects.length); // Should print: [{ key: "value", number: 42 }, { key: "value2", number: 43 }]
+
+        await this.updateReservesPrices_initialization(
+            null,
+            Network.ARB_MAINNET
+        );
+        await this.updateReservesPrices_loop(null, Network.ARB_MAINNET);
+
+        const retrievedObjectsNew = await redisManager.getList(
+            "reserves:arb-mainnet:*"
+        );
+        console.table(
+            _.map(retrievedObjectsNew, (o) => {
+                return {
+                    symbol: o.symbol,
+                    modifiedOn: o.modifiedOn,
+                    priceModifiedOn: o.priceModifiedOn,
+                };
+            })
+        );
+
         //return;
 
         /*

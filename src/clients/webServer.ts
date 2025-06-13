@@ -45,10 +45,6 @@ app.get("/healthcheck", async (req, res) => {
     res.status(200).send("Healthy");
 });
 
-app.get("/refresh", async (req, res) => {
-    await engine.refresh(req, res);
-});
-
 app.post("/aaveEvent", async (req: any, res: any) => {
     await webhookManager.processAaveEvent(req, res);
 });

@@ -7,8 +7,8 @@ dotenv.config();
 
 class RedisManager {
     private static instance: RedisManager;
-    private redisClient: Redis = new Redis();
     private isInitialized: boolean = false;
+    public redisClient: Redis = new Redis();
 
     public static getInstance(): RedisManager {
         if (!RedisManager.instance) {
@@ -40,7 +40,12 @@ class RedisManager {
         const pipeline = this.redisClient.pipeline();
         for (const doc of objectsArray) {
             for (const key of keys) {
-                pipeline.call("JSON.SET", doc.key, "$." + key, doc[key]);
+                pipeline.call(
+                    "JSON.SET",
+                    doc.key,
+                    "$." + key,
+                    JSON.stringify(doc[key])
+                );
             }
         }
         await pipeline.exec();
@@ -65,12 +70,14 @@ class RedisManager {
         ...args: (string | number | Buffer<ArrayBufferLike>)[]
     ) {
         await this.initialize();
+        if (command === "FT.SEARCH" && !_.includes(args, "LIMIT")) {
+            args.push("LIMIT", 0, 10000);
+        }
         const results: any = await this.redisClient.call(command, ...args);
         return this.parseSearchResults(results);
     }
 
     async deleteAllIndexes() {
-        await this.initialize();
         console.log("Deleting all indexes...");
         try {
             // Get list of all indexes
@@ -198,16 +205,33 @@ class RedisManager {
         const pipeline = this.redisClient.pipeline();
 
         keys.forEach((key) => {
-            pipeline.hgetall(key);
+            pipeline.call("JSON.GET", key, "$");
         });
 
-        const result = await pipeline.exec();
-        const data = _.map(result, (item) => {
-            if (Array.isArray(item) && item[1]) {
-                return item[1];
-            }
-            return null;
-        }).filter((item) => item !== null);
+        const results: any = await pipeline.exec();
+        if (!results) return [];
+
+        // Process results
+        const data = results
+            .map((result: any, index: number) => {
+                if (result[0]) {
+                    // Error occurred
+                    console.error(`Error getting ${keys[index]}:`, result[0]);
+                    return null;
+                }
+
+                // Parse JSON result
+                try {
+                    return JSON.parse(result[1])[0]; // result[1][0] contains the JSON string
+                } catch (error) {
+                    console.error(
+                        `Error parsing JSON for ${keys[index]}:`,
+                        error
+                    );
+                    return null;
+                }
+            })
+            .filter((item: any) => item !== null); // Remove failed items
 
         // Sort if sortBy field is provided
         if (sortBy && data.length > 0) {
@@ -265,25 +289,86 @@ class RedisManager {
 
     async set(keys: string | string[], data: any): Promise<void> {
         await this.initialize();
+
         if (Array.isArray(keys)) {
             if (keys.length !== data.length) {
                 throw new Error(
                     "Keys and data arrays must have the same length."
                 );
             }
+
             const pipeline = this.redisClient.pipeline();
             for (let i = 0; i < keys.length; i++) {
-                if (Array.isArray(data[i])) pipeline.rpush(keys[i], ...data[i]);
-                else if (typeof data !== "object")
-                    pipeline.set(keys[i], data[i]);
-                else pipeline.hmset(keys[i], data[i]);
+                await this.setDataByType(pipeline, keys[i], data[i]);
             }
             await pipeline.exec();
         } else {
-            if (Array.isArray(data)) this.redisClient.rpush(keys, ...data);
-            else if (typeof data !== "object")
-                await this.redisClient.set(keys, data);
-            else await this.redisClient.hmset(keys, data);
+            await this.setDataByType(this.redisClient, keys, data);
+        }
+    }
+
+    private async setDataByType(
+        client: any,
+        key: string,
+        data: any
+    ): Promise<void> {
+        // Determine data type and storage method
+        if (data === null || data === undefined) {
+            // Store null/undefined as JSON
+            await client.call("JSON.SET", key, "$", JSON.stringify(null));
+        } else if (Array.isArray(data)) {
+            // Arrays: Store as JSON for complex arrays, or LIST for simple arrays
+            if (this.isSimpleArray(data)) {
+                // Simple array of primitives - can use LIST
+                await client.del(key); // Clear existing data
+                if (data.length > 0) {
+                    await client.rpush(
+                        key,
+                        ...data.map((item) => String(item))
+                    );
+                }
+            } else {
+                // Complex array with objects - use JSON
+                await client.call("JSON.SET", key, "$", JSON.stringify(data));
+            }
+        } else if (typeof data === "object") {
+            // Objects: Always store as JSON (not HASH)
+            await client.call("JSON.SET", key, "$", JSON.stringify(data));
+        } else if (typeof data === "string") {
+            // Strings: Check if it's JSON string or plain string
+            if (this.isJsonString(data)) {
+                // It's a JSON string, store as JSON
+                await client.call("JSON.SET", key, "$", data);
+            } else {
+                // Plain string, store as STRING
+                await client.set(key, data);
+            }
+        } else if (typeof data === "number" || typeof data === "boolean") {
+            // Primitives: Store as JSON to maintain type
+            await client.call("JSON.SET", key, "$", JSON.stringify(data));
+        } else {
+            // Fallback: Convert to JSON
+            await client.call("JSON.SET", key, "$", JSON.stringify(data));
+        }
+    }
+
+    private isSimpleArray(arr: any[]): boolean {
+        // Check if array contains only primitives (not objects)
+        return arr.every(
+            (item) =>
+                typeof item === "string" ||
+                typeof item === "number" ||
+                typeof item === "boolean" ||
+                item === null
+        );
+    }
+
+    private isJsonString(str: string): boolean {
+        try {
+            JSON.parse(str);
+            return str.trim().startsWith("{") || str.trim().startsWith("[");
+        } catch {
+            return false;
         }
     }
 
@@ -303,7 +388,272 @@ class RedisManager {
             // db: 0 // Default Redis DB
         });
 
+        const indexes: any = await this.redisClient.call("FT._LIST");
+        if (indexes.length === 0) {
+            console.log("No indexes found in Redis. Creating indexes...");
+            await this.createRedisIndexes();
+            console.log("Successfully created indexes in redis");
+        }
+
         this.isInitialized = true;
+    }
+
+    async createRedisIndexes(overwriteIndexes: boolean = false) {
+        //create indexes in Redis
+        if (overwriteIndexes) await this.deleteAllIndexes();
+
+        await this.redisClient.call(
+            "FT.CREATE",
+            "idx:usersReserves",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "usersReserves:",
+            "SCHEMA",
+            "$.network",
+            "AS",
+            "network",
+            "TAG",
+            "$.networkNormalized",
+            "AS",
+            "networkNormalized",
+            "TAG",
+            "$.address",
+            "AS",
+            "address",
+            "TAG",
+            "$.tokenAddress",
+            "AS",
+            "tokenAddress",
+            "TAG",
+            "$.currentATokenBalance",
+            "AS",
+            "currentATokenBalance",
+            "NUMERIC",
+            "$.currentStableDebt",
+            "AS",
+            "currentStableDebt",
+            "NUMERIC",
+            "$.currentVariableDebt",
+            "AS",
+            "currentVariableDebt",
+            "NUMERIC",
+            "$.principalStableDebt",
+            "AS",
+            "principalStableDebt",
+            "NUMERIC",
+            "$.scaledVariableDebt",
+            "AS",
+            "scaledVariableDebt",
+            "NUMERIC",
+            "$.stableBorrowRate",
+            "AS",
+            "stableBorrowRate",
+            "NUMERIC",
+            "$.liquidityRate",
+            "AS",
+            "liquidityRate",
+            "NUMERIC",
+            "$.stableRateLastUpdated",
+            "AS",
+            "stableRateLastUpdated",
+            "NUMERIC",
+            "$.usageAsCollateralEnabled",
+            "AS",
+            "usageAsCollateralEnabled",
+            "TAG",
+            "$.modifiedOn",
+            "AS",
+            "modifiedOn",
+            "TAG"
+        );
+
+        await this.redisClient.call(
+            "FT.CREATE",
+            "idx:reserves",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "reserves:",
+            "SCHEMA",
+            "$.network",
+            "AS",
+            "network",
+            "TAG",
+            "$.networkNormalized",
+            "AS",
+            "networkNormalized",
+            "TAG",
+            "$.address",
+            "AS",
+            "address",
+            "TAG",
+            "$.symbol",
+            "AS",
+            "symbol",
+            "TAG",
+            "$.decimals",
+            "AS",
+            "decimals",
+            "NUMERIC",
+            "$.reserveLiquidationThreshold",
+            "AS",
+            "reserveLiquidationThreshold",
+            "NUMERIC",
+            "$.reserveLiquidationBonus",
+            "AS",
+            "reserveLiquidationBonus",
+            "NUMERIC",
+            "$.reserveFactor",
+            "AS",
+            "reserveFactor",
+            "NUMERIC",
+            "$.usageAsCollateralEnabled",
+            "AS",
+            "usageAsCollateralEnabled",
+            "TAG",
+            "$.borrowingEnabled",
+            "AS",
+            "borrowingEnabled",
+            "TAG",
+            "$.stableBorrowRateEnabled",
+            "AS",
+            "stableBorrowRateEnabled",
+            "TAG",
+            "$.isActive",
+            "AS",
+            "isActive",
+            "TAG",
+            "$.isFrozen",
+            "AS",
+            "isFrozen",
+            "TAG",
+            "$.liquidityIndex",
+            "AS",
+            "liquidityIndex",
+            "NUMERIC",
+            "$.variableBorrowIndex",
+            "AS",
+            "variableBorrowIndex",
+            "NUMERIC",
+            "$.liquidityRate",
+            "AS",
+            "liquidityRate",
+            "NUMERIC",
+            "$.variableBorrowRate",
+            "AS",
+            "variableBorrowRate",
+            "NUMERIC",
+            "$.lastUpdateTimestamp",
+            "AS",
+            "lastUpdateTimestamp",
+            "NUMERIC",
+            "$.aTokenAddress",
+            "AS",
+            "aTokenAddress",
+            "TAG",
+            "$.totalStableDebt",
+            "AS",
+            "totalStableDebt",
+            "NUMERIC",
+            "$.totalVariableDebt",
+            "AS",
+            "totalVariableDebt",
+            "NUMERIC",
+            "$.ltv",
+            "AS",
+            "ltv",
+            "NUMERIC",
+            "$.price",
+            "AS",
+            "price",
+            "NUMERIC",
+            "$.variableDebtTokenAddress",
+            "AS",
+            "variableDebtTokenAddress",
+            "TAG",
+            "$.stableDebtTokenAddress",
+            "AS",
+            "stableDebtTokenAddress",
+            "TAG",
+            "$.sorting",
+            "AS",
+            "sorting",
+            "NUMERIC",
+            "$.modifiedOn",
+            "AS",
+            "modifiedOn",
+            "TAG",
+            "$.priceModifiedOn",
+            "AS",
+            "priceModifiedOn",
+            "TAG",
+            "$.liquidationProtocolFee",
+            "AS",
+            "liquidationProtocolFee",
+            "NUMERIC",
+            "$.priceOracleAggregatorAddress",
+            "AS",
+            "priceOracleAggregatorAddress",
+            "TAG"
+        );
+
+        await this.redisClient.call(
+            "FT.CREATE",
+            "idx:addresses",
+            "ON",
+            "JSON",
+            "PREFIX",
+            "1",
+            "addresses:",
+            "SCHEMA",
+            "$.network",
+            "AS",
+            "network",
+            "TAG",
+            "$.networkNormalized",
+            "AS",
+            "networkNormalized",
+            "TAG",
+            "$.address",
+            "AS",
+            "address",
+            "TAG",
+            "$.healthFactor",
+            "AS",
+            "healthFactor",
+            "NUMERIC",
+            "$.totalDebtBase",
+            "AS",
+            "totalDebtBase",
+            "NUMERIC",
+            "$.totalCollateralBase",
+            "AS",
+            "totalCollateralBase",
+            "NUMERIC",
+            "$.currentLiquidationThreshold",
+            "AS",
+            "currentLiquidationThreshold",
+            "NUMERIC",
+            "$.addedOn",
+            "AS",
+            "addedOn",
+            "TAG",
+            "$.modifiedOn",
+            "AS",
+            "modifiedOn",
+            "TAG",
+            "$.userConfiguration",
+            "AS",
+            "userConfiguration",
+            "TAG",
+            "$.status",
+            "AS",
+            "status",
+            "NUMERIC"
+        );
     }
 }
 

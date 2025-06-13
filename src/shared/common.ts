@@ -20,6 +20,10 @@ class Common {
             : Constants.AAVE_NETWORKS_INFOS;
     }
 
+    normalizeRedisKey(key: string) {
+        return key?.toLowerCase().replace("-", "_");
+    }
+
     public async getAppSetting(key: string) {
         if (!process.env.hasOwnProperty(key)) {
             const value = await encryption.getSecretFromKeyVault(key, true);
