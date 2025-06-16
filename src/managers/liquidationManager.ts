@@ -8,6 +8,7 @@ import transactionManager from "./transactionManager";
 import common from "../shared/common";
 import Constants from "../shared/constants";
 import emailManager from "./emailManager";
+import redisManager from "./redisManager";
 
 class LiquidationManager {
     private static instance: LiquidationManager;
@@ -61,9 +62,10 @@ class LiquidationManager {
         userAddressesObjects: any[] | null = null,
         usersReserves: any[] | null = null
     ) {
-        if (!userAddressesObjects) {
-            userAddressesObjects = _.values(aaveNetworkInfo.addressesObjects);
-        }
+        if (!userAddressesObjects)
+            userAddressesObjects = await redisManager.getList(
+                `addresses:${aaveNetworkInfo.network}:*`
+            );
 
         let userAddressesObjectsAddresses = _.map(
             userAddressesObjects,
@@ -78,7 +80,7 @@ class LiquidationManager {
             );
         }
 
-        if (userAddressesObjects.length > 0) {
+        if (userAddressesObjects && userAddressesObjects.length > 0) {
             for (const userAddressObject of userAddressesObjects) {
                 repo.aave[key].addressesObjects[
                     userAddressObject.address
@@ -153,12 +155,6 @@ class LiquidationManager {
                         };
                     }
                 );
-
-                await logger.log(
-                    "checkLiquidateAddressesFromInMemoryObjects: " +
-                        JSON.stringify(userAccountDatasObjects),
-                    LoggingFramework.Table
-                );
             }
             ///end of testing purposes
 
@@ -199,7 +195,7 @@ class LiquidationManager {
                                     //we are in a collateral / debt pair whose balance is both > 0.
                                     //calculate potential profit of liquidation for this asset pair
                                     const [debtToCover, profitInUSD] =
-                                        this.calculateNetLiquidationReward(
+                                        await this.calculateNetLiquidationReward(
                                             userReserve,
                                             debtUserReserve,
                                             liquidatableUserAddressObject.healthFactor,
@@ -372,7 +368,7 @@ class LiquidationManager {
 
     //#region calculateNetLiquidationReward
 
-    calculateNetLiquidationReward(
+    async calculateNetLiquidationReward(
         collateralAssetObject: any,
         debtAssetObject: any,
         healthFactor: number,
@@ -441,9 +437,12 @@ class LiquidationManager {
         const ethPriceUSD = new Big(wethReserve.price).div(
             10 ** wethReserve.decimals
         );
+        const gasPrice = await redisManager.getValue(
+            `gasPrice:${aaveNetworkInfo.network}`
+        );
         const baseTxCostWei = new Big(
             aaveNetworkInfo.averageLiquidationGasUnits
-        ).mul(aaveNetworkInfo.gasPrice);
+        ).mul(Big(gasPrice));
         const baseTxCostUSD = baseTxCostWei
             .mul(ethPriceUSD)
             .div(10 ** wethReserve.decimals);

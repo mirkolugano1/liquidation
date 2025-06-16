@@ -78,7 +78,6 @@ class Engine {
         await this.initializeAlchemy();
         await this.initializeAddresses();
         await this.initializeReserves();
-        await this.initializeGasPrice();
         await this.initializeUsersReserves();
 
         console.log("Web server initialized");
@@ -209,11 +208,14 @@ class Engine {
                     }
                 }
 
+                //Note: this is no longer useful
+                /*
                 //set status to 2 for all addresses that have been loaded
                 _.each(queryAddresses, (o) => {
                     o.status = 2;
                 });
                 await redisManager.setArrayProperties(queryAddresses, "status");
+                */
             } while (hasAddressesToBeLoaded);
 
             await logger.log(
@@ -251,20 +253,6 @@ class Engine {
     }
 
     //#endregion initializeReserves
-
-    //#region initializeGasPrice
-
-    async initializeGasPrice(network: Network | string | null = null) {
-        if (!repo.aave) throw new Error("Aave object not initialized");
-        const key = network?.toString() ?? null;
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            if (network && key != aaveNetworkInfo.network.toString()) continue;
-            const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
-            repo.aave[aaveNetworkInfo.network].gasPrice = gasPrice;
-        }
-    }
-
-    //#endregion initializeGasPrice
 
     //#region initializeAlchemy
 
@@ -352,6 +340,24 @@ class Engine {
     //
     //
 
+    //#region convertFieldValueToInteger
+
+    /**
+     * Converts the field value to an integer if it is not null
+     * @param item the item to convert
+     * @param fieldName the field name to convert
+     * @returns the item with the field value converted to an integer
+     */
+
+    convertFieldValueToInteger(item: any, fieldName: string) {
+        if (item[fieldName] != null) {
+            item[fieldName] = parseInt(item[fieldName]);
+        }
+        return item;
+    }
+
+    //#endregion convertFieldValueToInteger
+
     //#region updateUserConfiguration
 
     async updateUserConfiguration(
@@ -374,10 +380,7 @@ class Engine {
             "idx:addresses",
             `@networkNormalized:{${common.normalizeRedisKey(
                 aaveNetworkInfo.network.toString()
-            )}} @status:[1 1] @address:{${addressList}}`,
-            "LIMIT",
-            "0",
-            "1000000"
+            )}} @address:{${addressList}}`
         );
 
         for (let i = 0; i < userConfigurations.length; i++) {
@@ -401,6 +404,7 @@ class Engine {
         userAddressesObjects: any[],
         aaveNetworkInfo: any
     ) {
+        if (!userAddressesObjects || userAddressesObjects.length == 0) return;
         const key = aaveNetworkInfo.network.toString();
 
         let multicallUserReserveDataParameters: any[] = [];
@@ -427,41 +431,29 @@ class Engine {
             aaveNetworkInfo.network
         );
 
-        let sqlQueries: string[] = [];
-
-        let userReservesObjects: any[] = [];
-        if (results.length > 0) {
-            userReservesObjects = _.map(results, (userReserveData, i) => {
-                const userAddress =
-                    multicallUserReserveDataParameters[i][1].toString();
-                const reserveAddress =
-                    multicallUserReserveDataParameters[i][0].toString();
-                return {
-                    network: key,
-                    networkNormalized: common.normalizeRedisKey(key),
-                    tokenAddress: reserveAddress,
-                    userAddress: userAddress,
-                    currentATokenBalance: userReserveData[0],
-                    currentStableDebt: userReserveData[1],
-                    currentVariableDebt: userReserveData[2],
-                    principalStableDebt: userReserveData[3],
-                    scaledVariableDebt: userReserveData[4],
-                    stableBorrowRate: userReserveData[5],
-                    liquidityRate: userReserveData[6],
-                    stableRateLastUpdated: userReserveData[7].toString(),
-                    usageAsCollateralEnabled: sqlManager.getBitFromBoolean(
-                        userReserveData[8].toString()
-                    ),
-                };
-            });
-
-            const redisUserReservesKeys = _.map(
-                userReservesObjects,
-                (o: any) =>
-                    `usersReserves:${key}:${o.userAddress}:${o.tokenAddress}`
-            );
-            await redisManager.set(redisUserReservesKeys, userReservesObjects);
-        }
+        const userReservesObjects = _.map(results, (userReserveData, i) => {
+            const userAddress =
+                multicallUserReserveDataParameters[i][1].toString();
+            const reserveAddress =
+                multicallUserReserveDataParameters[i][0].toString();
+            return {
+                network: key,
+                networkNormalized: common.normalizeRedisKey(key),
+                tokenAddress: reserveAddress,
+                userAddress: userAddress,
+                currentATokenBalance: userReserveData[0],
+                currentStableDebt: userReserveData[1],
+                currentVariableDebt: userReserveData[2],
+                principalStableDebt: userReserveData[3],
+                scaledVariableDebt: userReserveData[4],
+                stableBorrowRate: userReserveData[5],
+                liquidityRate: userReserveData[6],
+                stableRateLastUpdated: userReserveData[7].toString(),
+                usageAsCollateralEnabled: sqlManager.getBitFromBoolean(
+                    userReserveData[8].toString()
+                ),
+            };
+        });
 
         const allUserReserveObjectsAddresses = _.uniq(
             _.map(userReservesObjects, (o) => o.userAddress)
@@ -472,30 +464,34 @@ class Engine {
                 o.healthFactor < 1 &&
                 _.includes(allUserReserveObjectsAddresses, o.address)
         );
-        const liquidatableUserAddressObjectsAddresses = _.map(
-            liquidatableUserAddressObjects,
-            (o) => o.address
-        );
-        const liquidatableUserReserves = _.filter(userReservesObjects, (o) =>
-            liquidatableUserAddressObjectsAddresses.includes(o.userAddress)
-        );
 
-        await liquidationManager.checkLiquidateAddressesFromInMemoryObjects(
-            aaveNetworkInfo,
-            liquidatableUserAddressObjects,
-            liquidatableUserReserves
-        );
+        if (liquidatableUserAddressObjects.length > 0) {
+            const liquidatableUserAddressObjectsAddresses = _.map(
+                liquidatableUserAddressObjects,
+                (o) => o.address
+            );
+            const liquidatableUserReserves = _.filter(
+                userReservesObjects,
+                (o) =>
+                    liquidatableUserAddressObjectsAddresses.includes(
+                        o.userAddress
+                    )
+            );
 
-        if (sqlQueries.length > 0) {
-            for (const sqlQuery of sqlQueries) {
-                await sqlManager.execQuery(sqlQuery);
-            }
-        } else {
-            //we should actually never come here, but just in case
-            throw new Error(
-                "No user reserves data found for the given addresses"
+            await liquidationManager.checkLiquidateAddressesFromInMemoryObjects(
+                aaveNetworkInfo,
+                liquidatableUserAddressObjects,
+                liquidatableUserReserves
             );
         }
+
+        //save data to redis
+        const redisUserReservesKeys = _.map(
+            userReservesObjects,
+            (o: any) =>
+                `usersReserves:${key}:${o.userAddress}:${o.tokenAddress}`
+        );
+        await redisManager.set(redisUserReservesKeys, userReservesObjects);
     }
 
     //#endregion updateUsersReservesData
@@ -783,7 +779,7 @@ class Engine {
 
         if (allReserveTokens.length > 0) {
             _.each(allReserveTokens, (o) => {
-                o.modifiedOn = moment().utc().format("YYYY-MM-DD HH:mm:ss");
+                o.modifiedOn = moment().utc().unix();
             });
             const reservesKeys = _.map(
                 allReserveTokens,
@@ -817,6 +813,25 @@ class Engine {
 
     //#region updateUserAccountDataAndUserReserves
 
+    async updateUserAccountDataAndUsersReserves_initialization(
+        context: InvocationContext | null = null
+    ) {
+        await this.initializeAlchemy();
+        await this.initializeReserves();
+        await this.initializeAddresses();
+
+        //set status to null for all addresses in the DB
+        //this will allow to update the userAccountData and userReserves for all addresses
+        const utcNow = moment().utc().unix();
+        await redisManager.set(
+            "config:lastUpdateUserAccountDataAndUsersReserves",
+            utcNow
+        );
+
+        const allAddresses = await redisManager.getList(`addresses:*`);
+        _.each(allAddresses, (address) => (address.status = null));
+        await redisManager.setArrayProperties(allAddresses, "status");
+    }
     /**
      * This method should be scheduled to run every 2-3 hours
      *
@@ -828,8 +843,7 @@ class Engine {
      */
     async updateUserAccountDataAndUsersReserves_chunk(
         context: InvocationContext | null,
-        network: Network,
-        isRecursiveCall: boolean = false
+        network: Network
     ) {
         logger.initialize(
             "function:updateUserAccountDataAndUsersReserves",
@@ -839,70 +853,29 @@ class Engine {
             `Start updateUserAccountDataAndUsersReserves_chunk for network ${network}`
         );
 
-        await this.initializeAlchemy(network);
-        await this.initializeReserves(network);
-        await this.initializeAddresses(network);
-
-        const chunkSize = Constants.CHUNK_SIZE;
         const key = network.toString();
         const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
-        let deleteAddressesQueries: string[] = [];
         const timestamp = await redisManager.getValue(
             "config:lastUpdateUserAccountDataAndUsersReserves"
         );
-
+        //mirko
+        const query = `@networkNormalized:{${common.normalizeRedisKey(
+            key
+        )}} @status:[0 0] @addedOn:[-inf ${timestamp}]`;
         const dbAddressesArr = await redisManager.call(
             "FT.SEARCH",
             "idx:addresses",
-            `@networkNormalized:{${common.normalizeRedisKey(
-                key
-            )}} (@status:{} | @status:{0}) @addedOn:{-inf (${timestamp}}`,
+            query,
             "SORTBY",
             "addedOn",
             "ASC",
             "LIMIT",
             "0",
-            chunkSize.toString()
+            Constants.CHUNK_SIZE.toString()
         );
 
-        if (dbAddressesArr.length == 0) {
-            if (!isRecursiveCall) {
-                //if we come here, it means that we have already processed all addresses
-                //and we can set the status to null for all addresses
-                //and update the lastUpdateUserAccountDataAndUsersReserves timestamp in the config, so that
-                //updates can start over again
-                const utcNow = moment().utc().format("YYYY-MM-DD HH:mm:ss");
-                await redisManager.set(
-                    "config:lastUpdateUserAccountDataAndUsersReserves",
-                    utcNow
-                );
-
-                const allAddresses = await redisManager.getList(
-                    `addresses:${key}:*`
-                );
-                _.each(allAddresses, (address) => (address.status = null));
-                await redisManager.setArrayProperties(allAddresses, "status");
-
-                //run the update again, it should start over again
-                await this.updateUserAccountDataAndUsersReserves_chunk(
-                    context,
-                    network,
-                    true
-                );
-            } else {
-                await logger.warning(
-                    "Recursive call (1) should never fall into here. Addresses: " +
-                        dbAddressesArr.length
-                );
-            }
-        } else {
-            if (isRecursiveCall) {
-                await logger.warning(
-                    "Recursive call (2) should never fall into here. Addresses: " +
-                        dbAddressesArr.length
-                );
-            }
-
+        const hasData: boolean = dbAddressesArr.length > 0;
+        if (hasData) {
             const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
             const results = await this.getUserAccountDataForAddresses(
@@ -913,10 +886,6 @@ class Engine {
             const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
                 return o.healthFactor > 2;
             });
-            let deleteAddresses = _.map(
-                userAccountDataHFGreaterThan2,
-                (o) => o.address
-            );
             const addressesUserAccountDataHFLowerThan2 = _.filter(
                 results,
                 (o) => {
@@ -954,9 +923,6 @@ class Engine {
             }
 
             //Save data to the DB:
-            //NOTE: it is not necessary to save the totalDebtBase to the DB, since
-            //it will be calculated anyway from the usersReserves data.
-            //I leave it here anyway for now, since it is not a big deal to save it
             const keys = _.map(
                 addressesUserAccountDataHFLowerThan2,
                 (o) => `addresses:${key}:${o.address}`
@@ -979,6 +945,7 @@ class Engine {
         }
 
         await logger.log("updateUserAccountDataAndUsersReserves_chunk: End");
+        return hasData; //return true if there are more addresses to process, false otherwise
     }
 
     //#endregion updateUserAccountDataAndUserReserves
@@ -988,9 +955,15 @@ class Engine {
     async updateGasPrice(context: InvocationContext | null = null) {
         logger.initialize("function:updateGasPrice", context);
         await this.initializeAlchemy();
+
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            this.initializeGasPrice(aaveNetworkInfo.network);
+            const gasPrice = await aaveNetworkInfo.alchemy.core.getGasPrice();
+            await redisManager.set(
+                `gasPrice:${aaveNetworkInfo.network}`,
+                gasPrice.toString()
+            );
         }
+
         await logger.log("updateGasPrice: End");
     }
 
@@ -1085,9 +1058,7 @@ class Engine {
                     return {
                         ...obj,
                         key: `reserves:${key}:${obj.address}`,
-                        priceModifiedOn: moment
-                            .utc()
-                            .format("YYYY-MM-DD HH:mm:ss"),
+                        priceModifiedOn: moment.utc().unix(),
                     };
                 }
             );
@@ -1114,34 +1085,9 @@ class Engine {
 
     //#endregion updateReservesPrices
 
-    //#region deleteOldTablesEntries
-
-    /**
-     * deletes old entries from the logs table older than 2 days
-     * so that the table does not grow indefinitely
-     *
-     * @param context the InvocationContext of the function app (for Application Insights logging)
-     */
-    async deleteOldTablesEntries(context: InvocationContext | null = null) {
-        logger.initialize("function:deleteOldTablesEntries", context);
-        const query = `
-            DELETE FROM dbo.logs WHERE timestamp < DATEADD(DAY, -2, GETUTCDATE());            
-        `;
-        await sqlManager.execQuery(query);
-    }
-
-    //#endregion Function: deleteOldTablesEntries
-
     //#endregion Scheduled azure functions
 
     //#region #Testing
-
-    convertFieldValueToInteger(item: any, fieldName: string) {
-        if (item[fieldName] != null) {
-            item[fieldName] = parseInt(item[fieldName]);
-        }
-        return item;
-    }
 
     async migrateDataToRedis() {
         //migrate data from SQL to Redis
@@ -1155,13 +1101,18 @@ class Engine {
         console.log("migrating data from SQL to Redis...");
         let result = await sqlManager.execQuery("Select * from config");
         let keys = _.map(result, (o) => `config:${o.key}`);
-        await redisManager.set(keys, result);
+        await redisManager.set(
+            keys,
+            _.map(result, (o) => o.value)
+        );
 
         result = await sqlManager.execQuery("Select * from addresses");
-        _.each(
-            result,
-            (o) => (o.networkNormalized = common.normalizeRedisKey(o.network))
-        );
+        _.each(result, (o) => {
+            o.status = 0;
+            if (o.addedOn) o.addedOn = moment(o.addedOn).unix();
+            if (o.modifiedOn) o.modifiedOn = moment(o.modifiedOn).unix();
+            o.networkNormalized = common.normalizeRedisKey(o.network);
+        });
         keys = _.map(result, (o) => `addresses:${o.network}:${o.address}`);
         await redisManager.set(keys, result);
 
@@ -1198,24 +1149,17 @@ class Engine {
         //await redisManager.createRedisIndexes(true);
         //await this.migrateDataToRedis();
 
-        await this.updateReservesPrices_initialization(
-            null,
-            Network.ARB_MAINNET
-        );
-        await this.updateReservesPrices_loop(null, Network.ARB_MAINNET);
-
-        const retrievedObjectsNew = await redisManager.getList(
-            "reserves:arb-mainnet:*"
-        );
-        console.table(
-            _.map(retrievedObjectsNew, (o) => {
-                return {
-                    symbol: o.symbol,
-                    modifiedOn: o.modifiedOn,
-                    priceModifiedOn: o.priceModifiedOn,
-                };
-            })
-        );
+        await this.updateUserAccountDataAndUsersReserves_initialization();
+        for (const aaveNetworkInfo of common.getNetworkInfos()) {
+            let hasMoreData = true;
+            while (hasMoreData) {
+                hasMoreData =
+                    await this.updateUserAccountDataAndUsersReserves_chunk(
+                        null,
+                        aaveNetworkInfo.network
+                    );
+            }
+        }
 
         //return;
 

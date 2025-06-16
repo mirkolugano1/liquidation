@@ -8,7 +8,6 @@ import {
 import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
-import logger from "../shared/logger";
 
 // =========== Gas Price Update ===========
 // Orchestrator for gas price update
@@ -44,49 +43,6 @@ app.timer("updateGasPriceTimer", {
     schedule: "0 0 * * *", // Cron expression for every day at 00:00 h
     extraInputs: [df.input.durableClient()],
     handler: updateGasPriceTimer,
-});
-
-// =========== Delete Old Tables Entries ===========
-// Orchestrator for deleting old table entries
-const deleteOldTablesEntriesOrchestrator: OrchestrationHandler = function* (
-    context: OrchestrationContext
-) {
-    yield context.df.callActivity("deleteOldTablesEntriesActivity");
-};
-
-// Activity function for deleting old table entries
-const deleteOldTablesEntriesActivity: ActivityHandler = async (
-    input: unknown,
-    context: InvocationContext
-) => {
-    await engine.deleteOldTablesEntries(context);
-};
-
-// Timer trigger for deleting old table entries
-const deleteOldTablesEntriesTimer = async (
-    myTimer: Timer,
-    context: InvocationContext
-): Promise<void> => {
-    const client = df.getClient(context);
-    const instanceId = await client.startNew(
-        "deleteOldTablesEntriesOrchestrator"
-    );
-};
-
-// Register orchestrator and activity
-df.app.orchestration(
-    "deleteOldTablesEntriesOrchestrator",
-    deleteOldTablesEntriesOrchestrator
-);
-df.app.activity("deleteOldTablesEntriesActivity", {
-    handler: deleteOldTablesEntriesActivity,
-});
-
-// Register timer function
-app.timer("deleteOldTablesEntriesTimer", {
-    schedule: "1 0 * * *", // Cron expression for every day at 00:01 h
-    extraInputs: [df.input.durableClient()],
-    handler: deleteOldTablesEntriesTimer,
 });
 
 // =========== Update Reserves Data ===========
@@ -208,15 +164,27 @@ app.timer("updateReservesPricesTimer", {
 // Orchestrator
 const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     function* (context: OrchestrationContext) {
+        yield context.df.callActivity(
+            "updateUserAccountDataAndUsersReservesActivity_initialization"
+        );
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            yield context.df.callActivity(
-                "updateUserAccountDataAndUsersReservesActivity_chunk",
-                { network: aaveNetworkInfo.network }
-            );
+            let hasMoreData = true;
+            while (hasMoreData) {
+                hasMoreData = yield context.df.callActivity(
+                    "updateUserAccountDataAndUsersReservesActivity_chunk",
+                    { network: aaveNetworkInfo.network }
+                );
+            }
         }
     };
 
 // Activity function
+const updateUserAccountDataAndUsersReservesActivity_initialization: ActivityHandler =
+    async (input: any, context: InvocationContext) => {
+        await engine.updateUserAccountDataAndUsersReserves_initialization(
+            context
+        );
+    };
 const updateUserAccountDataAndUsersReservesActivity_chunk: ActivityHandler =
     async (input: { network: Network }, context: InvocationContext) => {
         await engine.updateUserAccountDataAndUsersReserves_chunk(
@@ -241,13 +209,19 @@ df.app.orchestration(
     "updateUserAccountDataAndUsersReservesOrchestrator",
     updateUserAccountDataAndUsersReservesOrchestrator
 );
+df.app.activity(
+    "updateUserAccountDataAndUsersReservesActivity_initialization",
+    {
+        handler: updateUserAccountDataAndUsersReservesActivity_initialization,
+    }
+);
 df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
     handler: updateUserAccountDataAndUsersReservesActivity_chunk,
 });
 
 // Register timer function
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
-    schedule: "*/3 * * * *", // Cron expression for every n minutes
+    schedule: "*/15 * * * *", // Cron expression for every n minutes
     extraInputs: [df.input.durableClient()],
     handler: updateUserAccountDataAndUsersReservesTimer,
 });

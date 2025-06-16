@@ -83,9 +83,7 @@ class WebhookManager {
 
                         _.each(reserves, (reserve: any) => {
                             reserve.price = price;
-                            reserve.priceModifiedOn = moment
-                                .utc()
-                                .format("YYYY-MM-DD HH:mm:ss");
+                            reserve.priceModifiedOn = moment.utc().unix();
                         });
 
                         await redisManager.setArrayProperties(reserves, [
@@ -257,8 +255,8 @@ class WebhookManager {
                             network: key,
                             networkNormalized: common.normalizeRedisKey(key),
                             healthFactor: null,
-                            status: null,
-                            addedOn: moment.utc().format("YYYY-MM-DD HH:mm:ss"),
+                            status: 0,
+                            addedOn: moment.utc().unix(),
                         };
                     });
                     const addressesKeys = _.map(

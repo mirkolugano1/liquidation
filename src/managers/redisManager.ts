@@ -271,19 +271,39 @@ class RedisManager {
 
         // Skip the count (first element) and process pairs
         for (let i = 1; i < results.length; i += 2) {
-            const key = results[i]; // Redis key
-            const docArray = results[i + 1]; // Document data
+            const key = results[i];
+            const docArray = results[i + 1];
 
-            if (Array.isArray(docArray) && docArray[0] === "$") {
-                // JSON document - parse the JSON string
-                const docData = JSON.parse(docArray[1]);
-                documents.push({
-                    key: key,
-                    ...docData,
-                });
+            if (Array.isArray(docArray)) {
+                // Find the "$" entry in the array and parse its JSON string
+                const dollarIdx = docArray.indexOf("$");
+                if (
+                    dollarIdx !== -1 &&
+                    typeof docArray[dollarIdx + 1] === "string"
+                ) {
+                    try {
+                        const docData = JSON.parse(docArray[dollarIdx + 1]);
+                        documents.push({
+                            key: key,
+                            ...docData,
+                        });
+                    } catch (e) {
+                        // If JSON parsing fails, fallback to including raw data
+                        documents.push({
+                            key: key,
+                            raw: docArray,
+                        });
+                    }
+                } else {
+                    // Fallback: map field-value pairs
+                    const docObj: any = { key };
+                    for (let j = 0; j < docArray.length; j += 2) {
+                        docObj[docArray[j]] = docArray[j + 1];
+                    }
+                    documents.push(docObj);
+                }
             }
         }
-
         return documents;
     }
 
@@ -345,7 +365,7 @@ class RedisManager {
             }
         } else if (typeof data === "number" || typeof data === "boolean") {
             // Primitives: Store as JSON to maintain type
-            await client.call("JSON.SET", key, "$", JSON.stringify(data));
+            await client.set(key, String(data));
         } else {
             // Fallback: Convert to JSON
             await client.call("JSON.SET", key, "$", JSON.stringify(data));
@@ -466,7 +486,7 @@ class RedisManager {
             "$.modifiedOn",
             "AS",
             "modifiedOn",
-            "TAG"
+            "NUMERIC"
         );
 
         await this.redisClient.call(
@@ -585,11 +605,11 @@ class RedisManager {
             "$.modifiedOn",
             "AS",
             "modifiedOn",
-            "TAG",
+            "NUMERIC",
             "$.priceModifiedOn",
             "AS",
             "priceModifiedOn",
-            "TAG",
+            "NUMERIC",
             "$.liquidationProtocolFee",
             "AS",
             "liquidationProtocolFee",
@@ -640,11 +660,11 @@ class RedisManager {
             "$.addedOn",
             "AS",
             "addedOn",
-            "TAG",
+            "NUMERIC",
             "$.modifiedOn",
             "AS",
             "modifiedOn",
-            "TAG",
+            "NUMERIC",
             "$.userConfiguration",
             "AS",
             "userConfiguration",
