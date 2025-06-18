@@ -17,6 +17,11 @@ class RedisManager {
         return RedisManager.instance;
     }
 
+    async getMultipleJsonKeys(keys: string[]): Promise<any[]> {
+        const values = await this.redisClient.mget(keys);
+        return values.map((val) => (val ? JSON.parse(val) : null));
+    }
+
     /**
     /* Sets properties of multiple objects in Redis.
     /* The properties must be specified in the objectsArray and must already contain the correct value.
@@ -187,7 +192,8 @@ class RedisManager {
 
     async getObject(key: string): Promise<any> {
         await this.initialize();
-        return await this.redisClient.hgetall(key);
+        const result: any = await this.redisClient.call("JSON.GET", key, "$");
+        return result ? JSON.parse(result)[0] : null;
     }
 
     async getArrayValue(key: string): Promise<any[]> {
@@ -353,7 +359,12 @@ class RedisManager {
             }
         } else if (typeof data === "object") {
             // Objects: Always store as JSON (not HASH)
-            await client.call("JSON.SET", key, "$", JSON.stringify(data));
+            try {
+                await client.call("JSON.SET", key, "$", JSON.stringify(data));
+            } catch (error) {
+                console.error(`Error setting key ${key}:`, data);
+                throw new Error(`Failed to set key ${key}`);
+            }
         } else if (typeof data === "string") {
             // Strings: Check if it's JSON string or plain string
             if (this.isJsonString(data)) {

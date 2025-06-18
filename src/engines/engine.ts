@@ -22,6 +22,7 @@ import redisManager from "../managers/redisManager";
 import { sql } from "@azure/functions/types/app";
 import { query } from "mssql";
 import { red } from "bn.js";
+import fileManager from "../managers/fileManager";
 
 //#endregion Imports
 
@@ -294,28 +295,6 @@ class Engine {
             });
 
             repo.aave[key] = networkInfo;
-
-            if (!common.isProd && !networkInfo.isActive) continue;
-
-            const aaveAddresses = await transactionManager.multicall(
-                aaveNetworkInfo.aaveAddresses.poolAddressesProvider,
-                null,
-                Constants.ABIS.ADDRESSES_PROVIDER_ABI,
-                ["getPoolDataProvider", "getPriceOracle", "getPool"],
-                aaveNetworkInfo.network
-            );
-
-            if (!aaveAddresses) {
-                await logger.log(
-                    `initializeAlchemy: No addresses found for network ${aaveNetworkInfo.network.toString()}. Please check the Aave addresses provider.`
-                );
-                return;
-            }
-
-            networkInfo.aaveAddresses.poolDataProvider =
-                aaveAddresses[0]?.toString();
-            networkInfo.aaveAddresses.aaveOracle = aaveAddresses[1]?.toString();
-            networkInfo.aaveAddresses.pool = aaveAddresses[2]?.toString();
         }
     }
 
@@ -360,7 +339,45 @@ class Engine {
 
     //#region updateUserConfiguration
 
-    async updateUserConfiguration(
+    async updateUserProperties(
+        addressesObjects: any[],
+        network: Network | string
+    ): Promise<any[]> {
+        if (!addressesObjects || addressesObjects.length == 0) return [];
+        const addresses = _.map(addressesObjects, (o) => o.address);
+        const aaveNetworkInfo = common.getAaveNetworkInfo(network);
+        const userConfigurations = await transactionManager.multicall(
+            aaveNetworkInfo.aaveAddresses.pool,
+            addresses,
+            Constants.ABIS.POOL_ABI,
+            "getUserConfiguration",
+            aaveNetworkInfo.network
+        );
+        const eModes = await transactionManager.multicall(
+            aaveNetworkInfo.aaveAddresses.pool,
+            addresses,
+            Constants.ABIS.POOL_ABI,
+            "getUserEMode",
+            aaveNetworkInfo.network
+        );
+
+        for (let i = 0; i < addressesObjects.length; i++) {
+            const userConfiguration = new Big(userConfigurations[i])
+                .toNumber()
+                .toString(2);
+            addressesObjects[i].userConfiguration = userConfiguration;
+            addressesObjects[i].eMode = eModes[i];
+            addressesObjects[i].status = 1;
+        }
+
+        return addressesObjects;
+    }
+
+    //#endregion updateUserConfiguration
+
+    //#region updateUserEMode
+
+    async updateUserEMode(
         addresses: string | string[],
         network: Network | string
     ) {
@@ -370,7 +387,7 @@ class Engine {
             aaveNetworkInfo.aaveAddresses.pool,
             addresses,
             Constants.ABIS.POOL_ABI,
-            "getUserConfiguration",
+            "getUserEMode",
             aaveNetworkInfo.network
         );
 
@@ -396,7 +413,7 @@ class Engine {
         );
     }
 
-    //#endregion updateUserConfiguration
+    //#endregion updateUserEMode
 
     //#region updateUsersReservesData
 
@@ -441,13 +458,13 @@ class Engine {
                 networkNormalized: common.normalizeRedisKey(key),
                 tokenAddress: reserveAddress,
                 userAddress: userAddress,
-                currentATokenBalance: userReserveData[0],
-                currentStableDebt: userReserveData[1],
-                currentVariableDebt: userReserveData[2],
-                principalStableDebt: userReserveData[3],
-                scaledVariableDebt: userReserveData[4],
-                stableBorrowRate: userReserveData[5],
-                liquidityRate: userReserveData[6],
+                currentATokenBalance: userReserveData[0].toString(),
+                currentStableDebt: userReserveData[1].toString(),
+                currentVariableDebt: userReserveData[2].toString(),
+                principalStableDebt: userReserveData[3].toString(),
+                scaledVariableDebt: userReserveData[4].toString(),
+                stableBorrowRate: userReserveData[5].toString(),
+                liquidityRate: userReserveData[6].toString(),
                 stableRateLastUpdated: userReserveData[7].toString(),
                 usageAsCollateralEnabled: sqlManager.getBitFromBoolean(
                     userReserveData[8].toString()
@@ -563,15 +580,10 @@ class Engine {
 
     //#region getReservePriceOracleAggregatorAddresses
 
-    async getReservePriceOracleAggregatorAddresses(aaveNetworkInfo: any) {
-        const reservesAddressesResults: any = await redisManager.getList(
-            `reserves:${aaveNetworkInfo.network.toString()}:*`,
-            "sorting"
-        );
-        const reservesAddresses = _.map(
-            reservesAddressesResults,
-            (o) => o.address
-        );
+    async getReservePriceOracleAggregatorAddresses(
+        aaveNetworkInfo: any,
+        reservesAddresses: string[] = []
+    ) {
         const priceOracles = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.aaveOracle,
             reservesAddresses,
@@ -621,17 +633,7 @@ class Engine {
                 }
             }
 
-            if (
-                aggregatorAddress &&
-                aggregatorAddress.toLowerCase() !=
-                    reservesAddressesResults[
-                        i
-                    ].priceOracleAggregatorAddress?.toLowerCase()
-            ) {
-                reservesAddressesResults[i].priceOracleAggregatorAddress =
-                    aggregatorAddress.toLowerCase();
-                aggregators.push(reservesAddressesResults[i]);
-            }
+            aggregators.push(aggregatorAddress.toLowerCase());
         }
 
         return aggregators;
@@ -650,6 +652,71 @@ class Engine {
     //
     //
     //
+
+    //#region updateEModeCategoryData
+
+    async updateEModeCategoryData(aaveNetworkInfo: any) {
+        const pool = common.getContract(
+            aaveNetworkInfo.aaveAddresses.pool,
+            Constants.ABIS.POOL_ABI,
+            aaveNetworkInfo.network
+        );
+
+        let eModeCategory = 0;
+        let hasCategoryData = true;
+        let redisKeysEModeCategoryData: string[] = [];
+        let redisValuesEModeCategoryData: any[] = [];
+        const aaveOracleContract = common.getContract(
+            aaveNetworkInfo.aaveAddresses.aaveOracle,
+            Constants.ABIS.AAVE_ORACLE_ABI,
+            aaveNetworkInfo.network
+        );
+        while (hasCategoryData) {
+            eModeCategory++;
+            try {
+                const _eModeCategoryData = await pool.getEModeCategoryData(
+                    eModeCategory
+                );
+
+                let eModePrice = 0;
+                if (_eModeCategoryData[3] !== Constants.ZERO_ADDRESS) {
+                    eModePrice = await aaveOracleContract.getAssetPrice(
+                        _eModeCategoryData[3]
+                    );
+                }
+                const eModeCategoryData: any = {
+                    ltv: _eModeCategoryData[0].toString(),
+                    liquidationThreshold: _eModeCategoryData[1].toString(),
+                    liquidationBonus: _eModeCategoryData[2].toString(),
+                    priceSource: _eModeCategoryData[3].toString(),
+                    eModePrice: eModePrice.toString(),
+                };
+
+                redisKeysEModeCategoryData.push(
+                    `eModeCategoryData:${aaveNetworkInfo.network.toString()}:${eModeCategory}`
+                );
+                redisValuesEModeCategoryData.push(eModeCategoryData);
+            } catch (error) {
+                hasCategoryData = false;
+                continue;
+            }
+        }
+
+        const pipeline = redisManager.redisClient.multi();
+        for (let i = 0; i < redisKeysEModeCategoryData.length; i++) {
+            const key = redisKeysEModeCategoryData[i];
+            const value = redisValuesEModeCategoryData[i];
+            pipeline.call("JSON.SET", key, "$", JSON.stringify(value));
+        }
+        for (let i = eModeCategory; i < 100; i++) {
+            pipeline.del(
+                `eModeCategoryData:${aaveNetworkInfo.network.toString()}:${i}`
+            );
+        }
+        await pipeline.exec();
+    }
+
+    //#endregion updateEModeCategoryData
 
     //#region updateReservesData
 
@@ -672,6 +739,9 @@ class Engine {
         const key = network.toString();
         const aaveNetworkInfo = common.getAaveNetworkInfo(key);
 
+        //update eMode category data
+        await this.updateEModeCategoryData(aaveNetworkInfo);
+
         const results = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
             null,
@@ -689,28 +759,38 @@ class Engine {
             };
         });
 
+        const allReserveTokensAddresses = _.map(
+            allReserveTokens,
+            (o) => o.address
+        );
+
         const reserveTokenAddress = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
-            _.map(allReserveTokens, (o) => o.address),
+            allReserveTokensAddresses,
             Constants.ABIS.POOL_DATA_PROVIDER_ABI,
             "getReserveTokensAddresses",
             aaveNetworkInfo.network
         );
 
+        const eModeCategoryResults = await transactionManager.multicall(
+            aaveNetworkInfo.aaveAddresses.poolDataProvider,
+            allReserveTokensAddresses,
+            Constants.ABIS.POOL_DATA_PROVIDER_ABI,
+            "getReserveEModeCategory",
+            aaveNetworkInfo.network
+        );
+
         //const reserveTokenAddress = results[1][0];
         for (let i = 0; i < reserveTokenAddress.length; i++) {
-            allReserveTokens[i].atokenAddress =
+            allReserveTokens[i].eModeCategory =
+                eModeCategoryResults[i][0].toString();
+            allReserveTokens[i].aTokenAddress =
                 reserveTokenAddress[i][0].toString();
-            allReserveTokens[i].stableDebttokenAddress =
+            allReserveTokens[i].stableDebtTokenAddress =
                 reserveTokenAddress[i][1].toString();
-            allReserveTokens[i].variableDebttokenAddress =
+            allReserveTokens[i].variableDebtTokenAddress =
                 reserveTokenAddress[i][2].toString();
         }
-
-        const allReserveTokensAddresses = _.map(
-            allReserveTokens,
-            (o) => o.address
-        );
 
         const reservesData = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
@@ -752,7 +832,7 @@ class Engine {
         );
 
         for (let i = 0; i < reservesConfigData.length; i++) {
-            allReserveTokens[i].decimals = reservesConfigData[i][0];
+            allReserveTokens[i].decimals = reservesConfigData[i][0].toString();
             allReserveTokens[i].ltv = reservesConfigData[i][1].toString();
             allReserveTokens[i].reserveLiquidationThreshold =
                 reservesConfigData[i][2].toString();
@@ -787,20 +867,50 @@ class Engine {
             );
 
             //get price oracle aggregators for reserves (if changed)
-            const reservesWithNewAggregators =
+            const aggregators =
                 await this.getReservePriceOracleAggregatorAddresses(
-                    aaveNetworkInfo
+                    aaveNetworkInfo,
+                    allReserveTokensAddresses
                 );
 
-            if (reservesWithNewAggregators.length > 0) {
-                for (let i = 0; i < reservesWithNewAggregators.length; i++) {
-                    const reserve = reservesWithNewAggregators[i];
+            if (aggregators.length > 0) {
+                for (let i = 0; i < aggregators.length; i++) {
+                    allReserveTokens[i].priceOracleAggregatorAddress =
+                        aggregators[i];
+                }
+            }
+
+            const aggregatorsMappings = _.map(allReserveTokens, (o) => ({
+                address: o.address,
+                priceOracleAggregatorAddress: o.priceOracleAggregatorAddress,
+            }));
+            const aggregatorsMappingsWithAggregatorDefined: any[] = _.filter(
+                aggregatorsMappings,
+                (o) => o.priceOracleAggregatorAddress
+            );
+            //fetch and save aggregators decimals
+            const aggregatorsDecimals = await transactionManager.multicall(
+                _.map(
+                    aggregatorsMappingsWithAggregatorDefined,
+                    "priceOracleAggregatorAddress"
+                ),
+                null,
+                Constants.ABIS.AGGREGATOR_ABI,
+                "decimals",
+                aaveNetworkInfo.network
+            );
+            for (let i = 0; i < aggregatorsDecimals.length; i++) {
+                const tokenAddress =
+                    aggregatorsMappingsWithAggregatorDefined[i].address;
+                const indexOfToken = _.findIndex(
+                    allReserveTokens,
+                    (o) => o.address === tokenAddress
+                );
+                if (indexOfToken >= 0) {
                     allReserveTokens[
-                        _.findIndex(allReserveTokens, {
-                            address: reserve.address,
-                        })
-                    ].priceOracleAggregatorAddress =
-                        reserve.priceOracleAggregatorAddress.toLowerCase();
+                        indexOfToken
+                    ].priceOracleAggregatorDecimals =
+                        aggregatorsDecimals[i][0].toString();
                 }
             }
 
@@ -858,7 +968,7 @@ class Engine {
         const timestamp = await redisManager.getValue(
             "config:lastUpdateUserAccountDataAndUsersReserves"
         );
-        //mirko
+
         const query = `@networkNormalized:{${common.normalizeRedisKey(
             key
         )}} @status:[0 0] @addedOn:[-inf ${timestamp}]`;
@@ -886,7 +996,7 @@ class Engine {
             const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
                 return o.healthFactor > 2;
             });
-            const addressesUserAccountDataHFLowerThan2 = _.filter(
+            let addressesUserAccountDataHFLowerThan2 = _.filter(
                 results,
                 (o) => {
                     return o.healthFactor <= 2;
@@ -894,27 +1004,12 @@ class Engine {
             );
 
             if (addressesUserAccountDataHFLowerThan2.length > 0) {
-                await this.updateUserConfiguration(
-                    _.map(
+                //update userConfiguration, userEMode, status for addresses with health factor < 2
+                addressesUserAccountDataHFLowerThan2 =
+                    await this.updateUserProperties(
                         addressesUserAccountDataHFLowerThan2,
-                        (o) => o.address
-                    ),
-                    aaveNetworkInfo.network
-                );
-
-                for (
-                    let i = 0;
-                    i < addressesUserAccountDataHFLowerThan2.length;
-                    i++
-                ) {
-                    const userAddress =
-                        addressesUserAccountDataHFLowerThan2[i].address;
-                    addressesUserAccountDataHFLowerThan2[i].userConfiguration =
-                        repo.aave[key].addressesObjects[
-                            userAddress
-                        ].userConfiguration;
-                    addressesUserAccountDataHFLowerThan2[i].status = 1;
-                }
+                        aaveNetworkInfo.network
+                    );
 
                 await this.updateUsersReservesData(
                     addressesUserAccountDataHFLowerThan2,
@@ -989,13 +1084,6 @@ class Engine {
         const aaveNetworkInfo = common.getAaveNetworkInfo(network);
         const key = aaveNetworkInfo.network.toString();
 
-        //get last saved reserves prices from the DB
-        let dbAssetsPrices = common.getJsonObjectFromKeyValuesArray(
-            _.values(aaveNetworkInfo.reserves),
-            "address",
-            "price"
-        );
-
         //get current reserves prices from the network
         const aaveOracleContract = common.getContract(
             aaveNetworkInfo.aaveAddresses.aaveOracle,
@@ -1016,9 +1104,14 @@ class Engine {
 
         let reservesDbUpdate: any[] = [];
         for (const reserveAddress of reservesAddresses) {
-            const oldPrice = dbAssetsPrices[reserveAddress];
+            const oldPrice = aaveNetworkInfo.reserves[reserveAddress];
+            const reservePriceOracleAggregatorDecimals =
+                aaveNetworkInfo.reserves[
+                    reserveAddress
+                ].priceOracleAggregatorDecimals.toString();
             const newPrice =
-                new Big(newReservesPrices[reserveAddress]).toNumber() / 1e8; //USD has 8 decimals
+                new Big(newReservesPrices[reserveAddress]).toNumber() /
+                (reservePriceOracleAggregatorDecimals ?? 0); //USD has 8 decimals
             if (!oldPrice) {
                 //mark current reserve to be updated in the DB since no previous price is defined
                 reservesDbUpdate.push({
@@ -1044,6 +1137,8 @@ class Engine {
                 reservesDbUpdate,
                 (o) => `reserves:${key}:${o.address}`
             );
+
+            //todo evtl just save price and priceModifiedOn to redis without loading the whole object from redis?
             const priceUpdateReserves: any =
                 await redisManager.redisClient.call(
                     "JSON.MGET",
@@ -1148,6 +1243,47 @@ class Engine {
     async doTest() {
         //await redisManager.createRedisIndexes(true);
         //await this.migrateDataToRedis();
+
+        await this.initializeAlchemy();
+
+        const aaveNetworkInfo1 = common.getAaveNetworkInfo(Network.ARB_MAINNET);
+        await this.initializeReserves();
+
+        logger.initialize("function:doTest", null);
+        const address = "0x02d722f73a59d51d845ae9972b28d28b4b795c65";
+        await this.initializeAlchemy();
+        await this.initializeAddresses();
+        await this.updateReservesData_loop(null, Network.ARB_MAINNET);
+        return;
+        await this.initializeReserves();
+        await this.updateReservesPrices_loop(null, Network.ARB_MAINNET);
+        await this.initializeReserves();
+        const aaveNetworkInfo = common.getAaveNetworkInfo(Network.ARB_MAINNET);
+        const uad = await transactionManager.multicall(
+            aaveNetworkInfo.aaveAddresses.pool,
+            address,
+            Constants.ABIS.POOL_ABI,
+            "getUserAccountData",
+            aaveNetworkInfo.network
+        );
+        console.log("Collateral from Chain", Number(uad[0][0]) / 10 ** 8);
+
+        const uao = await redisManager.getObject(
+            `addresses:${aaveNetworkInfo.network}:${address}`
+        );
+        await this.updateUsersReservesData([uao], aaveNetworkInfo);
+
+        const userReserves = await redisManager.getList(
+            `usersReserves:${aaveNetworkInfo.network}:${address}:*`
+        );
+        const tcb = liquidationManager.calculateTotalCollateralBaseForAddress(
+            address,
+            aaveNetworkInfo,
+            userReserves
+        );
+        console.log("Collateral Calculated", tcb);
+
+        return;
 
         await this.updateUserAccountDataAndUsersReserves_initialization();
         for (const aaveNetworkInfo of common.getNetworkInfos()) {

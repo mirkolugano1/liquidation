@@ -75,8 +75,17 @@ class LiquidationManager {
         const key = aaveNetworkInfo.network.toString();
 
         if (!usersReserves) {
-            usersReserves = _.map(repo.aave[key].usersReserves, (o) =>
-                _.includes(userAddressesObjectsAddresses, o.address)
+            const reserves = aaveNetworkInfo.reserves;
+            let usersReservesKeys: string[] = [];
+            _.each(userAddressesObjectsAddresses, (o) => {
+                _.each(reserves, (reserve: any) => {
+                    usersReservesKeys.push(
+                        `usersReserves:${aaveNetworkInfo.network}:${o}:${reserve.address}`
+                    );
+                });
+            });
+            usersReserves = await redisManager.getMultipleJsonKeys(
+                usersReservesKeys
             );
         }
 
@@ -87,7 +96,8 @@ class LiquidationManager {
                 ].totalCollateralBase =
                     this.calculateTotalCollateralBaseForAddress(
                         userAddressObject.address,
-                        aaveNetworkInfo
+                        aaveNetworkInfo,
+                        usersReserves
                     );
                 repo.aave[key].addressesObjects[
                     userAddressObject.address
@@ -105,10 +115,14 @@ class LiquidationManager {
                     userAddressObject.currentLiquidationThreshold
                 );
 
-                await this.checkUserAccountDataBeforeLiquidation(
-                    userAddressObject.address,
-                    aaveNetworkInfo
-                );
+                //as long as liquidations are not enabled, we check the results from chain
+                //to ensure that the off-chain calculations are correct
+                if (!repo.liquidationsEnabled) {
+                    await this.checkUserAccountDataBeforeLiquidation(
+                        userAddressObject.address,
+                        aaveNetworkInfo
+                    );
+                }
 
                 if (
                     repo.aave[key].addressesObjects[userAddressObject.address]
@@ -117,46 +131,6 @@ class LiquidationManager {
                     liquidatableAddresses.push(userAddressObject.address);
                 }
             }
-
-            /////
-            //only for testing purposes, to compare calculated data with on-chain data
-            if (!common.isProd) {
-                const userAccountDatas = await transactionManager.multicall(
-                    aaveNetworkInfo.aaveAddresses.pool,
-                    userAddressesObjectsAddresses,
-                    Constants.ABIS.POOL_ABI,
-                    "getUserAccountData",
-                    aaveNetworkInfo.network
-                );
-
-                const userAccountDatasObjects = _.map(
-                    userAccountDatas,
-                    (userAccountData: any, index: number) => {
-                        return {
-                            address: userAddressesObjectsAddresses[index],
-                            chainTotalCollateralBase: userAccountData[0],
-                            chainTotalDebtBase: userAccountData[1],
-                            chainHealthFactor:
-                                common.getHealthFactorFromUserAccountData(
-                                    userAccountData
-                                ),
-                            offchainTotalCollateralBase:
-                                repo.aave[key].addressesObjects[
-                                    userAddressesObjectsAddresses[index]
-                                ].totalCollateralBase,
-                            offchainTotalDebtBase:
-                                repo.aave[key].addressesObjects[
-                                    userAddressesObjectsAddresses[index]
-                                ].totalDebtBase,
-                            offchainHealthFactor:
-                                repo.aave[key].addressesObjects[
-                                    userAddressesObjectsAddresses[index]
-                                ].healthFactor,
-                        };
-                    }
-                );
-            }
-            ///end of testing purposes
 
             if (liquidatableAddresses.length > 0) {
                 const liquidatableUserAddressObjects = _.filter(
@@ -230,36 +204,6 @@ class LiquidationManager {
                         );
                 }
 
-                // Log the number of liquidatable addresses and the details of profitable liquidations
-                if (!common.isProd) {
-                    const profitableLiquidationsAddresses = _.map(
-                        profitableLiquidations,
-                        (o) => o.address
-                    );
-                    const uads = await transactionManager.multicall(
-                        aaveNetworkInfo.aaveAddresses.pool,
-                        profitableLiquidationsAddresses,
-                        Constants.ABIS.POOL_ABI,
-                        "getUserAccountData",
-                        aaveNetworkInfo.network
-                    );
-                    for (let i = 0; i < uads.length; i++) {
-                        const uad = uads[i];
-                        profitableLiquidations[i].test_healthFactorFromChain =
-                            common.getHealthFactorFromUserAccountData(uad);
-                    }
-
-                    await logger.log(
-                        "checkLiquidateAddressesFromInMemoryObjects: " +
-                            JSON.stringify({
-                                liquidatableAddressesCount:
-                                    liquidatableAddresses.length,
-                                profitableLiquidations: profitableLiquidations,
-                            }),
-                        LoggingFramework.Table
-                    );
-                }
-
                 if (profitableLiquidations.length > 0) {
                     if (repo.liquidationsEnabled) {
                         const liquidationsPromises = _.map(
@@ -312,13 +256,6 @@ class LiquidationManager {
         address: string,
         aaveNetworkInfo: any
     ) {
-        if (!this.liquidationServerEnvironment) {
-            this.liquidationServerEnvironment = await common.getAppSetting(
-                "LIQUIDATIONSERVERENVIRONMENT"
-            );
-        }
-        if (this.liquidationServerEnvironment == "function") return;
-
         const userAccountData = aaveNetworkInfo.addressesObjects[address];
         if (!userAccountData) return;
 
@@ -357,6 +294,9 @@ class LiquidationManager {
             }
         }
         if (str.length > 0) {
+            console.log(
+                `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${address}: ${str}`
+            );
             /*
             await logger.log(
                 `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${address}: ${str}`,
@@ -466,13 +406,16 @@ class LiquidationManager {
 
     //#region calculateTotalDebtBaseForAddress
 
-    calculateTotalDebtBaseForAddress(address: string, aaveNetworkInfo: any) {
+    calculateTotalDebtBaseForAddress(
+        address: string,
+        aaveNetworkInfo: any,
+        usersReserves: any[] | null = null
+    ) {
         const reserves = _.values(aaveNetworkInfo.reserves);
-        const userReserves = aaveNetworkInfo.usersReserves[address];
-        if (!userReserves || userReserves.length == 0) return 0;
+        if (!usersReserves || usersReserves.length == 0) return 0;
 
         let debts = _.map(reserves, (reserve) => {
-            const userReserve = _.find(userReserves, (o) => {
+            const userReserve = _.find(usersReserves, (o) => {
                 return o.tokenAddress == reserve.address;
             });
             if (!userReserve) return null;
@@ -490,7 +433,8 @@ class LiquidationManager {
         if (!debts || debts.length == 0) return 0;
         return debts.reduce((total: any, debt: any) => {
             const { price, address, balance, decimals } = debt;
-            const baseAmount = (balance * price) / 10 ** decimals;
+            const balanceInTokens = Number(balance) / 10 ** decimals;
+            const baseAmount = balanceInTokens * price;
             return total + baseAmount;
         }, 0);
     }
@@ -501,14 +445,14 @@ class LiquidationManager {
 
     calculateTotalCollateralBaseForAddress(
         address: string,
-        aaveNetworkInfo: any
-    ) {
+        aaveNetworkInfo: any,
+        usersReserves: any[] | null = null
+    ): Number {
         const reserves = _.values(aaveNetworkInfo.reserves);
-        const userReserves = aaveNetworkInfo.usersReserves[address];
-        if (!userReserves || userReserves.length == 0) return 0;
+        if (!usersReserves || usersReserves.length == 0) return 0;
 
         let collaterals = _.map(reserves, (reserve) => {
-            const userReserve = _.find(userReserves, (o) => {
+            const userReserve = _.find(usersReserves, (o) => {
                 return o.tokenAddress == reserve.address;
             });
             if (!userReserve) return null;
@@ -526,14 +470,24 @@ class LiquidationManager {
             (o: any) => !o || !o.usageAsCollateralEnabled || o.balance == 0
         );
         if (!collaterals || collaterals.length == 0) return 0;
+
         const externalCollateral =
             aaveNetworkInfo.addressesObjects[address].externalCollateral ?? 0;
+
         return (
             externalCollateral +
-            collaterals.reduce((total: any, debt: any) => {
-                const { price, address, balance, decimals } = debt;
-                const baseAmount = (balance * price) / 10 ** decimals;
-                return total + baseAmount;
+            collaterals.reduce((total: number, collateral: any) => {
+                const { price, balance, decimals } = collateral;
+                if (balance == 0 || price == 0) return total;
+
+                const balanceInTokens = Big(balance);
+                const priceBig = Big(price);
+                const decimalsDivisor = Big(10).pow(decimals);
+                const baseAmount = balanceInTokens
+                    .mul(priceBig)
+                    .div(decimalsDivisor);
+
+                return total + Number(baseAmount);
             }, 0)
         );
     }

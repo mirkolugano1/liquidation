@@ -16,10 +16,11 @@ class Constants {
         {
             network: Network.ARB_MAINNET,
             aaveAddresses: {
-                //this will be filled up at startup from the initializeAlchemy() method with the other useful addresses
-                //fetching the other addresses from the pool address provider
                 poolAddressesProvider:
-                    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb",
+                    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", //no longer used since poolDataProvider must be used from perihpery instead of core
+                aaveOracle: "0xb56c2F0B653B2e0b10C9b928C8580Ac5Df02C7C7",
+                pool: "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+                poolDataProvider: "0x69FA688f1Dc47d4B5d8029D5a35FB7a548310654", //from aave-v3-periphery
             },
             averageLiquidationGasUnits: 170000,
             liquidationContractAddress: "???", //TODO
@@ -101,6 +102,7 @@ class Constants {
         TOKEN_ABI: ["function balanceOf(address) view returns (uint256)"],
 
         POOL_ABI: [
+            "function getEModeCategoryData(uint8) view returns (tuple(uint16,uint16,uint16,address,string,uint128,uint128))",
             "function getUserAccountData(address user) view returns (uint256 totalCollateralETH, uint256 totalDebtETH, uint256 availableBorrowsETH, uint256 currentLiquidationThreshold, uint256 ltv, uint256 healthFactor)",
             "function getUserEMode(address user) external view returns (uint256)",
             "function liquidationCall(bytes32 args1, bytes32 args2) external",
@@ -154,6 +156,7 @@ class Constants {
         ],
 
         AGGREGATOR_ABI: [
+            "function decimals() view returns (uint8)",
             "function aggregator() external view returns (address)",
             "function BASE_TO_USD_AGGREGATOR() view returns (address)",
             "function ASSET_TO_USD_AGGREGATOR() view returns (address)",
