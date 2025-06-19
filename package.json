@@ -18,7 +18,7 @@
         "applicationinsights": "^3.6.0",
         "asn1.js": "^5.4.1",
         "axios": "^1.8.4",
-        "big.js": "^6.2.2",
+        "bignumber.js": "^9.3.0",
         "bn.js": "^5.2.2",
         "copyfiles": "^2.4.1",
         "dotenv": "^16.4.7",

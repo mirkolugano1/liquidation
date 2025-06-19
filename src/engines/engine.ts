@@ -1,28 +1,20 @@
 //#region #Imports
 
 import common from "../shared/common";
-import _ from "lodash";
+import _, { add } from "lodash";
 import encryption from "../managers/encryptionManager";
 import sqlManager from "../managers/sqlManager";
-import { ethers, formatUnits } from "ethers";
-import Big from "big.js";
+import { ethers } from "ethers";
 import logger from "../shared/logger";
 import { InvocationContext } from "@azure/functions";
-import { LoggingFramework } from "../shared/enums";
 import Constants from "../shared/constants";
 import { Alchemy, Network } from "alchemy-sdk";
-import emailManager from "../managers/emailManager";
-import axios from "axios";
-import { c, r } from "tar";
 import repo from "../shared/repo";
 import liquidationManager from "../managers/liquidationManager";
 import transactionManager from "../managers/transactionManager";
 import moment from "moment";
 import redisManager from "../managers/redisManager";
-import { sql } from "@azure/functions/types/app";
-import { query } from "mssql";
-import { red } from "bn.js";
-import fileManager from "../managers/fileManager";
+import { BigNumber } from "bignumber.js";
 
 //#endregion Imports
 
@@ -171,52 +163,8 @@ class Engine {
                         repo.aave[key] = _.assign(aaveNetworkInfo, {
                             usersReserves: usersReserves,
                         });
-
-                        //calculate "external" collateral for all users in case of credit delegation in order to
-                        // take it into account when receiving events from Alchemy
-                        for (
-                            let i = 0;
-                            i < repo.aave[key].addresses.length;
-                            i++
-                        ) {
-                            const address = repo.aave[key].addresses[i];
-                            if (!repo.aave[key].usersReserves[address])
-                                continue;
-                            const userReserves =
-                                repo.aave[key].usersReserves[address];
-                            if (!userReserves || userReserves.length == 0)
-                                continue;
-                            const externalCollateral = _.reduce(
-                                userReserves,
-                                (
-                                    total: number,
-                                    userReserve: {
-                                        currentATokenBalance: number;
-                                    }
-                                ) => {
-                                    return (
-                                        total +
-                                        (userReserve.currentATokenBalance || 0)
-                                    );
-                                },
-                                0
-                            );
-
-                            repo.aave[key].addressesObjects[
-                                address
-                            ].externalCollateral = externalCollateral;
-                        }
                     }
                 }
-
-                //Note: this is no longer useful
-                /*
-                //set status to 2 for all addresses that have been loaded
-                _.each(queryAddresses, (o) => {
-                    o.status = 2;
-                });
-                await redisManager.setArrayProperties(queryAddresses, "status");
-                */
             } while (hasAddressesToBeLoaded);
 
             await logger.log(
@@ -362,11 +310,11 @@ class Engine {
         );
 
         for (let i = 0; i < addressesObjects.length; i++) {
-            const userConfiguration = new Big(userConfigurations[i])
+            const userConfiguration = BigNumber(userConfigurations[i])
                 .toNumber()
                 .toString(2);
             addressesObjects[i].userConfiguration = userConfiguration;
-            addressesObjects[i].eMode = eModes[i];
+            addressesObjects[i].userEModeCategory = eModes[i];
             addressesObjects[i].status = 1;
         }
 
@@ -401,7 +349,7 @@ class Engine {
         );
 
         for (let i = 0; i < userConfigurations.length; i++) {
-            const userConfiguration = new Big(userConfigurations[i])
+            const userConfiguration = BigNumber(userConfigurations[i])
                 .toNumber()
                 .toString(2);
             addressesToUpdate[i].userConfiguration = userConfiguration;
@@ -653,9 +601,9 @@ class Engine {
     //
     //
 
-    //#region updateEModeCategoryData
+    //#region updateEModeCategories
 
-    async updateEModeCategoryData(aaveNetworkInfo: any) {
+    async updateEModeCategories(aaveNetworkInfo: any) {
         const pool = common.getContract(
             aaveNetworkInfo.aaveAddresses.pool,
             Constants.ABIS.POOL_ABI,
@@ -664,8 +612,8 @@ class Engine {
 
         let eModeCategory = 0;
         let hasCategoryData = true;
-        let redisKeysEModeCategoryData: string[] = [];
-        let redisValuesEModeCategoryData: any[] = [];
+        let redisKeysEModeCategories: string[] = [];
+        let redisValuesEModeCategories: any[] = [];
         const aaveOracleContract = common.getContract(
             aaveNetworkInfo.aaveAddresses.aaveOracle,
             Constants.ABIS.AAVE_ORACLE_ABI,
@@ -678,9 +626,9 @@ class Engine {
                     eModeCategory
                 );
 
-                let eModePrice = 0;
+                let eModeAssetPrice = 0;
                 if (_eModeCategoryData[3] !== Constants.ZERO_ADDRESS) {
-                    eModePrice = await aaveOracleContract.getAssetPrice(
+                    eModeAssetPrice = await aaveOracleContract.getAssetPrice(
                         _eModeCategoryData[3]
                     );
                 }
@@ -689,13 +637,13 @@ class Engine {
                     liquidationThreshold: _eModeCategoryData[1].toString(),
                     liquidationBonus: _eModeCategoryData[2].toString(),
                     priceSource: _eModeCategoryData[3].toString(),
-                    eModePrice: eModePrice.toString(),
+                    eModeAssetPrice: eModeAssetPrice.toString(),
                 };
 
-                redisKeysEModeCategoryData.push(
+                redisKeysEModeCategories.push(
                     `eModeCategoryData:${aaveNetworkInfo.network.toString()}:${eModeCategory}`
                 );
-                redisValuesEModeCategoryData.push(eModeCategoryData);
+                redisValuesEModeCategories.push(eModeCategoryData);
             } catch (error) {
                 hasCategoryData = false;
                 continue;
@@ -703,20 +651,20 @@ class Engine {
         }
 
         const pipeline = redisManager.redisClient.multi();
-        for (let i = 0; i < redisKeysEModeCategoryData.length; i++) {
-            const key = redisKeysEModeCategoryData[i];
-            const value = redisValuesEModeCategoryData[i];
+        for (let i = 0; i < redisKeysEModeCategories.length; i++) {
+            const key = redisKeysEModeCategories[i];
+            const value = redisValuesEModeCategories[i];
             pipeline.call("JSON.SET", key, "$", JSON.stringify(value));
         }
         for (let i = eModeCategory; i < 100; i++) {
             pipeline.del(
-                `eModeCategoryData:${aaveNetworkInfo.network.toString()}:${i}`
+                `eModeCategories:${aaveNetworkInfo.network.toString()}:${i}`
             );
         }
         await pipeline.exec();
     }
 
-    //#endregion updateEModeCategoryData
+    //#endregion updateEModeCategories
 
     //#region updateReservesData
 
@@ -740,7 +688,7 @@ class Engine {
         const aaveNetworkInfo = common.getAaveNetworkInfo(key);
 
         //update eMode category data
-        await this.updateEModeCategoryData(aaveNetworkInfo);
+        await this.updateEModeCategories(aaveNetworkInfo);
 
         const results = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.poolDataProvider,
@@ -782,7 +730,7 @@ class Engine {
 
         //const reserveTokenAddress = results[1][0];
         for (let i = 0; i < reserveTokenAddress.length; i++) {
-            allReserveTokens[i].eModeCategory =
+            allReserveTokens[i].eModeAssetCategory =
                 eModeCategoryResults[i][0].toString();
             allReserveTokens[i].aTokenAddress =
                 reserveTokenAddress[i][0].toString();
@@ -1104,14 +1052,16 @@ class Engine {
 
         let reservesDbUpdate: any[] = [];
         for (const reserveAddress of reservesAddresses) {
-            const oldPrice = aaveNetworkInfo.reserves[reserveAddress];
-            const reservePriceOracleAggregatorDecimals =
-                aaveNetworkInfo.reserves[
-                    reserveAddress
-                ].priceOracleAggregatorDecimals.toString();
+            const oldPrice = aaveNetworkInfo.reserves[reserveAddress].price;
+            const poad =
+                aaveNetworkInfo.reserves[reserveAddress]
+                    .priceOracleAggregatorDecimals;
+            const reservePriceOracleAggregatorDecimals = poad
+                ? parseInt(poad)
+                : 8;
             const newPrice =
-                new Big(newReservesPrices[reserveAddress]).toNumber() /
-                (reservePriceOracleAggregatorDecimals ?? 0); //USD has 8 decimals
+                BigNumber(newReservesPrices[reserveAddress]).toNumber() /
+                10 ** reservePriceOracleAggregatorDecimals;
             if (!oldPrice) {
                 //mark current reserve to be updated in the DB since no previous price is defined
                 reservesDbUpdate.push({
@@ -1133,35 +1083,18 @@ class Engine {
         }
 
         if (reservesDbUpdate.length > 0) {
-            const priceUpdateReservesKeys = _.map(
-                reservesDbUpdate,
-                (o) => `reserves:${key}:${o.address}`
-            );
-
-            //todo evtl just save price and priceModifiedOn to redis without loading the whole object from redis?
-            const priceUpdateReserves: any =
-                await redisManager.redisClient.call(
-                    "JSON.MGET",
-                    ...priceUpdateReservesKeys,
-                    "$"
+            let pipeline = redisManager.redisClient.multi();
+            for (let update of reservesDbUpdate) {
+                const redisKey = `reserves:${key}:${update.address}`;
+                pipeline.call("JSON.SET", redisKey, "$.price", update.price);
+                pipeline.call(
+                    "JSON.SET",
+                    key,
+                    "$.priceModifiedOn",
+                    moment.utc().unix()
                 );
-
-            const priceUpdateReservesObjects = _.map(
-                priceUpdateReserves,
-                (o) => {
-                    let obj = JSON.parse(o)[0];
-                    return {
-                        ...obj,
-                        key: `reserves:${key}:${obj.address}`,
-                        priceModifiedOn: moment.utc().unix(),
-                    };
-                }
-            );
-
-            await redisManager.setArrayProperties(priceUpdateReservesObjects, [
-                "price",
-                "priceModifiedOn",
-            ]);
+            }
+            await pipeline.exec();
         }
 
         await logger.log("updateReservesPrices: End");
@@ -1244,29 +1177,21 @@ class Engine {
         //await redisManager.createRedisIndexes(true);
         //await this.migrateDataToRedis();
 
-        await this.initializeAlchemy();
-
-        const aaveNetworkInfo1 = common.getAaveNetworkInfo(Network.ARB_MAINNET);
-        await this.initializeReserves();
-
         logger.initialize("function:doTest", null);
-        const address = "0x02d722f73a59d51d845ae9972b28d28b4b795c65";
+        const address = "0x1046f7aeea503b5603e7f2b2839a6c5064403d5b";
+        //"0x02d722f73a59d51d845ae9972b28d28b4b795c65";
         await this.initializeAlchemy();
         await this.initializeAddresses();
         await this.updateReservesData_loop(null, Network.ARB_MAINNET);
-        return;
         await this.initializeReserves();
+
         await this.updateReservesPrices_loop(null, Network.ARB_MAINNET);
         await this.initializeReserves();
         const aaveNetworkInfo = common.getAaveNetworkInfo(Network.ARB_MAINNET);
-        const uad = await transactionManager.multicall(
-            aaveNetworkInfo.aaveAddresses.pool,
-            address,
-            Constants.ABIS.POOL_ABI,
-            "getUserAccountData",
+        const uadas = await this.getUserAccountDataForAddresses(
+            [address],
             aaveNetworkInfo.network
         );
-        console.log("Collateral from Chain", Number(uad[0][0]) / 10 ** 8);
 
         const uao = await redisManager.getObject(
             `addresses:${aaveNetworkInfo.network}:${address}`
@@ -1276,13 +1201,15 @@ class Engine {
         const userReserves = await redisManager.getList(
             `usersReserves:${aaveNetworkInfo.network}:${address}:*`
         );
-        const tcb = liquidationManager.calculateTotalCollateralBaseForAddress(
-            address,
+
+        const tcb = liquidationManager.calculateHealthFactorOffChain(
+            aaveNetworkInfo.addressesObjects[address],
             aaveNetworkInfo,
             userReserves
         );
-        console.log("Collateral Calculated", tcb);
 
+        console.log("HealthFactor from Chain", Number(uadas[0].healthFactor));
+        console.log("HealthFactor Calculated", tcb);
         return;
 
         await this.updateUserAccountDataAndUsersReserves_initialization();

@@ -5,7 +5,6 @@ import _, { chunk } from "lodash";
 import encryptionManager from "./encryptionManager";
 import { ethers } from "ethers";
 import logger from "../shared/logger";
-import Big from "big.js";
 
 class TransactionManager {
     private static instance: TransactionManager;

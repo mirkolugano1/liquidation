@@ -7,7 +7,6 @@ import transactionManager from "./transactionManager";
 import logger from "../shared/logger";
 import Constants from "../shared/constants";
 import emailManager from "./emailManager";
-import Big from "big.js";
 import redisManager from "./redisManager";
 import moment from "moment";
 
@@ -345,7 +344,7 @@ class WebhookManager {
                         ]
                     );
 
-                    await engine.updateUserConfiguration(userLiquidated, key);
+                    await engine.updateUserProperties(userLiquidated, key);
                 }
 
                 if (addressesObjectsAddresses.includes(userLiquidator)) {
@@ -538,7 +537,7 @@ class WebhookManager {
                             key
                         );
                     }
-                    await engine.updateUserConfiguration(address, key);
+                    await engine.updateUserProperties(address, key);
                 }
                 break;
 
@@ -596,7 +595,7 @@ class WebhookManager {
                                     key
                                 );
                             }
-                            await engine.updateUserConfiguration(address, key);
+                            await engine.updateUserProperties(address, key);
                         }
                     }
                 }
@@ -626,7 +625,7 @@ class WebhookManager {
                         );
                     }
 
-                    await engine.updateUserConfiguration(address, key);
+                    await engine.updateUserProperties(address, key);
                 }
                 break;
 
@@ -654,7 +653,7 @@ class WebhookManager {
                         );
                     }
 
-                    await engine.updateUserConfiguration(address, key);
+                    await engine.updateUserProperties(address, key);
                 }
 
                 break;
@@ -704,10 +703,7 @@ class WebhookManager {
                                 key
                             );
                         }
-                        await engine.updateUserConfiguration(
-                            log.topics[2],
-                            key
-                        );
+                        await engine.updateUserProperties(log.topics[2], key);
                     }
                 }
                 break;

@@ -1,5 +1,5 @@
+import BigNumber from "bignumber.js";
 import logger from "../shared/logger";
-import Big from "big.js";
 import { Network } from "alchemy-sdk";
 import _ from "lodash";
 import { LoggingFramework } from "../shared/enums";
@@ -12,7 +12,6 @@ import redisManager from "./redisManager";
 
 class LiquidationManager {
     private static instance: LiquidationManager;
-    private liquidationServerEnvironment: string = "";
     public static getInstance(): LiquidationManager {
         if (!LiquidationManager.instance) {
             LiquidationManager.instance = new LiquidationManager();
@@ -21,6 +20,28 @@ class LiquidationManager {
     }
 
     private constructor() {}
+
+    //#region getUserDebtInBaseCurrency
+
+    getUserDebtInBaseCurrency(
+        userReserve: any,
+        reserve: any,
+        assetPrice: any
+    ): BigNumber {
+        // Add stable debt (already normalized in currentStableDebt)
+        const userTotalDebt = new BigNumber(
+            userReserve.currentVariableDebt || 0
+        ).plus(new BigNumber(userReserve.currentStableDebt || 0));
+
+        if (userTotalDebt.isZero()) return BigNumber(0);
+
+        // Convert to USD (multiply by price and adjust for price decimals)
+        return userTotalDebt
+            .dividedBy(new BigNumber(10).pow(reserve.decimals))
+            .multipliedBy(new BigNumber(assetPrice));
+    }
+
+    //#endregion getUserDebtInBaseCurrency
 
     //#region checkLiquidateAddresses
 
@@ -89,30 +110,15 @@ class LiquidationManager {
             );
         }
 
+        //mirko
         if (userAddressesObjects && userAddressesObjects.length > 0) {
             for (const userAddressObject of userAddressesObjects) {
-                repo.aave[key].addressesObjects[
-                    userAddressObject.address
-                ].totalCollateralBase =
-                    this.calculateTotalCollateralBaseForAddress(
-                        userAddressObject.address,
-                        aaveNetworkInfo,
-                        usersReserves
-                    );
-                repo.aave[key].addressesObjects[
-                    userAddressObject.address
-                ].totalDebtBase = this.calculateTotalDebtBaseForAddress(
-                    userAddressObject.address,
-                    aaveNetworkInfo
-                );
-                repo.aave[key].addressesObjects[
-                    userAddressObject.address
-                ].healthFactor = this.calculateHealthFactorOffChain(
-                    repo.aave[key].addressesObjects[userAddressObject.address]
-                        .totalCollateralBase,
-                    repo.aave[key].addressesObjects[userAddressObject.address]
-                        .totalDebtBase,
-                    userAddressObject.currentLiquidationThreshold
+                const healthFactor = this.calculateHealthFactorOffChain(
+                    userAddressObject,
+                    aaveNetworkInfo,
+                    usersReserves.filter(
+                        (o) => o.address == userAddressObject.address
+                    )
                 );
 
                 //as long as liquidations are not enabled, we check the results from chain
@@ -124,12 +130,8 @@ class LiquidationManager {
                     );
                 }
 
-                if (
-                    repo.aave[key].addressesObjects[userAddressObject.address]
-                        .healthFactor < 1
-                ) {
+                if (healthFactor < 1)
                     liquidatableAddresses.push(userAddressObject.address);
-                }
             }
 
             if (liquidatableAddresses.length > 0) {
@@ -314,12 +316,12 @@ class LiquidationManager {
         healthFactor: number,
         aaveNetworkInfo: any
     ) {
-        const debtAmountTotal: Big = new Big(
+        const debtAmountTotal: BigNumber = new BigNumber(
             debtAssetObject.currentStableDebt ?? 0
-        ).add(new Big(debtAssetObject.currentVariableDebt ?? 0));
+        ).plus(new BigNumber(debtAssetObject.currentVariableDebt ?? 0));
         const closeFactor = healthFactor > 0.95 ? 0.5 : 1; // 50% close factor if health factor is > 0.95, otherwise 100%
-        const liquidatableDebtAmount: Big = debtAmountTotal
-            .mul(closeFactor)
+        const liquidatableDebtAmount: BigNumber = debtAmountTotal
+            .times(closeFactor)
             .div(10000);
 
         const debttokenAddress = debtAssetObject.tokenAddress;
@@ -332,68 +334,72 @@ class LiquidationManager {
         const liquidationProtocolFee =
             collateralTokenReserve.liquidationProtocolFee;
         const liquidationBonus = collateralTokenReserve.liquidationBonus;
-        const debtPrice = new Big(debtTokenReserve.price);
-        const collateralPrice = new Big(collateralTokenReserve.price);
+        const debtPrice = new BigNumber(debtTokenReserve.price);
+        const collateralPrice = new BigNumber(collateralTokenReserve.price);
 
         // 1. Calculate the base collateral amount (without bonus)
         const baseCollateral = liquidatableDebtAmount
-            .mul(debtPrice)
-            .mul(10 ** collateralDecimals)
-            .div(collateralPrice.mul(10 ** debtDecimals));
+            .times(debtPrice)
+            .times(10 ** collateralDecimals)
+            .dividedBy(collateralPrice.times(10 ** debtDecimals));
 
         // 2. Calculate the bonus amount
         const bonusAmount = baseCollateral
-            .mul(liquidationBonus - 10000) // Subtract 100% to get just the bonus portion
-            .div(10000);
+            .times(liquidationBonus - 10000) // Subtract 100% to get just the bonus portion
+            .dividedBy(10000);
 
         // 3. Calculate the protocol fee (applied only to the bonus portion)
         const protocolFeeAmount = bonusAmount
-            .mul(liquidationProtocolFee)
-            .div(10000);
+            .times(liquidationProtocolFee)
+            .dividedBy(10000);
 
         // 4. Calculate the total collateral received after protocol fee (in native units)
         const totalCollateralReceived = baseCollateral
-            .add(bonusAmount)
-            .sub(protocolFeeAmount);
+            .plus(bonusAmount)
+            .minus(protocolFeeAmount);
 
         // 5. Convert collateral value to USD
         const collateralValueUSD = totalCollateralReceived
-            .mul(collateralPrice)
-            .div(10 ** collateralDecimals);
+            .times(collateralPrice)
+            .dividedBy(10 ** collateralDecimals);
 
         // 6. Convert debt to USD for profit calculation
         const debtValueUSD = liquidatableDebtAmount
-            .mul(debtPrice)
-            .div(10 ** debtDecimals);
+            .times(debtPrice)
+            .dividedBy(10 ** debtDecimals);
 
         // 6. Calculate gross profit in USD
-        const grossProfitUSD = collateralValueUSD.sub(debtValueUSD);
+        const grossProfitUSD = collateralValueUSD.minus(debtValueUSD);
 
         // 7. Calculate gas cost in USD with the appropriate multiplier
         // Initial calculation with base fee
         const wethReserve = _.find(_.values(aaveNetworkInfo.reserves), {
             symbol: "WETH",
         });
-        const ethPriceUSD = new Big(wethReserve.price).div(
+        const ethPriceUSD = new BigNumber(wethReserve.price).div(
             10 ** wethReserve.decimals
         );
         const gasPrice = await redisManager.getValue(
             `gasPrice:${aaveNetworkInfo.network}`
         );
-        const baseTxCostWei = new Big(
+        const baseTxCostWei = new BigNumber(
             aaveNetworkInfo.averageLiquidationGasUnits
-        ).mul(Big(gasPrice));
+        ).times(BigNumber(gasPrice));
         const baseTxCostUSD = baseTxCostWei
-            .mul(ethPriceUSD)
-            .div(10 ** wethReserve.decimals);
+            .times(ethPriceUSD)
+            .dividedBy(10 ** wethReserve.decimals);
 
         // Apply fee tier based on gross profit
-        const gasFeeMultiplier = grossProfitUSD.gt(new Big(100)) ? 10000 : 5000;
-        const scaledGasMultiplier = new Big(gasFeeMultiplier).div(10000);
-        const actualTxCostUSD = baseTxCostUSD.mul(scaledGasMultiplier);
+        const gasFeeMultiplier = grossProfitUSD.isGreaterThan(BigNumber(100))
+            ? 10000
+            : 5000;
+        const scaledGasMultiplier = new BigNumber(gasFeeMultiplier).dividedBy(
+            10000
+        );
+        const actualTxCostUSD = baseTxCostUSD.times(scaledGasMultiplier);
 
         // 8. Calculate net profit in USD
-        const netProfitUSD = grossProfitUSD.sub(actualTxCostUSD);
+        const netProfitUSD = grossProfitUSD.minus(actualTxCostUSD);
 
         // Return: [debtToCover in native units, profit in USD]
         return [
@@ -407,36 +413,44 @@ class LiquidationManager {
     //#region calculateTotalDebtBaseForAddress
 
     calculateTotalDebtBaseForAddress(
-        address: string,
+        userAddressObject: any,
         aaveNetworkInfo: any,
         usersReserves: any[] | null = null
-    ) {
+    ): BigNumber {
         const reserves = _.values(aaveNetworkInfo.reserves);
-        if (!usersReserves || usersReserves.length == 0) return 0;
+        if (!usersReserves || usersReserves.length == 0) return BigNumber(0);
 
-        let debts = _.map(reserves, (reserve) => {
+        let totalDebt = BigNumber(0);
+
+        for (const reserve of reserves) {
             const userReserve = _.find(usersReserves, (o) => {
                 return o.tokenAddress == reserve.address;
             });
-            if (!userReserve) return null;
-            return {
-                price: reserve.price,
-                address: reserve.address,
-                balance:
-                    userReserve.currentVariableDebt +
-                    userReserve.currentStableDebt,
-                decimals: reserve.decimals,
-            };
-        });
 
-        debts = _.reject(debts, (o: any) => !o || o.balance == 0);
-        if (!debts || debts.length == 0) return 0;
-        return debts.reduce((total: any, debt: any) => {
-            const { price, address, balance, decimals } = debt;
-            const balanceInTokens = Number(balance) / 10 ** decimals;
-            const baseAmount = balanceInTokens * price;
-            return total + baseAmount;
-        }, 0);
+            if (!userReserve) continue;
+
+            // Get the appropriate price
+            let reservePrice = reserve.price;
+            if (
+                reserve.eModeAssetPrice &&
+                reserve.eModeAssetPrice != 0 &&
+                userAddressObject.userEModeCategory ==
+                    reserve.eModeAssetCategory
+            ) {
+                reservePrice = reserve.eModeAssetPrice;
+            }
+
+            // Calculate total debt for this reserve
+            const debtInUSD = this.getUserDebtInBaseCurrency(
+                userReserve,
+                reserve,
+                reservePrice
+            );
+
+            totalDebt = totalDebt.plus(debtInUSD);
+        }
+
+        return totalDebt;
     }
 
     //#endregion calculateTotalDebtBaseForAddress
@@ -444,52 +458,51 @@ class LiquidationManager {
     //#region calculateTotalCollateralBaseForAddress
 
     calculateTotalCollateralBaseForAddress(
-        address: string,
+        userAddressObject: any,
         aaveNetworkInfo: any,
         usersReserves: any[] | null = null
-    ): Number {
+    ): BigNumber {
         const reserves = _.values(aaveNetworkInfo.reserves);
-        if (!usersReserves || usersReserves.length == 0) return 0;
+        if (!usersReserves || usersReserves.length == 0) return BigNumber(0);
 
-        let collaterals = _.map(reserves, (reserve) => {
+        let totalCollateral = new BigNumber(0);
+
+        for (const reserve of reserves) {
             const userReserve = _.find(usersReserves, (o) => {
                 return o.tokenAddress == reserve.address;
             });
-            if (!userReserve) return null;
-            return {
-                price: reserve.price,
-                address: reserve.address,
-                balance: userReserve.currentATokenBalance,
-                usageAsCollateralEnabled: userReserve.usageAsCollateralEnabled,
-                decimals: reserve.decimals,
-            };
-        });
 
-        collaterals = _.reject(
-            collaterals,
-            (o: any) => !o || !o.usageAsCollateralEnabled || o.balance == 0
-        );
-        if (!collaterals || collaterals.length == 0) return 0;
+            if (
+                !userReserve ||
+                !userReserve.usageAsCollateralEnabled ||
+                userReserve.currentATokenBalance == "0" ||
+                !reserve.reserveLiquidationThreshold ||
+                reserve.reserveLiquidationThreshold == 0
+            ) {
+                continue;
+            }
 
-        const externalCollateral =
-            aaveNetworkInfo.addressesObjects[address].externalCollateral ?? 0;
+            // Get the appropriate price
+            let reservePrice = reserve.price;
+            if (
+                reserve.eModeAssetPrice &&
+                reserve.eModeAssetPrice != 0 &&
+                userAddressObject.userEModeCategory ==
+                    reserve.eModeAssetCategory
+            ) {
+                reservePrice = reserve.eModeAssetPrice;
+            }
 
-        return (
-            externalCollateral +
-            collaterals.reduce((total: number, collateral: any) => {
-                const { price, balance, decimals } = collateral;
-                if (balance == 0 || price == 0) return total;
+            // Convert currentATokenBalance to base currency (USD)
+            // currentATokenBalance is already in wei/smallest unit
+            const balanceInUSD = new BigNumber(userReserve.currentATokenBalance)
+                .dividedBy(new BigNumber(10).pow(reserve.decimals))
+                .multipliedBy(new BigNumber(reservePrice));
 
-                const balanceInTokens = Big(balance);
-                const priceBig = Big(price);
-                const decimalsDivisor = Big(10).pow(decimals);
-                const baseAmount = balanceInTokens
-                    .mul(priceBig)
-                    .div(decimalsDivisor);
+            totalCollateral = totalCollateral.plus(balanceInUSD);
+        }
 
-                return total + Number(baseAmount);
-            }, 0)
-        );
+        return totalCollateral;
     }
 
     //#endregion calculateTotalCollateralBaseForAddress
@@ -497,21 +510,39 @@ class LiquidationManager {
     //#region calculateHealthFactorOffChain
 
     calculateHealthFactorOffChain(
-        totalCollateralBase: number | Big,
-        totalDebtBase: number | Big,
-        currentLiquidationThreshold: number | Big
+        userAddressObject: any,
+        aaveNetworkInfo: any,
+        usersReserves: any[] | null = null
     ) {
-        if (totalDebtBase == 0) return 0;
-        const totalCollateralBaseBig = new Big(totalCollateralBase);
-        const totalDebtBaseBig = new Big(totalDebtBase);
-        const currentLiquidationThresholdBig = new Big(
-            currentLiquidationThreshold
+        if (!userAddressObject || !aaveNetworkInfo) {
+            throw new Error(
+                "Invalid user address object or Aave network info."
+            );
+        }
+        if (!usersReserves || usersReserves.length == 0) {
+            throw new Error(
+                "No user reserves provided for health factor calculation."
+            );
+        }
+        const totalCollateralBase = this.calculateTotalCollateralBaseForAddress(
+            userAddressObject,
+            aaveNetworkInfo,
+            usersReserves
+        );
+        const totalDebtBase = this.calculateTotalDebtBaseForAddress(
+            userAddressObject,
+            aaveNetworkInfo,
+            usersReserves
+        );
+
+        if (totalDebtBase.isZero()) return 9999999999; // No debt means health factor is very high
+        const currentLiquidationThresholdBig = new BigNumber(
+            userAddressObject.currentLiquidationThreshold
         ).div(10 ** 4);
-        const healthFactor = totalCollateralBaseBig
+        return totalCollateralBase
             .times(currentLiquidationThresholdBig)
-            .div(totalDebtBaseBig)
+            .div(totalDebtBase)
             .toNumber();
-        return healthFactor;
     }
 
     //#endregion calculateHealthFactorOffChain
