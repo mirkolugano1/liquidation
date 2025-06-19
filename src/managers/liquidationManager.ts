@@ -461,11 +461,13 @@ class LiquidationManager {
         userAddressObject: any,
         aaveNetworkInfo: any,
         usersReserves: any[] | null = null
-    ): BigNumber {
+    ): [BigNumber, BigNumber] {
         const reserves = _.values(aaveNetworkInfo.reserves);
-        if (!usersReserves || usersReserves.length == 0) return BigNumber(0);
+        if (!usersReserves || usersReserves.length == 0)
+            return [BigNumber(0), BigNumber(0)];
 
         let totalCollateral = new BigNumber(0);
+        let avgLiquidationThreshold = new BigNumber(0);
 
         for (const reserve of reserves) {
             const userReserve = _.find(usersReserves, (o) => {
@@ -500,9 +502,37 @@ class LiquidationManager {
                 .multipliedBy(new BigNumber(reservePrice));
 
             totalCollateral = totalCollateral.plus(balanceInUSD);
+
+            //check isInEModeCategory, to calculate average liquidation threshold
+            const isInEModeCategory: boolean =
+                userAddressObject.userEModeCategory != 0 &&
+                userAddressObject.userEModeCategory ==
+                    reserve.eModeAssetCategory;
+
+            const eModeCategory = isInEModeCategory
+                ? aaveNetworkInfo.eModeCategories[
+                      userAddressObject.userEModeCategory
+                  ]
+                : null;
+            avgLiquidationThreshold = avgLiquidationThreshold.plus(
+                balanceInUSD.times(
+                    new BigNumber(
+                        parseInt(
+                            isInEModeCategory && eModeCategory
+                                ? eModeCategory.liquidationThreshold
+                                : reserve.reserveLiquidationThreshold
+                        )
+                    )
+                )
+            );
         }
 
-        return totalCollateral;
+        // Calculate the average liquidation threshold
+        avgLiquidationThreshold = totalCollateral.isZero()
+            ? BigNumber(0)
+            : avgLiquidationThreshold.dividedBy(totalCollateral);
+
+        return [totalCollateral, avgLiquidationThreshold];
     }
 
     //#endregion calculateTotalCollateralBaseForAddress
@@ -524,11 +554,12 @@ class LiquidationManager {
                 "No user reserves provided for health factor calculation."
             );
         }
-        const totalCollateralBase = this.calculateTotalCollateralBaseForAddress(
-            userAddressObject,
-            aaveNetworkInfo,
-            usersReserves
-        );
+        const [totalCollateralBase, avgLiquidationThreshold] =
+            this.calculateTotalCollateralBaseForAddress(
+                userAddressObject,
+                aaveNetworkInfo,
+                usersReserves
+            );
         const totalDebtBase = this.calculateTotalDebtBaseForAddress(
             userAddressObject,
             aaveNetworkInfo,
@@ -536,12 +567,13 @@ class LiquidationManager {
         );
 
         if (totalDebtBase.isZero()) return 9999999999; // No debt means health factor is very high
+
         const currentLiquidationThresholdBig = new BigNumber(
-            userAddressObject.currentLiquidationThreshold
-        ).div(10 ** 4);
+            avgLiquidationThreshold
+        ).dividedBy(10 ** 4);
         return totalCollateralBase
             .times(currentLiquidationThresholdBig)
-            .div(totalDebtBase)
+            .dividedBy(totalDebtBase)
             .toNumber();
     }
 

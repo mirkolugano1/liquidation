@@ -198,6 +198,16 @@ class Engine {
                 reserves[networkReserve.address] = networkReserve;
             }
             repo.aave[key].reserves = reserves;
+
+            //load eModeCategories
+            const eModeCategories: any = await redisManager.getList(
+                `eModeCategories:${key}:*`
+            );
+            repo.aave[key].eModeCategories = {};
+            for (let eModeCategory of eModeCategories) {
+                repo.aave[key].eModeCategories[eModeCategory.eModeCategory] =
+                    eModeCategory;
+            }
         }
     }
 
@@ -641,7 +651,7 @@ class Engine {
                 };
 
                 redisKeysEModeCategories.push(
-                    `eModeCategoryData:${aaveNetworkInfo.network.toString()}:${eModeCategory}`
+                    `eModeCategories:${aaveNetworkInfo.network.toString()}:${eModeCategory}`
                 );
                 redisValuesEModeCategories.push(eModeCategoryData);
             } catch (error) {
@@ -1174,7 +1184,6 @@ class Engine {
     }
 
     async doTest() {
-        //await redisManager.createRedisIndexes(true);
         //await this.migrateDataToRedis();
 
         logger.initialize("function:doTest", null);
@@ -1196,20 +1205,39 @@ class Engine {
         const uao = await redisManager.getObject(
             `addresses:${aaveNetworkInfo.network}:${address}`
         );
+        await this.updateUserProperties([uao], aaveNetworkInfo.network);
         await this.updateUsersReservesData([uao], aaveNetworkInfo);
 
         const userReserves = await redisManager.getList(
             `usersReserves:${aaveNetworkInfo.network}:${address}:*`
         );
-
-        const tcb = liquidationManager.calculateHealthFactorOffChain(
+        /*
+        const tcb = liquidationManager.calculateTotalCollateralBaseForAddress(
+            aaveNetworkInfo.addressesObjects[address],
+            aaveNetworkInfo,
+            userReserves
+        );
+        const tdb = liquidationManager.calculateTotalDebtBaseForAddress(
             aaveNetworkInfo.addressesObjects[address],
             aaveNetworkInfo,
             userReserves
         );
 
-        console.log("HealthFactor from Chain", Number(uadas[0].healthFactor));
-        console.log("HealthFactor Calculated", tcb);
+        console.log("From Chain", uadas[0].totalCollateralBase);
+        console.log("Calculated", tcb.toNumber());
+        console.log("----------------");
+        console.log("From Chain", uadas[0].totalDebtBase);
+        console.log("Calculated", tdb.toNumber());
+        */
+
+        const hf = liquidationManager.calculateHealthFactorOffChain(
+            aaveNetworkInfo.addressesObjects[address],
+            aaveNetworkInfo,
+            userReserves
+        );
+
+        console.log("From Chain", uadas[0].healthFactor);
+        console.log("Calculated", hf);
         return;
 
         await this.updateUserAccountDataAndUsersReserves_initialization();
