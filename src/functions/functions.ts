@@ -196,42 +196,57 @@ df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
 
 //#region Timers
 
+//functions to be executed once per day
+
 app.timer("updateGasPriceTimer", {
     schedule: "0 0 * * *", // Cron expression for every day at 00:00 h
     extraInputs: [df.input.durableClient()],
+    useMonitor: false, //disables catch-up behavior of functions on startup
     handler: updateGasPriceTimer,
 });
-/*
+
 app.timer("updateReservesDataTimer", {
     schedule: "5 0 * * *", // Cron expression for every day at 00:05 h
     extraInputs: [df.input.durableClient()],
+    useMonitor: false,
     handler: updateReservesDataTimer,
 });
+
+//end functions to be executed once per day
+
+//functions to be executed every n minutes
 
 app.timer("updateReservesPricesTimer", {
     schedule: "15 * * * *", // Cron expression for every 15 minutes
     extraInputs: [df.input.durableClient()],
+    useMonitor: false,
     handler: updateReservesPricesTimer,
 });
 
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
     schedule: "16 * * * *", // Cron expression for every n minutes
     extraInputs: [df.input.durableClient()],
+    useMonitor: false,
     handler: updateUserAccountDataAndUsersReservesTimer,
 });
-*/
+
+//end functions to be executed every n minutes
+
+//startup function (only to run locally)
 app.timer("startupFunction", {
-    schedule: "10 * * * *", // Daily at midnight (or whatever schedule you want)
+    schedule: "0 0 * * *", // Daily at midnight (or whatever schedule you want)
     extraInputs: [df.input.durableClient()],
     runOnStartup: true, // This makes it run immediately on startup
     handler: async (
         myTimer: Timer,
         context: InvocationContext
     ): Promise<void> => {
+        if (common.isProd) return; // Do not run in production
         context.log("Delayed startup function executed.");
         await common.sleep(10000);
         //actual call
         await updateGasPriceTimer(myTimer, context);
+        await updateReservesDataTimer(myTimer, context);
     },
 });
 
