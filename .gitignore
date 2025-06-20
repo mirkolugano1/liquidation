@@ -4,3 +4,8 @@ node_modules/
 dist/
 zip/
 redis-data/
+__azurite*
+__blobstorage__/
+__queuestorage__/
+__tablestorage__/
+azurite/

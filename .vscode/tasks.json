@@ -24,12 +24,77 @@
             }
         },
         {
+            "label": "Kill Azure Functions Process",
+            "type": "shell",
+            "command": "taskkill",
+            "args": [
+                "/F",
+                "/IM",
+                "func.exe",
+                "2>nul",
+                "||",
+                "echo",
+                "No func.exe process found"
+            ],
+            "presentation": {
+                "reveal": "never",
+                "echo": false
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "Start Azurite",
+            "type": "shell",
+            "command": "azurite",
+            "args": ["--location", "azurite", "--debug", "azurite\\debug.log"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "new",
+                "showReuseMessage": true,
+                "clear": false
+            },
+            "isBackground": true,
+            "problemMatcher": [],
+            "runOptions": {
+                "runOn": "folderOpen"
+            }
+        },
+        {
+            "label": "Stop Azurite",
+            "type": "shell",
+            "command": "taskkill",
+            "args": [
+                "/F",
+                "/IM",
+                "node.exe",
+                "/FI",
+                "WINDOWTITLE eq *azurite*"
+            ],
+            "group": "build",
+            "presentation": {
+                "reveal": "silent"
+            },
+            "problemMatcher": []
+        },
+        {
             "type": "func",
             "label": "func: host start",
             "command": "host start",
             "problemMatcher": "$func-node-watch",
             "isBackground": true,
-            "dependsOn": "npm watch (functions)"
+            "dependsOn": [
+                "Kill Azure Functions Process",
+                "Start Azurite",
+                "npm watch (functions)"
+            ],
+            "options": {
+                "env": {
+                    "languageWorkers__node__arguments": "--inspect=9229"
+                }
+            }
         },
         {
             "type": "shell",

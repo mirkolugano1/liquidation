@@ -1,5 +1,6 @@
 {
     "compilerOptions": {
+        "sourceMap": true,
         "target": "es2020", // Target ECMAScript version
         "module": "NodeNext", // Use Node.js module resolution
         "moduleResolution": "NodeNext", // Align module resolution with 'module'

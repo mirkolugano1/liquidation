@@ -9,15 +9,14 @@ import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
 
-// =========== Gas Price Update ===========
-// Orchestrator for gas price update
+//#region Gas Price Update
+
 const updateGasPriceOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
     yield context.df.callActivity("updateGasPriceActivity");
 };
 
-// Activity function for gas price update
 const updateGasPriceActivity: ActivityHandler = async (
     input: unknown,
     context: InvocationContext
@@ -25,7 +24,6 @@ const updateGasPriceActivity: ActivityHandler = async (
     await engine.updateGasPrice(context);
 };
 
-// Timer trigger for gas price update
 const updateGasPriceTimer = async (
     myTimer: Timer,
     context: InvocationContext
@@ -34,19 +32,13 @@ const updateGasPriceTimer = async (
     const instanceId = await client.startNew("updateGasPriceOrchestrator");
 };
 
-// Register orchestrator and activity
 df.app.orchestration("updateGasPriceOrchestrator", updateGasPriceOrchestrator);
 df.app.activity("updateGasPriceActivity", { handler: updateGasPriceActivity });
 
-// Register timer function
-app.timer("updateGasPriceTimer", {
-    schedule: "0 0 * * *", // Cron expression for every day at 00:00 h
-    extraInputs: [df.input.durableClient()],
-    handler: updateGasPriceTimer,
-});
+//#endregion Gas Price Update
 
-// =========== Update Reserves Data ===========
-// Orchestrator for updating reserves data
+//#region Update Reserves Data
+
 const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
@@ -58,7 +50,6 @@ const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     }
 };
 
-// Activity function for updating reserves data
 const updateReservesDataActivity_initialization: ActivityHandler = async (
     input: unknown,
     context: InvocationContext
@@ -73,7 +64,6 @@ const updateReservesDataActivity_loop: ActivityHandler = async (
     await engine.updateReservesData_loop(context, input.network);
 };
 
-// Timer trigger for updating reserves data
 const updateReservesDataTimer = async (
     myTimer: Timer,
     context: InvocationContext
@@ -82,7 +72,6 @@ const updateReservesDataTimer = async (
     const instanceId = await client.startNew("updateReservesDataOrchestrator");
 };
 
-// Register orchestrator and activity
 df.app.orchestration(
     "updateReservesDataOrchestrator",
     updateReservesDataOrchestrator
@@ -94,15 +83,10 @@ df.app.activity("updateReservesDataActivity_loop", {
     handler: updateReservesDataActivity_loop,
 });
 
-// Register timer function
-app.timer("updateReservesDataTimer", {
-    schedule: "5 0 * * *", // Cron expression for every day at 00:05 h
-    extraInputs: [df.input.durableClient()],
-    handler: updateReservesDataTimer,
-});
+//#endregion Update Reserves Data
 
-// =========== Update Reserves Prices ===========
-// Orchestrator for updating reserves prices
+//#region Update Reserves Prices
+
 const updateReservesPricesOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
@@ -116,7 +100,6 @@ const updateReservesPricesOrchestrator: OrchestrationHandler = function* (
     }
 };
 
-// Activity function for updating reserves prices
 const updateReservesPricesActivity_initialization: ActivityHandler = async (
     input: unknown,
     context: InvocationContext
@@ -130,7 +113,6 @@ const updateReservesPricesActivity_loop: ActivityHandler = async (
     await engine.updateReservesPrices_loop(context, input.network);
 };
 
-// Timer trigger for updating reserves prices
 const updateReservesPricesTimer = async (
     myTimer: Timer,
     context: InvocationContext
@@ -141,7 +123,6 @@ const updateReservesPricesTimer = async (
     );
 };
 
-// Register orchestrator and activity
 df.app.orchestration(
     "updateReservesPricesOrchestrator",
     updateReservesPricesOrchestrator
@@ -153,15 +134,10 @@ df.app.activity("updateReservesPricesActivity_loop", {
     handler: updateReservesPricesActivity_loop,
 });
 
-// Register timer function
-app.timer("updateReservesPricesTimer", {
-    schedule: "*/15 * * * *", // Cron expression for every day at 00:15 h
-    extraInputs: [df.input.durableClient()],
-    handler: updateReservesPricesTimer,
-});
+//#endregion Update Reserves Prices
 
-// =========== Update User Account Data And User Reserves ===========
-// Orchestrator
+//#region Update User Account Data And User Reserves
+
 const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
     function* (context: OrchestrationContext) {
         yield context.df.callActivity(
@@ -178,7 +154,6 @@ const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
         }
     };
 
-// Activity function
 const updateUserAccountDataAndUsersReservesActivity_initialization: ActivityHandler =
     async (input: any, context: InvocationContext) => {
         await engine.updateUserAccountDataAndUsersReserves_initialization(
@@ -193,7 +168,6 @@ const updateUserAccountDataAndUsersReservesActivity_chunk: ActivityHandler =
         );
     };
 
-// Timer trigger
 const updateUserAccountDataAndUsersReservesTimer = async (
     myTimer: Timer,
     context: InvocationContext
@@ -204,7 +178,6 @@ const updateUserAccountDataAndUsersReservesTimer = async (
     );
 };
 
-// Register orchestrator and activity
 df.app.orchestration(
     "updateUserAccountDataAndUsersReservesOrchestrator",
     updateUserAccountDataAndUsersReservesOrchestrator
@@ -219,9 +192,47 @@ df.app.activity("updateUserAccountDataAndUsersReservesActivity_chunk", {
     handler: updateUserAccountDataAndUsersReservesActivity_chunk,
 });
 
-// Register timer function
+//#endregion Update User Account Data And User Reserves
+
+//#region Timers
+
+app.timer("updateGasPriceTimer", {
+    schedule: "0 0 * * *", // Cron expression for every day at 00:00 h
+    extraInputs: [df.input.durableClient()],
+    handler: updateGasPriceTimer,
+});
+/*
+app.timer("updateReservesDataTimer", {
+    schedule: "5 0 * * *", // Cron expression for every day at 00:05 h
+    extraInputs: [df.input.durableClient()],
+    handler: updateReservesDataTimer,
+});
+
+app.timer("updateReservesPricesTimer", {
+    schedule: "15 * * * *", // Cron expression for every 15 minutes
+    extraInputs: [df.input.durableClient()],
+    handler: updateReservesPricesTimer,
+});
+
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
-    schedule: "*/15 * * * *", // Cron expression for every n minutes
+    schedule: "16 * * * *", // Cron expression for every n minutes
     extraInputs: [df.input.durableClient()],
     handler: updateUserAccountDataAndUsersReservesTimer,
 });
+*/
+app.timer("startupFunction", {
+    schedule: "10 * * * *", // Daily at midnight (or whatever schedule you want)
+    extraInputs: [df.input.durableClient()],
+    runOnStartup: true, // This makes it run immediately on startup
+    handler: async (
+        myTimer: Timer,
+        context: InvocationContext
+    ): Promise<void> => {
+        context.log("Delayed startup function executed.");
+        await common.sleep(10000);
+        //actual call
+        await updateGasPriceTimer(myTimer, context);
+    },
+});
+
+//#endregion Timers

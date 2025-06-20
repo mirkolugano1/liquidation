@@ -43,7 +43,7 @@
         "start": "node dist/clients/webServer.js",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
         "webServer": "npx ts-node --transpileOnly src/clients/webServer.ts",
-        "webJob": "npx ts-node --transpileOnly src/clients/webJob.ts",
+        "watch": "tsc --watch",
         "test": "node --test --require ts-node/register tests/*.test.ts",
         "testOnly": "node --test --test-only --require ts-node/register tests/*.test.ts"
     },

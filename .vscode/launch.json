@@ -44,18 +44,6 @@
             "sourceMaps": true
         },
         {
-            "name": "Debug WebJob",
-            "type": "node",
-            "request": "launch",
-            "runtimeExecutable": "npm",
-            "runtimeArgs": ["run", "webJob", "--", "testJob"],
-            "skipFiles": ["<node_internals>/**"],
-            "console": "integratedTerminal",
-            "internalConsoleOptions": "neverOpen",
-            "restart": false,
-            "sourceMaps": true
-        },
-        {
             "name": "Debug WebServer",
             "type": "node",
             "request": "launch",
