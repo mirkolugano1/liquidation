@@ -87,7 +87,6 @@
             "isBackground": true,
             "dependsOn": [
                 "Kill Azure Functions Process",
-                "Start Azurite",
                 "npm watch (functions)"
             ],
             "options": {

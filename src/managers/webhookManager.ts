@@ -24,7 +24,7 @@ class WebhookManager {
 
     //#region #ProcessAaveEvent (Alchemy Webhook)
 
-    async processAaveEvent(req: any, res: any) {
+    async processAaveEvent(req: any, context: any) {
         if (!repo.isWebServerInitialized) return;
         let block = req.body.event?.data?.block;
         let network = req.query.network ?? "eth-mainnet";

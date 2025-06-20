@@ -1,4 +1,10 @@
-import { app, Timer, InvocationContext } from "@azure/functions";
+import {
+    app,
+    Timer,
+    InvocationContext,
+    HttpRequest,
+    HttpResponseInit,
+} from "@azure/functions";
 import * as df from "durable-functions";
 import {
     ActivityHandler,
@@ -8,6 +14,7 @@ import {
 import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
+import webhookManager from "../managers/webhookManager";
 
 //#region Gas Price Update
 
@@ -216,6 +223,7 @@ app.timer("updateReservesDataTimer", {
 
 //functions to be executed every n minutes
 
+//todo for prod modify these timers to run every n minutes
 app.timer("updateReservesPricesTimer", {
     schedule: "15 * * * *", // Cron expression for every 15 minutes
     extraInputs: [df.input.durableClient()],
@@ -232,6 +240,8 @@ app.timer("updateUserAccountDataAndUsersReservesTimer", {
 
 //end functions to be executed every n minutes
 
+//todo local.settings.json redis connection string: set to production redis connection string
+
 //startup function (only to run locally)
 app.timer("startupFunction", {
     schedule: "0 0 * * *", // Daily at midnight (or whatever schedule you want)
@@ -245,9 +255,40 @@ app.timer("startupFunction", {
         context.log("Delayed startup function executed.");
         await common.sleep(10000);
         //actual call
+        console.log("123 Startup function executed.");
+        /*
         await updateGasPriceTimer(myTimer, context);
         await updateReservesDataTimer(myTimer, context);
+        */
     },
 });
 
 //#endregion Timers
+
+const alchemyWebhook = async (
+    request: HttpRequest,
+    context: InvocationContext
+): Promise<HttpResponseInit> => {
+    const webhookData = (await request.json()) as any;
+    const client = df.getClient(context);
+
+    context.log(`Alchemy webhook received: ${JSON.stringify(webhookData)}`);
+    //await webhookManager.processAaveEvent(request, context);
+
+    return {
+        status: 200,
+        jsonBody: {
+            success: true,
+            message: "Webhook endpoint processed successfully",
+        },
+    };
+};
+
+// Register the webhook endpoint
+app.http("alchemyWebhook", {
+    methods: ["POST"],
+    authLevel: "anonymous",
+    route: "webhook/alchemy",
+    extraInputs: [df.input.durableClient()],
+    handler: alchemyWebhook,
+});

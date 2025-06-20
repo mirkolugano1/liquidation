@@ -1183,7 +1183,26 @@ class Engine {
         console.log("successfully migrated data to redis");
     }
 
+    async testAction(context: InvocationContext, messageData: any) {
+        context?.log("TEST ACTION: Executing test action from Redis trigger");
+        context.log(messageData);
+    }
+
     async doTest() {
+        console.log("Sending test message to Redis stream...");
+        await redisManager.redisClient.xadd(
+            "liquidation-events",
+            "*",
+            "action",
+            "testAction",
+            "data",
+            JSON.stringify({
+                testProperty1: "test data",
+                testProperty2: 123,
+            })
+        );
+        console.log("Sent test message to Redis stream!");
+        return;
         //await this.migrateDataToRedis();
 
         logger.initialize("function:doTest", null);

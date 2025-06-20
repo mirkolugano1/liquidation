@@ -3,7 +3,7 @@
     "Values": {
         "FUNCTIONS_WORKER_RUNTIME": "node",
         "AzureWebJobsStorage": "UseDevelopmentStorage=true",
-        "AzureWebJobsFeatureFlags": "EnableWorkerIndexing"
-    },
-    "ConnectionStrings": {}
+        "AzureWebJobsFeatureFlags": "EnableWorkerIndexing",
+        "RedisConnectionString": "localhost:6379"
+    }
 }
