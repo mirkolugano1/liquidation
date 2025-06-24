@@ -347,54 +347,22 @@ class Engine {
                 .toNumber()
                 .toString(2);
             addressesObjects[i].userConfiguration = userConfiguration;
-            addressesObjects[i].userEModeCategory = eModes[i];
+            addressesObjects[i].userEModeCategory = BigNumber(eModes[i] ?? 0)
+                .toNumber()
+                .toString();
             addressesObjects[i].status = 1;
         }
+
+        await redisManager.setArrayProperties(addressesObjects, [
+            "userConfiguration",
+            "userEModeCategory",
+            "status",
+        ]);
 
         return addressesObjects;
     }
 
     //#endregion updateUserConfiguration
-
-    //#region updateUserEMode
-
-    async updateUserEMode(
-        addresses: string | string[],
-        network: Network | string
-    ) {
-        if (!Array.isArray(addresses)) addresses = [addresses];
-        const aaveNetworkInfo = common.getAaveNetworkInfo(network);
-        const userConfigurations = await transactionManager.multicall(
-            aaveNetworkInfo.aaveAddresses.pool,
-            addresses,
-            Constants.ABIS.POOL_ABI,
-            "getUserEMode",
-            aaveNetworkInfo.network
-        );
-
-        const addressList = addresses.join("|");
-        const addressesToUpdate: any = await redisManager.call(
-            "FT.SEARCH",
-            "idx:addresses",
-            `@networkNormalized:{${common.normalizeRedisKey(
-                aaveNetworkInfo.network.toString()
-            )}} @address:{${addressList}}`
-        );
-
-        for (let i = 0; i < userConfigurations.length; i++) {
-            const userConfiguration = BigNumber(userConfigurations[i])
-                .toNumber()
-                .toString(2);
-            addressesToUpdate[i].userConfiguration = userConfiguration;
-        }
-
-        await redisManager.setArrayProperties(
-            addressesToUpdate,
-            "userConfiguration"
-        );
-    }
-
-    //#endregion updateUserEMode
 
     //#region updateUsersReservesData
 
@@ -463,6 +431,7 @@ class Engine {
                 _.includes(allUserReserveObjectsAddresses, o.address)
         );
 
+        //test
         if (liquidatableUserAddressObjects.length > 0) {
             const liquidatableUserAddressObjectsAddresses = _.map(
                 liquidatableUserAddressObjects,
@@ -955,7 +924,7 @@ class Engine {
 
         //delete list of processing addresses (coming from alchemy webhook)
         const processingAddressesKey = common.getProcessingAddressesKey(key);
-        await redisManager.deleteArrayByQuery(processingAddressesKey);
+        await redisManager.redisClient.del(processingAddressesKey);
 
         const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
         const timestamp = await redisManager.getValue(
@@ -1015,7 +984,7 @@ class Engine {
                 addressesUserAccountDataHFLowerThan2,
                 (o) => `addresses:${key}:${o.address}`
             );
-            redisManager.set(keys, addressesUserAccountDataHFLowerThan2);
+            await redisManager.set(keys, addressesUserAccountDataHFLowerThan2);
 
             //delete addresses from the DB where health factor is > 2
             const userAccountDataHFGreaterThan2Addresses = _.map(
@@ -1024,14 +993,20 @@ class Engine {
             );
             const userAccountDataHFGreaterThan2AddressesString =
                 userAccountDataHFGreaterThan2Addresses.join("|");
-            await redisManager.deleteByQuery(
-                "addresses",
-                `@network:{${key}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
-            );
-            await redisManager.deleteByQuery(
-                "usersReserves",
-                `@network:{${key}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
-            );
+            if (userAccountDataHFGreaterThan2AddressesString.length > 0) {
+                await redisManager.deleteByQuery(
+                    "addresses",
+                    `@networkNormalized:{${common.normalizeRedisKey(
+                        key
+                    )}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
+                );
+                await redisManager.deleteByQuery(
+                    "usersReserves",
+                    `@networkNormalized:{${common.normalizeRedisKey(
+                        key
+                    )}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
+                );
+            }
 
             //retrieve addresses that during the processing of this chunk have arrived from alchemy webhook (if any)
             const arrivedAddressesFromWebhook =
@@ -1046,8 +1021,8 @@ class Engine {
                 );
                 console.log(
                     "Comparison addresses from webhook with the ones from redis",
-                    arrivedAddressesFromWebhook,
-                    userAccountDataHFGreaterThan2Addresses
+                    JSON.stringify(arrivedAddressesFromWebhook),
+                    JSON.stringify(userAccountDataHFGreaterThan2Addresses)
                 );
                 if (intersection.length > 0) {
                     const objectsToUpdate = _.filter(
@@ -1169,7 +1144,7 @@ class Engine {
                 pipeline.call("JSON.SET", redisKey, "$.price", update.price);
                 pipeline.call(
                     "JSON.SET",
-                    key,
+                    redisKey,
                     "$.priceModifiedOn",
                     moment.utc().unix()
                 );

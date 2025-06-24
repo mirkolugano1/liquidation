@@ -28,6 +28,7 @@ class Constants {
             chainId: 42161,
             isActive: true,
         },
+        /*
         {
             network: Network.ARB_SEPOLIA,
             aaveAddresses: {
@@ -43,6 +44,7 @@ class Constants {
             chainId: 421614,
             isActive: false,
         },
+        */
     ];
     CHUNK_SIZE = 300;
     METAMASK_ADDRESS = "0x2FD3A8F9E52b113E51016755B61AC9d3d9EA6567"; //liquidation metamask address

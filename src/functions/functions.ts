@@ -156,6 +156,7 @@ const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
         yield context.df.callActivity(
             "updateUserAccountDataAndUsersReservesActivity_initialization"
         );
+        let counter = 0;
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
             let hasMoreData = true;
             while (hasMoreData) {
@@ -163,6 +164,11 @@ const updateUserAccountDataAndUsersReservesOrchestrator: OrchestrationHandler =
                     "updateUserAccountDataAndUsersReservesActivity_chunk",
                     { network: aaveNetworkInfo.network }
                 );
+                counter++;
+                console.log(
+                    `Processed ${counter} chunks for network: ${aaveNetworkInfo.network}`
+                );
+                console.log("hasMoreData:", hasMoreData);
             }
         }
     };
@@ -175,7 +181,7 @@ const updateUserAccountDataAndUsersReservesActivity_initialization: ActivityHand
     };
 const updateUserAccountDataAndUsersReservesActivity_chunk: ActivityHandler =
     async (input: { network: Network }, context: InvocationContext) => {
-        await engine.updateUserAccountDataAndUsersReserves_chunk(
+        return await engine.updateUserAccountDataAndUsersReserves_chunk(
             context,
             input.network
         );
@@ -243,6 +249,7 @@ app.timer("updateUserAccountDataAndUsersReservesTimer", {
     ),
     extraInputs: [df.input.durableClient()],
     useMonitor: false,
+    runOnStartup: true, // This makes it run immediately on startup
     handler: updateUserAccountDataAndUsersReservesTimer,
 });
 
@@ -261,7 +268,7 @@ app.timer("redisPing", {
 app.timer("startupFunction", {
     schedule: "0 0 * * *", // Daily at midnight (or whatever schedule you want)
     extraInputs: [df.input.durableClient()],
-    runOnStartup: true, // This makes it run immediately on startup
+    //runOnStartup: true, // This makes it run immediately on startup
     handler: async (
         myTimer: Timer,
         context: InvocationContext

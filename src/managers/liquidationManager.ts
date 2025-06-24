@@ -110,22 +110,23 @@ class LiquidationManager {
             );
         }
 
-        //mirko
         if (userAddressesObjects && userAddressesObjects.length > 0) {
             for (const userAddressObject of userAddressesObjects) {
+                const userReserves = _.filter(
+                    usersReserves,
+                    (o) => o.userAddress == userAddressObject.address
+                );
                 const healthFactor = this.calculateHealthFactorOffChain(
                     userAddressObject,
                     aaveNetworkInfo,
-                    usersReserves.filter(
-                        (o) => o.address == userAddressObject.address
-                    )
+                    userReserves
                 );
 
                 //as long as liquidations are not enabled, we check the results from chain
                 //to ensure that the off-chain calculations are correct
                 if (!repo.liquidationsEnabled) {
                     await this.checkUserAccountDataBeforeLiquidation(
-                        userAddressObject.address,
+                        userAddressObject,
                         aaveNetworkInfo
                     );
                 }
@@ -142,10 +143,12 @@ class LiquidationManager {
 
                 let profitableLiquidations: any[] = [];
                 for (const liquidatableUserAddressObject of liquidatableUserAddressObjects) {
-                    const userReserves =
-                        repo.aave[key].usersReserves[
+                    const userReserves = _.filter(
+                        usersReserves,
+                        (o) =>
+                            o.userAddress ==
                             liquidatableUserAddressObject.address
-                        ];
+                    );
                     if (!userReserves || userReserves.length == 0) continue;
 
                     let potentialProfitableLiquidation: any = {
@@ -255,15 +258,14 @@ class LiquidationManager {
     //#endregion checkLiquidateAddressesFromInMemoryObjects
 
     async checkUserAccountDataBeforeLiquidation(
-        address: string,
+        userAddressObject: any,
         aaveNetworkInfo: any
     ) {
-        const userAccountData = aaveNetworkInfo.addressesObjects[address];
-        if (!userAccountData) return;
+        if (!userAddressObject) return;
 
         const userAccountDataFromChain = await transactionManager.multicall(
             aaveNetworkInfo.aaveAddresses.pool,
-            address,
+            userAddressObject.address,
             Constants.ABIS.POOL_ABI,
             "getUserAccountData",
             aaveNetworkInfo.network
@@ -271,11 +273,12 @@ class LiquidationManager {
 
         if (!userAccountDataFromChain || userAccountDataFromChain.length == 0)
             return;
+
         const userAccountDataFromChainObject: any = {
             totalCollateralBase: userAccountDataFromChain[0][0],
             totalDebtBase: userAccountDataFromChain[0][1],
-            currentLiquidationThreshold: userAccountDataFromChain[0][2],
-            ltv: userAccountDataFromChain[0][3],
+            currentLiquidationThreshold: userAccountDataFromChain[0][3],
+            ltv: userAccountDataFromChain[0][4],
             healthFactor: common.getHealthFactorFromUserAccountData(
                 userAccountDataFromChain[0]
             ),
@@ -286,25 +289,23 @@ class LiquidationManager {
         );
         let str = "";
         for (const key of userAccountDataFromChainObjectKeys) {
-            if (
-                userAccountData[key] !=
-                userAccountDataFromChainObject[key].toString()
-            ) {
-                str += `${key}: ${
-                    userAccountData[key]
-                } != ${userAccountDataFromChainObject[key].toString()}\n`;
+            const val = Math.abs(
+                BigNumber(userAddressObject[key])
+                    .dividedBy(BigNumber(userAccountDataFromChainObject[key]))
+                    .toNumber()
+            );
+            if (val > 1.005 || val < 0.995) {
+                str += `${key}: ${userAddressObject[
+                    key
+                ]?.toString()} != ${userAccountDataFromChainObject[
+                    key
+                ].toString()}\n`;
             }
         }
         if (str.length > 0) {
             console.log(
-                `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${address}: ${str}`
+                `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${userAddressObject.address}: ${str}`
             );
-            /*
-            await logger.log(
-                `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${address}: ${str}`,
-                LoggingFramework.Table
-            );
-            */
         }
     }
 
