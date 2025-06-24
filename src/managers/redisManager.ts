@@ -62,7 +62,12 @@ class RedisManager {
      * * Each object should have a 'key' property.
      * @returns Promise<void>
      */
-    async deleteArrayByQuery(items: any[]) {
+    async deleteArrayByQuery(items: any) {
+        if (!items) throw new Error("items must be provided");
+        if (Array.isArray(items) && items.length === 0)
+            throw new Error("items must be a non-empty array.");
+        if (!Array.isArray(items)) items = [items];
+
         const pipeline = this.redisClient.pipeline();
         for (const item of items) {
             pipeline.del(item.key);

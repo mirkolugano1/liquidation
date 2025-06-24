@@ -19,6 +19,23 @@ class Common {
             : Constants.AAVE_NETWORKS_INFOS;
     }
 
+    getCronScheduleByJobName(jobName: string) {
+        if (!jobName) throw new Error("No job name provided");
+        switch (jobName) {
+            case "updateReservesPricesTimer":
+                return this.isProd ? "*/5 * * *" : "0 0 * * *"; // Every hour in prod, every 5 minutes in dev
+            case "updateUserAccountDataAndUsersReservesTimer":
+                return this.isProd ? "*/15 * * * *" : "0 0 * * *"; // Every hour in prod, every 5 minutes in dev
+            default:
+                throw new Error("No cron schedule found for job " + jobName);
+        }
+    }
+
+    getProcessingAddressesKey(network: Network | string) {
+        if (!network) throw new Error("No network provided");
+        return `processingAddresses:${network.toString()}`;
+    }
+
     normalizeRedisKey(key: string) {
         return key?.toLowerCase().replace("-", "_");
     }

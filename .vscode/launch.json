@@ -5,12 +5,20 @@
             "name": "Debug Sandbox",
             "type": "node",
             "request": "launch",
-            "program": "${workspaceFolder}/src/clients/sandbox.ts",
-            "runtimeArgs": ["-r", "ts-node/register"],
-            "args": ["--transpileOnly"],
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "sandbox"],
+            "skipFiles": ["<node_internals>/**"],
             "console": "integratedTerminal",
             "internalConsoleOptions": "neverOpen",
-            "postDebugTask": "Kill Debug Session"
+            "postDebugTask": "Kill Debug Session",
+            "restart": false,
+            "autoAttachChildProcesses": true,
+            "sourceMaps": true,
+            "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+            "resolveSourceMapLocations": [
+                "${workspaceFolder}/**",
+                "!**/node_modules/**"
+            ]
         },
         {
             "name": "Debug Tests",
@@ -41,18 +49,6 @@
             "internalConsoleOptions": "neverOpen",
             "restart": false,
             "autoAttachChildProcesses": true,
-            "sourceMaps": true
-        },
-        {
-            "name": "Debug WebServer",
-            "type": "node",
-            "request": "launch",
-            "runtimeExecutable": "npm",
-            "runtimeArgs": ["run", "webServer"],
-            "skipFiles": ["<node_internals>/**"],
-            "console": "integratedTerminal",
-            "internalConsoleOptions": "neverOpen",
-            "restart": false,
             "sourceMaps": true
         },
         {

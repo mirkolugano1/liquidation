@@ -15,6 +15,35 @@ import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
 import webhookManager from "../managers/webhookManager";
+import redisManager from "../managers/redisManager";
+
+//#region Gas Price Update
+
+const redisPingOrchestrator: OrchestrationHandler = function* (
+    context: OrchestrationContext
+) {
+    yield context.df.callActivity("redisPingActivity");
+};
+
+const redisPingActivity: ActivityHandler = async (
+    input: unknown,
+    context: InvocationContext
+) => {
+    await engine.redisPing(context);
+};
+
+const redisPingTimer = async (
+    myTimer: Timer,
+    context: InvocationContext
+): Promise<void> => {
+    const client = df.getClient(context);
+    const instanceId = await client.startNew("redisPingOrchestrator");
+};
+
+df.app.orchestration("redisPingOrchestrator", redisPingOrchestrator);
+df.app.activity("redisPingActivity", { handler: redisPingActivity });
+
+//#endregion Gas Price Update
 
 //#region Gas Price Update
 
@@ -49,26 +78,18 @@ df.app.activity("updateGasPriceActivity", { handler: updateGasPriceActivity });
 const updateReservesDataOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    yield context.df.callActivity("updateReservesDataActivity_initialization");
     for (const aaveNetworkInfo of common.getNetworkInfos()) {
-        yield context.df.callActivity("updateReservesDataActivity_loop", {
+        yield context.df.callActivity("updateReservesDataActivity", {
             network: aaveNetworkInfo.network,
         });
     }
 };
 
-const updateReservesDataActivity_initialization: ActivityHandler = async (
-    input: unknown,
-    context: InvocationContext
-) => {
-    await engine.updateReservesData_initialization(context);
-};
-
-const updateReservesDataActivity_loop: ActivityHandler = async (
+const updateReservesDataActivity: ActivityHandler = async (
     input: { network: Network },
     context: InvocationContext
 ) => {
-    await engine.updateReservesData_loop(context, input.network);
+    await engine.updateReservesData(context, input.network);
 };
 
 const updateReservesDataTimer = async (
@@ -83,11 +104,8 @@ df.app.orchestration(
     "updateReservesDataOrchestrator",
     updateReservesDataOrchestrator
 );
-df.app.activity("updateReservesDataActivity_initialization", {
-    handler: updateReservesDataActivity_initialization,
-});
-df.app.activity("updateReservesDataActivity_loop", {
-    handler: updateReservesDataActivity_loop,
+df.app.activity("updateReservesDataActivity", {
+    handler: updateReservesDataActivity,
 });
 
 //#endregion Update Reserves Data
@@ -97,27 +115,18 @@ df.app.activity("updateReservesDataActivity_loop", {
 const updateReservesPricesOrchestrator: OrchestrationHandler = function* (
     context: OrchestrationContext
 ) {
-    yield context.df.callActivity(
-        "updateReservesPricesActivity_initialization"
-    );
     for (const aaveNetworkInfo of common.getNetworkInfos()) {
-        yield context.df.callActivity("updateReservesPricesActivity_loop", {
+        yield context.df.callActivity("updateReservesPricesActivity", {
             network: aaveNetworkInfo.network,
         });
     }
 };
 
-const updateReservesPricesActivity_initialization: ActivityHandler = async (
-    input: unknown,
-    context: InvocationContext
-) => {
-    await engine.updateReservesPrices_initialization(context);
-};
-const updateReservesPricesActivity_loop: ActivityHandler = async (
+const updateReservesPricesActivity: ActivityHandler = async (
     input: { network: Network },
     context: InvocationContext
 ) => {
-    await engine.updateReservesPrices_loop(context, input.network);
+    await engine.updateReservesPrices(context, input.network);
 };
 
 const updateReservesPricesTimer = async (
@@ -134,11 +143,8 @@ df.app.orchestration(
     "updateReservesPricesOrchestrator",
     updateReservesPricesOrchestrator
 );
-df.app.activity("updateReservesPricesActivity_initialization", {
-    handler: updateReservesPricesActivity_initialization,
-});
-df.app.activity("updateReservesPricesActivity_loop", {
-    handler: updateReservesPricesActivity_loop,
+df.app.activity("updateReservesPricesActivity", {
+    handler: updateReservesPricesActivity,
 });
 
 //#endregion Update Reserves Prices
@@ -225,17 +231,26 @@ app.timer("updateReservesDataTimer", {
 
 //todo for prod modify these timers to run every n minutes
 app.timer("updateReservesPricesTimer", {
-    schedule: "15 * * * *", // Cron expression for every 15 minutes
+    schedule: common.getCronScheduleByJobName("updateReservesPricesTimer"),
     extraInputs: [df.input.durableClient()],
     useMonitor: false,
     handler: updateReservesPricesTimer,
 });
 
 app.timer("updateUserAccountDataAndUsersReservesTimer", {
-    schedule: "16 * * * *", // Cron expression for every n minutes
+    schedule: common.getCronScheduleByJobName(
+        "updateUserAccountDataAndUsersReservesTimer"
+    ),
     extraInputs: [df.input.durableClient()],
     useMonitor: false,
     handler: updateUserAccountDataAndUsersReservesTimer,
+});
+
+app.timer("redisPing", {
+    schedule: "*/2 * * * *", // Cron expression for every n minutes
+    extraInputs: [df.input.durableClient()],
+    useMonitor: false,
+    handler: redisPingTimer,
 });
 
 //end functions to be executed every n minutes
@@ -251,15 +266,22 @@ app.timer("startupFunction", {
         myTimer: Timer,
         context: InvocationContext
     ): Promise<void> => {
-        if (common.isProd) return; // Do not run in production
-        context.log("Delayed startup function executed.");
-        await common.sleep(10000);
-        //actual call
-        console.log("123 Startup function executed.");
-        /*
-        await updateGasPriceTimer(myTimer, context);
-        await updateReservesDataTimer(myTimer, context);
-        */
+        try {
+            //Todo setup all necessary initialization and checks, so that in production the app is ready to run
+            //and not crash on startup (e.g. redis connection, etc.)
+            await engine.initializeFunction(context);
+        } catch (error) {
+            context.log("❌ CRITICAL: Initialization failed:", error);
+
+            if (common.isProd) {
+                // In production, exit the process to prevent unhealthy instance
+                context.log("🛑 Exiting process due to initialization failure");
+                process.exit(1);
+            } else {
+                // In dev, just throw to see the error
+                throw error;
+            }
+        }
     },
 });
 

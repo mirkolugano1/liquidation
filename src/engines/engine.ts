@@ -45,8 +45,8 @@ class Engine {
 
     //#region initializeWebServer
 
-    async initializeWebServer() {
-        if (repo.isWebServerInitialized) return;
+    async initializeWebhookEndpoint() {
+        if (repo.isWebhookEndpointInitialized) return;
 
         repo.ifaceBorrow = new ethers.Interface(
             Constants.ABIS.BORROW_EVENT_ABI
@@ -73,8 +73,7 @@ class Engine {
         await this.initializeReserves();
         await this.initializeUsersReserves();
 
-        console.log("Web server initialized");
-        repo.isWebServerInitialized = true;
+        repo.isWebhookEndpointInitialized = true;
     }
 
     //#endregion initializeWebServer
@@ -213,13 +212,30 @@ class Engine {
 
     //#endregion initializeReserves
 
+    //#region initializeFunction
+
+    async initializeFunction(context: InvocationContext | null = null) {
+        logger.initialize("function", context);
+        //pre-warmup redis connection
+        await redisManager.redisClient.ping();
+        await this.initializeAlchemy();
+
+        // Do not run in production (this is for debugging to give time to attach debugger)
+        if (!common.isProd) {
+            if (context) context.log("Delayed startup function executed.");
+            await common.sleep(10000);
+        }
+
+        await logger.log("✅ Initialization completed successfully.");
+    }
+
+    //#endregion initializeFunction
+
     //#region initializeAlchemy
 
     async initializeAlchemy(network: Network | string | null = null) {
-        if (repo.aave) return;
+        if (repo.isAlchemyInitialized) return;
         repo.aave = {};
-
-        this.webappUrl = await common.getAppSetting("WEBAPPURL");
 
         const alchemyKey = await encryption.getAndDecryptSecretFromKeyVault(
             "ALCHEMYKEYENCRYPTED"
@@ -254,6 +270,8 @@ class Engine {
 
             repo.aave[key] = networkInfo;
         }
+
+        repo.isAlchemyInitialized = true;
     }
 
     //#endregion initializeAlchemy
@@ -262,10 +280,15 @@ class Engine {
 
     //#region #Variables
 
-    triggerWebServerActionDevDisabled: boolean = true;
-    webappUrl: string = "";
-
     //#endregion Variables
+
+    //
+    //
+    //
+    // space to allow regions to be displayed correctly in VSCode
+    //
+    //
+    //
 
     //#region #Helper methods
 
@@ -611,6 +634,20 @@ class Engine {
     //
     //
 
+    //#region redisPing
+
+    async redisPing(context: InvocationContext | null = null): Promise<void> {
+        //ping redis to check if it is alive
+        const ping = await redisManager.redisClient.ping();
+        if (ping === "PONG") {
+            console.log("Redis is alive");
+        } else {
+            console.log("Redis is NOT alive");
+        }
+    }
+
+    //#endregion redisPing
+
     //#region updateEModeCategories
 
     async updateEModeCategories(aaveNetworkInfo: any) {
@@ -683,17 +720,11 @@ class Engine {
      * Periodically update the reserves data in the DB
      * @param context the InvocationContext of the function app on azure (for Application Insights)
      */
-    async updateReservesData_initialization(
-        context: InvocationContext | null = null
-    ) {
-        logger.initialize("function:updateReservesData", context);
-        await this.initializeAlchemy();
-    }
-
-    async updateReservesData_loop(
+    async updateReservesData(
         context: InvocationContext | null,
         network: Network
     ) {
+        await this.initializeAlchemy(network);
         const key = network.toString();
         const aaveNetworkInfo = common.getAaveNetworkInfo(key);
 
@@ -886,7 +917,6 @@ class Engine {
     ) {
         await this.initializeAlchemy();
         await this.initializeReserves();
-        await this.initializeAddresses();
 
         //set status to null for all addresses in the DB
         //this will allow to update the userAccountData and userReserves for all addresses
@@ -922,6 +952,11 @@ class Engine {
         );
 
         const key = network.toString();
+
+        //delete list of processing addresses (coming from alchemy webhook)
+        const processingAddressesKey = common.getProcessingAddressesKey(key);
+        await redisManager.deleteArrayByQuery(processingAddressesKey);
+
         const aaveNetworkInfo = await common.getAaveNetworkInfo(network);
         const timestamp = await redisManager.getValue(
             "config:lastUpdateUserAccountDataAndUsersReserves"
@@ -983,10 +1018,12 @@ class Engine {
             redisManager.set(keys, addressesUserAccountDataHFLowerThan2);
 
             //delete addresses from the DB where health factor is > 2
-            const userAccountDataHFGreaterThan2AddressesString = _.map(
+            const userAccountDataHFGreaterThan2Addresses = _.map(
                 userAccountDataHFGreaterThan2,
                 (o) => o.address
-            ).join("|");
+            );
+            const userAccountDataHFGreaterThan2AddressesString =
+                userAccountDataHFGreaterThan2Addresses.join("|");
             await redisManager.deleteByQuery(
                 "addresses",
                 `@network:{${key}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
@@ -995,6 +1032,37 @@ class Engine {
                 "usersReserves",
                 `@network:{${key}} @address:{${userAccountDataHFGreaterThan2AddressesString}}`
             );
+
+            //retrieve addresses that during the processing of this chunk have arrived from alchemy webhook (if any)
+            const arrivedAddressesFromWebhook =
+                await redisManager.getArrayValue(processingAddressesKey);
+            if (
+                arrivedAddressesFromWebhook &&
+                arrivedAddressesFromWebhook.length > 0
+            ) {
+                const intersection = _.intersection(
+                    arrivedAddressesFromWebhook,
+                    userAccountDataHFGreaterThan2Addresses
+                );
+                console.log(
+                    "Comparison addresses from webhook with the ones from redis",
+                    arrivedAddressesFromWebhook,
+                    userAccountDataHFGreaterThan2Addresses
+                );
+                if (intersection.length > 0) {
+                    const objectsToUpdate = _.filter(
+                        addressesUserAccountDataHFLowerThan2,
+                        (o) => intersection.includes(o.address)
+                    );
+                    if (objectsToUpdate.length > 0) {
+                        _.each(objectsToUpdate, (o) => (o.status = 0));
+                        await redisManager.setArrayProperties(
+                            objectsToUpdate,
+                            "status"
+                        );
+                    }
+                }
+            }
         }
 
         await logger.log("updateUserAccountDataAndUsersReserves_chunk: End");
@@ -1035,10 +1103,12 @@ class Engine {
      * @param network
      * @param context the InvocationContext of the function app on azure (for Application Insights logging)
      */
-    async updateReservesPrices_loop(
+    async updateReservesPrices(
         context: InvocationContext | null = null,
         network: Network
     ) {
+        await this.initializeAlchemy(network);
+        await this.initializeReserves(network);
         const aaveNetworkInfo = common.getAaveNetworkInfo(network);
         const key = aaveNetworkInfo.network.toString();
 
@@ -1110,17 +1180,6 @@ class Engine {
         await logger.log("updateReservesPrices: End");
     }
 
-    async updateReservesPrices_initialization(
-        context: InvocationContext | null = null,
-        network: Network | null = null //if network is not defined, loop through all networks
-    ) {
-        logger.initialize("function:updateReservesPrices", context);
-        await logger.log("updateReservesPrices: Start");
-
-        await this.initializeAlchemy(network);
-        await this.initializeReserves(network);
-    }
-
     //#endregion updateReservesPrices
 
     //#endregion Scheduled azure functions
@@ -1189,19 +1248,16 @@ class Engine {
     }
 
     async doTest() {
-        console.log("Sending test message to Redis stream...");
-        await redisManager.redisClient.xadd(
-            "liquidation-events",
-            "*",
-            "action",
-            "testAction",
-            "data",
-            JSON.stringify({
-                testProperty1: "test data",
-                testProperty2: 123,
-            })
+        console.log("doTest started");
+        await redisManager.set(
+            common.getProcessingAddressesKey("arb-mainnet"),
+            ["1", "2", "3"]
         );
-        console.log("Sent test message to Redis stream!");
+        const val = await redisManager.getArrayValue(
+            common.getProcessingAddressesKey("arb-mainnet")
+        );
+        console.log(val);
+
         return;
         //await this.migrateDataToRedis();
 
@@ -1210,10 +1266,10 @@ class Engine {
         //"0x02d722f73a59d51d845ae9972b28d28b4b795c65";
         await this.initializeAlchemy();
         await this.initializeAddresses();
-        await this.updateReservesData_loop(null, Network.ARB_MAINNET);
+        await this.updateReservesData(null, Network.ARB_MAINNET);
         await this.initializeReserves();
 
-        await this.updateReservesPrices_loop(null, Network.ARB_MAINNET);
+        await this.updateReservesPrices(null, Network.ARB_MAINNET);
         await this.initializeReserves();
         const aaveNetworkInfo = common.getAaveNetworkInfo(Network.ARB_MAINNET);
         const uadas = await this.getUserAccountDataForAddresses(

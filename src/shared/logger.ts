@@ -18,12 +18,17 @@ class Logger {
     private constructor() {}
 
     initialize(
-        clientAppName: string,
+        clientAppName: string = "",
         context: InvocationContext | null = null
     ) {
+        //this is to allow overriding the client app name
+        if (!this.clientAppName || clientAppName) {
+            this.clientAppName =
+                clientAppName || process.env.LIQUIDATIONSERVERENVIRONMENT!;
+        }
+
         if (this.isInitialized) return;
         this.isInitialized = true;
-        this.clientAppName = clientAppName;
         this.context = context;
 
         applicationInsights
@@ -168,6 +173,10 @@ class Logger {
         loggingFramework: LoggingFramework = LoggingFramework.ApplicationInsights,
         logLevel: LogLevel = LogLevel.Info
     ) {
+        this.initialize(
+            process.env.LIQUIDATIONSERVERENVIRONMENT!,
+            this.context
+        );
         console.log("### Log entry ###", log);
 
         // Application Insights logging

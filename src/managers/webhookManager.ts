@@ -25,7 +25,7 @@ class WebhookManager {
     //#region #ProcessAaveEvent (Alchemy Webhook)
 
     async processAaveEvent(req: any, context: any) {
-        if (!repo.isWebServerInitialized) return;
+        if (!repo.isWebhookEndpointInitialized) return;
         let block = req.body.event?.data?.block;
         let network = req.query.network ?? "eth-mainnet";
         await this.processBlock(block, network);
@@ -204,6 +204,15 @@ class WebhookManager {
                 logger.appendToInternalLog(
                     `Has ${addressesToAdd.length} addresses to add.`
                 );
+
+                //add the addresses to the processing addresses set in Redis
+                //these addresses will be checked by the updateUserAccountDataAndUsersReserves job
+                //and ignored if they arrived while same addresses are present in the current chunk
+                await redisManager.set(
+                    common.getProcessingAddressesKey(key),
+                    addressesToAdd
+                );
+
                 //the "from" address is the one that initiated the transaction
                 //and should be added only if it was part of one of the relevant events
                 if (from) addressesToAdd.push(from);

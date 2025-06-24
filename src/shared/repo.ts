@@ -12,7 +12,7 @@ class Repo {
 
     public aave: any;
     public contractInterfaces: any = {};
-    public isWebServerInitialized: boolean = false;
+    public isWebhookEndpointInitialized: boolean = false;
     public batchAddressesTreshold: number = 25;
     public ifaceBorrow: any;
     public ifaceDeposit: any;
@@ -22,5 +22,6 @@ class Repo {
     public ifaceRepay: any;
     public ifaceFlashLoan: any;
     public liquidationsEnabled: boolean = false;
+    public isAlchemyInitialized: boolean = false;
 }
 export default Repo.getInstance();
