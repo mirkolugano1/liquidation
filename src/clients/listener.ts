@@ -1,11 +1,12 @@
 import dotenv from "dotenv";
 import engine from "../engines/engine";
 import common from "../shared/common";
-import webhookManager from "../managers/webhookManager";
+import webSocketManager from "../managers/webSocketManager";
 
 dotenv.config();
 
 async function main() {
+    await engine.initializeAlchemy();
     await engine.initializeAlchemyWebSocketListener();
     const aaveNetworkInfos = common.getNetworkInfos();
     for (const aaveNetworkInfo of aaveNetworkInfos) {
@@ -22,7 +23,7 @@ async function main() {
                         topics: topicSets,
                     },
                     async (log: any) => {
-                        await webhookManager.processLog(
+                        await webSocketManager.processLog(
                             log,
                             aaveNetworkInfo.network
                         );

@@ -46,8 +46,6 @@ class Engine {
     //#region initializeAlchemyWebSocketListener
 
     async initializeAlchemyWebSocketListener() {
-        if (repo.isAlchemyWebSocketListenerInitialized) return;
-
         repo.ifaceBorrow = new ethers.Interface(
             Constants.ABIS.BORROW_EVENT_ABI
         );
@@ -67,12 +65,6 @@ class Engine {
         repo.ifaceFlashLoan = new ethers.Interface(
             Constants.ABIS.FLASHLOAN_EVENT_ABI
         );
-
-        await this.initializeAlchemy();
-        await this.initializeAddresses();
-        await this.initializeReserves();
-
-        repo.isAlchemyWebSocketListenerInitialized = true;
     }
 
     //#endregion initializeAlchemyWebSocketListener
@@ -173,43 +165,42 @@ class Engine {
 
     //#endregion initializeUsersReserves
 
-    //#region initializeReserves
+    //#region loadNetworkReservesAndEModeCategoriesFromRedis
 
-    async initializeReserves(network: Network | string | null = null) {
-        if (!repo.aave) throw new Error("Aave object not initialized");
-        const _key = network?.toString() ?? null;
-
+    async loadNetworkReservesAndEModeCategoriesFromRedis(
+        network: Network | string
+    ) {
         let reserves: any = {};
-        for (const aaveNetworkInfo of common.getNetworkInfos()) {
-            const key = aaveNetworkInfo.network.toString();
-            if (_key && key != _key) continue;
-
-            const dbReserves: any = await redisManager.getList(
-                `reserves:${key}:*`,
-                "sorting"
+        let eModeCategories: any = {};
+        const aaveNetworkInfo = _.find(common.getNetworkInfos(), {
+            network: network,
+        });
+        if (!aaveNetworkInfo)
+            throw new Error(
+                `loadNetworkReservesAndEModeCategoriesFromRedis: No network found for ${network}`
             );
 
-            if (!dbReserves || dbReserves.length == 0) continue;
+        const networkReserves: any = await redisManager.getList(
+            `reserves:${network}:*`,
+            "sorting"
+        );
 
-            const networkReserves = _.filter(dbReserves, { network: key });
-            for (let networkReserve of networkReserves) {
-                reserves[networkReserve.address] = networkReserve;
-            }
-            repo.aave[key].reserves = reserves;
-
-            //load eModeCategories
-            const eModeCategories: any = await redisManager.getList(
-                `eModeCategories:${key}:*`
-            );
-            repo.aave[key].eModeCategories = {};
-            for (let eModeCategory of eModeCategories) {
-                repo.aave[key].eModeCategories[eModeCategory.eModeCategory] =
-                    eModeCategory;
-            }
+        for (let networkReserve of networkReserves) {
+            reserves[networkReserve.address] = networkReserve;
         }
+
+        //load eModeCategories
+        const eModeCategoriesList: any = await redisManager.getList(
+            `eModeCategories:${network}:*`
+        );
+        for (let eModeCategory of eModeCategoriesList) {
+            eModeCategories[eModeCategory.eModeCategory] = eModeCategory;
+        }
+
+        return [reserves, eModeCategories];
     }
 
-    //#endregion initializeReserves
+    //#endregion loadNetworkReservesAndEModeCategoriesFromRedis
 
     //#region initializeFunction
 
@@ -884,7 +875,6 @@ class Engine {
         context: InvocationContext | null = null
     ) {
         await this.initializeAlchemy();
-        await this.initializeReserves();
 
         //set status to null for all addresses in the DB
         //this will allow to update the userAccountData and userReserves for all addresses
@@ -916,8 +906,10 @@ class Engine {
         );
 
         const key = network.toString();
+        const reserves =
+            await this.loadNetworkReservesAndEModeCategoriesFromRedis(network);
 
-        //delete list of processing addresses (coming from alchemy webhook)
+        //delete list of processing addresses (coming from alchemy webSocket)
         const processingAddressesKey = common.getProcessingAddressesKey(key);
         await redisManager.redisClient.del(processingAddressesKey);
 
@@ -1028,20 +1020,18 @@ class Engine {
                 );
             }
 
-            //retrieve addresses that during the processing of this chunk have arrived from alchemy webhook (if any)
-            const arrivedAddressesFromWebhook =
-                await redisManager.getArrayValue(processingAddressesKey);
-            if (
-                arrivedAddressesFromWebhook &&
-                arrivedAddressesFromWebhook.length > 0
-            ) {
+            //retrieve addresses that during the processing of this chunk have arrived from alchemy webSocket (if any)
+            const arrivedAddressesFromLog = await redisManager.getArrayValue(
+                processingAddressesKey
+            );
+            if (arrivedAddressesFromLog && arrivedAddressesFromLog.length > 0) {
                 const intersection = _.intersection(
-                    arrivedAddressesFromWebhook,
+                    arrivedAddressesFromLog,
                     userAccountDataHFGreaterThan2Addresses
                 );
                 console.log(
-                    "Comparison addresses from webhook with the ones from redis",
-                    JSON.stringify(arrivedAddressesFromWebhook),
+                    "Comparison addresses from webSocket with the ones from redis",
+                    JSON.stringify(arrivedAddressesFromLog),
                     JSON.stringify(userAccountDataHFGreaterThan2Addresses)
                 );
                 if (intersection.length > 0) {
@@ -1062,7 +1052,7 @@ class Engine {
             //All addresses have been updated (status = 2), we can set them to status = 1
             //so that they can be processed again in the next run of the main function (orchestrator)
             //but at the same time the data they have is uptodate so they can be used for calculating
-            //health factor when updating reserves prices or webhook event arrives
+            //health factor when updating reserves prices or webSocket event arrives
 
             await this.resetAddressesStatus(1, network, context);
         }
@@ -1142,7 +1132,8 @@ class Engine {
         network: Network
     ) {
         await this.initializeAlchemy(network);
-        await this.initializeReserves(network);
+        const [reserves, eModeCategories] =
+            await this.loadNetworkReservesAndEModeCategoriesFromRedis(network);
         const aaveNetworkInfo = common.getAaveNetworkInfo(network);
         const key = aaveNetworkInfo.network.toString();
 
@@ -1152,7 +1143,7 @@ class Engine {
             Constants.ABIS.AAVE_ORACLE_ABI,
             aaveNetworkInfo.network
         );
-        const reservesAddresses = Object.keys(aaveNetworkInfo.reserves);
+        const reservesAddresses = Object.keys(reserves);
         const currentAssetsPrices = await aaveOracleContract.getAssetsPrices(
             reservesAddresses
         );
@@ -1320,30 +1311,6 @@ class Engine {
         //await this.migrateDataToRedis();
 
         logger.initialize("function:doTest", null);
-        const address = "0x1046f7aeea503b5603e7f2b2839a6c5064403d5b";
-        //"0x02d722f73a59d51d845ae9972b28d28b4b795c65";
-        await this.initializeAlchemy();
-        await this.initializeAddresses();
-        await this.updateReservesData(null, Network.ARB_MAINNET);
-        await this.initializeReserves();
-
-        await this.updateReservesPrices(null, Network.ARB_MAINNET);
-        await this.initializeReserves();
-        const aaveNetworkInfo = common.getAaveNetworkInfo(Network.ARB_MAINNET);
-        const uadas = await this.getUserAccountDataForAddresses(
-            [address],
-            aaveNetworkInfo.network
-        );
-
-        const uao = await redisManager.getObject(
-            `addresses:${aaveNetworkInfo.network}:${address}`
-        );
-        await this.updateUserProperties([uao], aaveNetworkInfo.network);
-        await this.updateUsersReservesData([uao], aaveNetworkInfo);
-
-        const userReserves = await redisManager.getList(
-            `usersReserves:${aaveNetworkInfo.network}:${address}:*`
-        );
         /*
         const tcb = liquidationManager.calculateTotalCollateralBaseForAddress(
             aaveNetworkInfo.addressesObjects[address],
@@ -1363,14 +1330,6 @@ class Engine {
         console.log("Calculated", tdb.toNumber());
         */
 
-        const hf = liquidationManager.calculateHealthFactorOffChain(
-            aaveNetworkInfo.addressesObjects[address],
-            aaveNetworkInfo,
-            userReserves
-        );
-
-        console.log("From Chain", uadas[0].healthFactor);
-        console.log("Calculated", hf);
         return;
 
         await this.updateUserAccountDataAndUsersReserves_initialization();

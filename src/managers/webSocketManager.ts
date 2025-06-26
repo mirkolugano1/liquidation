@@ -10,14 +10,14 @@ import emailManager from "./emailManager";
 import redisManager from "./redisManager";
 import moment from "moment";
 
-class WebhookManager {
-    private static instance: WebhookManager;
+class WebSocketManager {
+    private static instance: WebSocketManager;
 
-    public static getInstance(): WebhookManager {
-        if (!WebhookManager.instance) {
-            WebhookManager.instance = new WebhookManager();
+    public static getInstance(): WebSocketManager {
+        if (!WebSocketManager.instance) {
+            WebSocketManager.instance = new WebSocketManager();
         }
-        return WebhookManager.instance;
+        return WebSocketManager.instance;
     }
 
     private constructor() {}
@@ -25,7 +25,6 @@ class WebhookManager {
     //#region #ProcessLog (Alchemy WebSockets)
 
     async processLog(log: any, network: string) {
-        if (!repo.isAlchemyWebSocketListenerInitialized) return;
         console.log("Processing log:", log);
 
         const key = network;
@@ -41,7 +40,7 @@ class WebhookManager {
                     log.account.address?.toLowerCase();
 
                 //check if the price oracle aggregator address is already in the reserves, otherwise
-                //email me to change the webhook
+                //email me to change the WebSocket
                 const reserves: any = await redisManager.getList(
                     `reserves:${key}:*`
                 );
@@ -54,7 +53,7 @@ class WebhookManager {
                     );
                     await emailManager.sendLogEmail(
                         "Price Oracle Aggregator address not found",
-                        `The Price Oracle Aggregator address ${priceOracleAggregatorAddress} was not found in the reserves of the Aave network ${key}. Please update the webhook.`
+                        `The Price Oracle Aggregator address ${priceOracleAggregatorAddress} was not found in the reserves of the Aave network ${key}. Please update the WebSocket.`
                     );
                 } else {
                     const data = log.data;
@@ -777,4 +776,4 @@ class WebhookManager {
 
     //#endregion checkUserReservesDataConsistencyAndUpdateDB
 }
-export default WebhookManager.getInstance();
+export default WebSocketManager.getInstance();
