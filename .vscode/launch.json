@@ -8,7 +8,26 @@
             "runtimeExecutable": "npm",
             "runtimeArgs": ["run", "sandbox"],
             "skipFiles": ["<node_internals>/**"],
-            "console": "integratedTerminal",
+            "console": "externalTerminal",
+            "internalConsoleOptions": "neverOpen",
+            "postDebugTask": "Kill Debug Session",
+            "restart": false,
+            "autoAttachChildProcesses": true,
+            "sourceMaps": true,
+            "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+            "resolveSourceMapLocations": [
+                "${workspaceFolder}/**",
+                "!**/node_modules/**"
+            ]
+        },
+        {
+            "name": "Debug Listener",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "listener"],
+            "skipFiles": ["<node_internals>/**"],
+            "console": "externalTerminal",
             "internalConsoleOptions": "neverOpen",
             "postDebugTask": "Kill Debug Session",
             "restart": false,

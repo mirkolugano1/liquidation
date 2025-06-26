@@ -41,6 +41,7 @@
     "scripts": {
         "build": "tsc",
         "sandbox": "npx ts-node --transpileOnly src/clients/sandbox.ts",
+        "listener": "npx ts-node --transpileOnly src/clients/listener.ts",
         "watch": "tsc --watch",
         "test": "node --test --require ts-node/register tests/*.test.ts",
         "testOnly": "node --test --test-only --require ts-node/register tests/*.test.ts"

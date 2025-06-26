@@ -83,17 +83,19 @@ class LiquidationManager {
         userAddressesObjects: any[] | null = null,
         usersReserves: any[] | null = null
     ) {
-        if (!userAddressesObjects)
+        if (!userAddressesObjects) {
             userAddressesObjects = await redisManager.getList(
                 `addresses:${aaveNetworkInfo.network}:*`
             );
+        }
+
+        if (!userAddressesObjects || userAddressesObjects.length == 0) return;
 
         let userAddressesObjectsAddresses = _.map(
             userAddressesObjects,
             (o) => o.address
         );
         let liquidatableAddresses: any[] = [];
-        const key = aaveNetworkInfo.network.toString();
 
         if (!usersReserves) {
             const reserves = aaveNetworkInfo.reserves;
@@ -110,148 +112,153 @@ class LiquidationManager {
             );
         }
 
-        if (userAddressesObjects && userAddressesObjects.length > 0) {
-            for (const userAddressObject of userAddressesObjects) {
-                const userReserves = _.filter(
-                    usersReserves,
-                    (o) => o.userAddress == userAddressObject.address
-                );
-                const healthFactor = this.calculateHealthFactorOffChain(
+        for (const userAddressObject of userAddressesObjects) {
+            const userReserves = _.filter(
+                usersReserves,
+                (o) => o.userAddress == userAddressObject.address
+            );
+            const healthFactor = this.calculateHealthFactorOffChain(
+                userAddressObject,
+                aaveNetworkInfo,
+                userReserves
+            );
+            console.log(
+                `Health factor for address ${userAddressObject.address}: ${healthFactor}`
+            );
+
+            //as long as liquidations are not enabled, we check the results from chain
+            //to ensure that the off-chain calculations are correct
+            if (!repo.liquidationsEnabled) {
+                await this.checkUserAccountDataBeforeLiquidation(
                     userAddressObject,
-                    aaveNetworkInfo,
-                    userReserves
+                    aaveNetworkInfo
                 );
-
-                //as long as liquidations are not enabled, we check the results from chain
-                //to ensure that the off-chain calculations are correct
-                if (!repo.liquidationsEnabled) {
-                    await this.checkUserAccountDataBeforeLiquidation(
-                        userAddressObject,
-                        aaveNetworkInfo
-                    );
-                }
-
-                if (healthFactor < 1)
-                    liquidatableAddresses.push(userAddressObject.address);
             }
 
-            if (liquidatableAddresses.length > 0) {
-                const liquidatableUserAddressObjects = _.filter(
-                    userAddressesObjects,
-                    (o) => _.includes(liquidatableAddresses, o.address)
+            if (healthFactor < 1)
+                liquidatableAddresses.push(userAddressObject.address);
+        }
+
+        console.log(
+            `Liquidatable addresses: ${JSON.stringify(liquidatableAddresses)}`
+        );
+        if (liquidatableAddresses.length > 0) {
+            const liquidatableUserAddressObjects = _.filter(
+                userAddressesObjects,
+                (o) => _.includes(liquidatableAddresses, o.address)
+            );
+
+            let profitableLiquidations: any[] = [];
+            for (const liquidatableUserAddressObject of liquidatableUserAddressObjects) {
+                const userReserves = _.filter(
+                    usersReserves,
+                    (o) =>
+                        o.userAddress == liquidatableUserAddressObject.address
                 );
+                if (!userReserves || userReserves.length == 0) continue;
 
-                let profitableLiquidations: any[] = [];
-                for (const liquidatableUserAddressObject of liquidatableUserAddressObjects) {
-                    const userReserves = _.filter(
-                        usersReserves,
-                        (o) =>
-                            o.userAddress ==
-                            liquidatableUserAddressObject.address
-                    );
-                    if (!userReserves || userReserves.length == 0) continue;
+                let potentialProfitableLiquidation: any = {
+                    profit: 0,
+                };
+                for (const userReserve of userReserves) {
+                    if (
+                        userReserve.usageAsCollateralEnabled &&
+                        this.isReserveUsedAsCollateral(
+                            liquidatableUserAddressObject.userConfiguration,
+                            userReserve.tokenAddress,
+                            aaveNetworkInfo
+                        ) &&
+                        userReserve.currentATokenBalance > 0
+                    ) {
+                        for (const debtUserReserve of userReserves) {
+                            if (
+                                userReserve.tokenAddress !=
+                                    debtUserReserve.tokenAddress &&
+                                (debtUserReserve.currentStableDebt > 0 ||
+                                    debtUserReserve.variabledebt > 0)
+                            ) {
+                                //we are in a collateral / debt pair whose balance is both > 0.
+                                //calculate potential profit of liquidation for this asset pair
+                                const [debtToCover, profitInUSD] =
+                                    await this.calculateNetLiquidationReward(
+                                        userReserve,
+                                        debtUserReserve,
+                                        liquidatableUserAddressObject.healthFactor,
+                                        aaveNetworkInfo
+                                    );
 
-                    let potentialProfitableLiquidation: any = {
-                        profit: 0,
-                    };
-                    for (const userReserve of userReserves) {
-                        if (
-                            userReserve.usageAsCollateralEnabled &&
-                            this.isReserveUsedAsCollateral(
-                                liquidatableUserAddressObject.userConfiguration,
-                                userReserve.tokenAddress,
-                                aaveNetworkInfo
-                            ) &&
-                            userReserve.currentATokenBalance > 0
-                        ) {
-                            for (const debtUserReserve of userReserves) {
+                                const profitInUSDNumber =
+                                    profitInUSD.toNumber();
                                 if (
-                                    userReserve.tokenAddress !=
-                                        debtUserReserve.tokenAddress &&
-                                    (debtUserReserve.currentStableDebt > 0 ||
-                                        debtUserReserve.variabledebt > 0)
+                                    profitInUSDNumber >
+                                    potentialProfitableLiquidation.profit
                                 ) {
-                                    //we are in a collateral / debt pair whose balance is both > 0.
-                                    //calculate potential profit of liquidation for this asset pair
-                                    const [debtToCover, profitInUSD] =
-                                        await this.calculateNetLiquidationReward(
-                                            userReserve,
-                                            debtUserReserve,
-                                            liquidatableUserAddressObject.healthFactor,
-                                            aaveNetworkInfo
-                                        );
-
-                                    const profitInUSDNumber =
-                                        profitInUSD.toNumber();
-                                    if (
-                                        profitInUSDNumber >
-                                        potentialProfitableLiquidation.profit
-                                    ) {
-                                        potentialProfitableLiquidation = {
-                                            profit: profitInUSDNumber,
-                                            collateralAsset:
-                                                userReserve.tokenAddress,
-                                            debtAsset:
-                                                debtUserReserve.tokenAddress,
-                                            address:
-                                                liquidatableUserAddressObject.address,
-                                            debtToCover: debtToCover,
-                                        };
-                                    }
+                                    potentialProfitableLiquidation = {
+                                        profit: profitInUSDNumber,
+                                        collateralAsset:
+                                            userReserve.tokenAddress,
+                                        debtAsset: debtUserReserve.tokenAddress,
+                                        address:
+                                            liquidatableUserAddressObject.address,
+                                        debtToCover: debtToCover,
+                                    };
                                 }
                             }
                         }
                     }
-
-                    if (potentialProfitableLiquidation.profit > 0)
-                        profitableLiquidations.push(
-                            potentialProfitableLiquidation
-                        );
                 }
 
-                if (profitableLiquidations.length > 0) {
-                    if (repo.liquidationsEnabled) {
-                        const liquidationsPromises = _.map(
-                            profitableLiquidations,
-                            (o) => {
-                                return transactionManager.sendSingleTransaction(
-                                    aaveNetworkInfo,
-                                    "requestFlashLoan",
-                                    [
-                                        o.collateralAsset,
-                                        o.debtAsset,
-                                        o.address,
-                                        o.debtToCover,
-                                        true, //receive aTokens
-                                    ]
-                                );
-                            }
-                        );
+                if (potentialProfitableLiquidation.profit > 0)
+                    profitableLiquidations.push(potentialProfitableLiquidation);
+            }
 
-                        if (liquidationsPromises.length > 0) {
-                            const liquidationsResults = await Promise.all(
-                                liquidationsPromises
-                            );
-                            await logger.log(
-                                "Liquidations results: " +
-                                    JSON.stringify(liquidationsResults),
-                                LoggingFramework.Table
+            console.log(
+                `Profitable liquidations: ${JSON.stringify(
+                    profitableLiquidations
+                )}`
+            );
+            if (profitableLiquidations.length > 0) {
+                if (repo.liquidationsEnabled) {
+                    const liquidationsPromises = _.map(
+                        profitableLiquidations,
+                        (o) => {
+                            return transactionManager.sendSingleTransaction(
+                                aaveNetworkInfo,
+                                "requestFlashLoan",
+                                [
+                                    o.collateralAsset,
+                                    o.debtAsset,
+                                    o.address,
+                                    o.debtToCover,
+                                    true, //receive aTokens
+                                ]
                             );
                         }
-                    } else {
-                        await emailManager.sendLogEmail(
-                            "Liquidation triggered",
-                            "Data: " + JSON.stringify(profitableLiquidations)
+                    );
+
+                    if (liquidationsPromises.length > 0) {
+                        const liquidationsResults = await Promise.all(
+                            liquidationsPromises
+                        );
+                        await logger.log(
+                            "Liquidations results: " +
+                                JSON.stringify(liquidationsResults),
+                            LoggingFramework.Table
                         );
                     }
+                } else {
+                    await emailManager.sendLogEmail(
+                        "Liquidation triggered",
+                        "Data: " + JSON.stringify(profitableLiquidations)
+                    );
                 }
-
-                await logger.log(
-                    "checkLiquidateAddressesFromInMemoryObjects: " +
-                        JSON.stringify(profitableLiquidations),
-                    LoggingFramework.Table
-                );
             }
+
+            await logger.log(
+                "checkLiquidateAddressesFromInMemoryObjects: " +
+                    JSON.stringify(profitableLiquidations),
+                LoggingFramework.Table
+            );
         }
     }
 
@@ -304,9 +311,12 @@ class LiquidationManager {
         }
         if (str.length > 0) {
             console.log(
-                `checkUserAccountDataBeforeLiquidation: User account data mismatch for address ${userAddressObject.address}: ${str}`
+                `MISMATCH: checkUserAccountDataBeforeLiquidation: data mismatch for address ${userAddressObject.address}: ${str}`
             );
-        }
+        } else
+            console.log(
+                `CORRECT: checkUserAccountDataBeforeLiquidation: Correct data for address ${userAddressObject.address}`
+            );
     }
 
     //#region calculateNetLiquidationReward

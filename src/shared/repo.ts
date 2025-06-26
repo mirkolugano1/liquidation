@@ -12,7 +12,7 @@ class Repo {
 
     public aave: any;
     public contractInterfaces: any = {};
-    public isWebhookEndpointInitialized: boolean = false;
+    public isAlchemyWebSocketListenerInitialized: boolean = false;
     public batchAddressesTreshold: number = 25;
     public ifaceBorrow: any;
     public ifaceDeposit: any;

@@ -1,10 +1,4 @@
-import {
-    app,
-    Timer,
-    InvocationContext,
-    HttpRequest,
-    HttpResponseInit,
-} from "@azure/functions";
+import { app, Timer, InvocationContext } from "@azure/functions";
 import * as df from "durable-functions";
 import {
     ActivityHandler,
@@ -14,36 +8,6 @@ import {
 import engine from "../engines/engine";
 import { Network } from "alchemy-sdk";
 import common from "../shared/common";
-import webhookManager from "../managers/webhookManager";
-import redisManager from "../managers/redisManager";
-
-//#region Gas Price Update
-
-const redisPingOrchestrator: OrchestrationHandler = function* (
-    context: OrchestrationContext
-) {
-    yield context.df.callActivity("redisPingActivity");
-};
-
-const redisPingActivity: ActivityHandler = async (
-    input: unknown,
-    context: InvocationContext
-) => {
-    await engine.redisPing(context);
-};
-
-const redisPingTimer = async (
-    myTimer: Timer,
-    context: InvocationContext
-): Promise<void> => {
-    const client = df.getClient(context);
-    const instanceId = await client.startNew("redisPingOrchestrator");
-};
-
-df.app.orchestration("redisPingOrchestrator", redisPingOrchestrator);
-df.app.activity("redisPingActivity", { handler: redisPingActivity });
-
-//#endregion Gas Price Update
 
 //#region Gas Price Update
 
@@ -228,6 +192,7 @@ app.timer("updateReservesDataTimer", {
     schedule: "5 0 * * *", // Cron expression for every day at 00:05 h
     extraInputs: [df.input.durableClient()],
     useMonitor: false,
+    //runOnStartup: true, // This makes it run immediately on startup
     handler: updateReservesDataTimer,
 });
 
@@ -240,6 +205,7 @@ app.timer("updateReservesPricesTimer", {
     schedule: common.getCronScheduleByJobName("updateReservesPricesTimer"),
     extraInputs: [df.input.durableClient()],
     useMonitor: false,
+    //runOnStartup: true, // This makes it run immediately on startup
     handler: updateReservesPricesTimer,
 });
 
@@ -249,34 +215,29 @@ app.timer("updateUserAccountDataAndUsersReservesTimer", {
     ),
     extraInputs: [df.input.durableClient()],
     useMonitor: false,
-    runOnStartup: true, // This makes it run immediately on startup
+    //runOnStartup: true, // This makes it run immediately on startup
     handler: updateUserAccountDataAndUsersReservesTimer,
-});
-
-app.timer("redisPing", {
-    schedule: "*/2 * * * *", // Cron expression for every n minutes
-    extraInputs: [df.input.durableClient()],
-    useMonitor: false,
-    handler: redisPingTimer,
 });
 
 //end functions to be executed every n minutes
 
 //todo local.settings.json redis connection string: set to production redis connection string
 
-//startup function (only to run locally)
+//startup function
 app.timer("startupFunction", {
     schedule: "0 0 * * *", // Daily at midnight (or whatever schedule you want)
     extraInputs: [df.input.durableClient()],
-    //runOnStartup: true, // This makes it run immediately on startup
+    runOnStartup: true, // This makes it run immediately on startup
     handler: async (
         myTimer: Timer,
         context: InvocationContext
     ): Promise<void> => {
         try {
-            //Todo setup all necessary initialization and checks, so that in production the app is ready to run
-            //and not crash on startup (e.g. redis connection, etc.)
+            //setting up and testing connection to redis, key vault and alchemy
             await engine.initializeFunction(context);
+
+            //resetting addresses status to 0 so they can be processed again
+            await engine.resetAddressesStatus(0, null, context);
         } catch (error) {
             context.log("❌ CRITICAL: Initialization failed:", error);
 
@@ -293,31 +254,3 @@ app.timer("startupFunction", {
 });
 
 //#endregion Timers
-
-const alchemyWebhook = async (
-    request: HttpRequest,
-    context: InvocationContext
-): Promise<HttpResponseInit> => {
-    const webhookData = (await request.json()) as any;
-    const client = df.getClient(context);
-
-    context.log(`Alchemy webhook received: ${JSON.stringify(webhookData)}`);
-    //await webhookManager.processAaveEvent(request, context);
-
-    return {
-        status: 200,
-        jsonBody: {
-            success: true,
-            message: "Webhook endpoint processed successfully",
-        },
-    };
-};
-
-// Register the webhook endpoint
-app.http("alchemyWebhook", {
-    methods: ["POST"],
-    authLevel: "anonymous",
-    route: "webhook/alchemy",
-    extraInputs: [df.input.durableClient()],
-    handler: alchemyWebhook,
-});

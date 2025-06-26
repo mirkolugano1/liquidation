@@ -44,6 +44,9 @@ class RedisManager {
         await this.initialize();
         const pipeline = this.redisClient.pipeline();
         for (const doc of objectsArray) {
+            if (!doc || !doc.key) {
+                throw new Error("Each object must have a 'key' property.");
+            }
             for (const key of keys) {
                 pipeline.call(
                     "JSON.SET",
@@ -131,7 +134,9 @@ class RedisManager {
             throw new Error("Both indexName and query must be provided");
         }
         try {
-            console.log(`Searching for documents matching: ${query}`);
+            console.log(
+                `Searching for documents matching: ${query.substring(0, 50)}...`
+            );
 
             // Step 1: Search for matching documents
             // FT.SEARCH returns: [count, key1, doc1, key2, doc2, ...]

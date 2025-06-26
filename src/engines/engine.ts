@@ -43,10 +43,10 @@ class Engine {
 
     //#region #Initialization methods
 
-    //#region initializeWebServer
+    //#region initializeAlchemyWebSocketListener
 
-    async initializeWebhookEndpoint() {
-        if (repo.isWebhookEndpointInitialized) return;
+    async initializeAlchemyWebSocketListener() {
+        if (repo.isAlchemyWebSocketListenerInitialized) return;
 
         repo.ifaceBorrow = new ethers.Interface(
             Constants.ABIS.BORROW_EVENT_ABI
@@ -71,12 +71,11 @@ class Engine {
         await this.initializeAlchemy();
         await this.initializeAddresses();
         await this.initializeReserves();
-        await this.initializeUsersReserves();
 
-        repo.isWebhookEndpointInitialized = true;
+        repo.isAlchemyWebSocketListenerInitialized = true;
     }
 
-    //#endregion initializeWebServer
+    //#endregion initializeAlchemyWebSocketListener
 
     //#region initializeAddresses
 
@@ -123,7 +122,7 @@ class Engine {
                 const queryAddresses: any = await redisManager.call(
                     "FT.SEARCH",
                     "idx:addresses",
-                    `@status:[1 1] @networkNormalized:{${common.normalizeRedisKey(
+                    `@status:[1 2] @networkNormalized:{${common.normalizeRedisKey(
                         key
                     )}}`,
                     "LIMIT",
@@ -215,16 +214,17 @@ class Engine {
     //#region initializeFunction
 
     async initializeFunction(context: InvocationContext | null = null) {
+        //DEBUG Do not run in production (this is for debugging to give time to attach debugger)
+        if (!common.isProd) {
+            if (context) console.log("Delayed startup function executed.");
+            await common.sleep(10000);
+        }
+        //END DEBUG
+
         logger.initialize("function", context);
         //pre-warmup redis connection
         await redisManager.redisClient.ping();
         await this.initializeAlchemy();
-
-        // Do not run in production (this is for debugging to give time to attach debugger)
-        if (!common.isProd) {
-            if (context) context.log("Delayed startup function executed.");
-            await common.sleep(10000);
-        }
 
         await logger.log("✅ Initialization completed successfully.");
     }
@@ -242,10 +242,9 @@ class Engine {
         );
 
         if (!alchemyKey) {
-            await logger.log(
+            throw new Error(
                 "initializeAlchemy: No Alchemy key found. Please set the ALCHEMYKEYENCRYPTED environment variable."
             );
-            return;
         }
 
         for (const aaveNetworkInfo of common.getNetworkInfos()) {
@@ -350,14 +349,8 @@ class Engine {
             addressesObjects[i].userEModeCategory = BigNumber(eModes[i] ?? 0)
                 .toNumber()
                 .toString();
-            addressesObjects[i].status = 1;
+            addressesObjects[i].status = 2; // 2 means "updated"
         }
-
-        await redisManager.setArrayProperties(addressesObjects, [
-            "userConfiguration",
-            "userEModeCategory",
-            "status",
-        ]);
 
         return addressesObjects;
     }
@@ -431,7 +424,10 @@ class Engine {
                 _.includes(allUserReserveObjectsAddresses, o.address)
         );
 
-        //test
+        console.log(
+            "Liquidatable user addresses:",
+            liquidatableUserAddressObjects.length
+        );
         if (liquidatableUserAddressObjects.length > 0) {
             const liquidatableUserAddressObjectsAddresses = _.map(
                 liquidatableUserAddressObjects,
@@ -818,6 +814,9 @@ class Engine {
         if (allReserveTokens.length > 0) {
             _.each(allReserveTokens, (o) => {
                 o.modifiedOn = moment().utc().unix();
+                o.modifiedOnFormatted = common.getDateStringFromTimestamp(
+                    o.modifiedOn
+                );
             });
             const reservesKeys = _.map(
                 allReserveTokens,
@@ -894,10 +893,6 @@ class Engine {
             "config:lastUpdateUserAccountDataAndUsersReserves",
             utcNow
         );
-
-        const allAddresses = await redisManager.getList(`addresses:*`);
-        _.each(allAddresses, (address) => (address.status = null));
-        await redisManager.setArrayProperties(allAddresses, "status");
     }
     /**
      * This method should be scheduled to run every 2-3 hours
@@ -930,10 +925,14 @@ class Engine {
         const timestamp = await redisManager.getValue(
             "config:lastUpdateUserAccountDataAndUsersReserves"
         );
+        console.log(
+            "config:lastUpdateUserAccountDataAndUsersReserves",
+            common.getDateStringFromTimestamp(timestamp)
+        );
 
         const query = `@networkNormalized:{${common.normalizeRedisKey(
             key
-        )}} @status:[0 0] @addedOn:[-inf ${timestamp}]`;
+        )}} @status:[0 1] @addedOn:[-inf ${timestamp}]`;
         const dbAddressesArr = await redisManager.call(
             "FT.SEARCH",
             "idx:addresses",
@@ -947,13 +946,16 @@ class Engine {
         );
 
         const hasData: boolean = dbAddressesArr.length > 0;
+        console.log("Addresses to process:", dbAddressesArr.length);
         if (hasData) {
             const _addresses = _.map(dbAddressesArr, (a: any) => a.address);
 
+            console.log("processing getUserAccountDataForAddresses");
             const results = await this.getUserAccountDataForAddresses(
                 _addresses,
                 aaveNetworkInfo.network
             );
+            console.log("processed getUserAccountDataForAddresses");
 
             const userAccountDataHFGreaterThan2 = _.filter(results, (o) => {
                 return o.healthFactor > 2;
@@ -965,26 +967,40 @@ class Engine {
                 }
             );
 
+            console.log(
+                `Addresses with health factor > 2: ${userAccountDataHFGreaterThan2.length}`
+            );
+            console.log(
+                `Addresses with health factor <= 2: ${addressesUserAccountDataHFLowerThan2.length}`
+            );
             if (addressesUserAccountDataHFLowerThan2.length > 0) {
+                console.log(
+                    "updating userProperties for addresses with health factor < 2"
+                );
+
                 //update userConfiguration, userEMode, status for addresses with health factor < 2
+                //to all addresses with health factor < 2 WITHOUT SAVING. Saving will be done later
                 addressesUserAccountDataHFLowerThan2 =
                     await this.updateUserProperties(
                         addressesUserAccountDataHFLowerThan2,
                         aaveNetworkInfo.network
                     );
 
+                console.log(
+                    "updating userReservesData for addresses with health factor < 2"
+                );
                 await this.updateUsersReservesData(
                     addressesUserAccountDataHFLowerThan2,
                     aaveNetworkInfo
                 );
-            }
 
-            //Save data to the DB:
-            const keys = _.map(
-                addressesUserAccountDataHFLowerThan2,
-                (o) => `addresses:${key}:${o.address}`
-            );
-            await redisManager.set(keys, addressesUserAccountDataHFLowerThan2);
+                console.log("Saving userAccountData (HF < 2) to redis");
+                //Save data to the DB:
+                await redisManager.setArrayProperties(
+                    addressesUserAccountDataHFLowerThan2,
+                    ["userConfiguration", "userEModeCategory", "status"]
+                );
+            }
 
             //delete addresses from the DB where health factor is > 2
             const userAccountDataHFGreaterThan2Addresses = _.map(
@@ -993,6 +1009,10 @@ class Engine {
             );
             const userAccountDataHFGreaterThan2AddressesString =
                 userAccountDataHFGreaterThan2Addresses.join("|");
+
+            console.log(
+                `Found ${userAccountDataHFGreaterThan2AddressesString.length} addresses with health factor > 2, to be deleted`
+            );
             if (userAccountDataHFGreaterThan2AddressesString.length > 0) {
                 await redisManager.deleteByQuery(
                     "addresses",
@@ -1038,6 +1058,13 @@ class Engine {
                     }
                 }
             }
+        } else {
+            //All addresses have been updated (status = 2), we can set them to status = 1
+            //so that they can be processed again in the next run of the main function (orchestrator)
+            //but at the same time the data they have is uptodate so they can be used for calculating
+            //health factor when updating reserves prices or webhook event arrives
+
+            await this.resetAddressesStatus(1, network, context);
         }
 
         await logger.log("updateUserAccountDataAndUsersReserves_chunk: End");
@@ -1064,6 +1091,38 @@ class Engine {
     }
 
     //#endregion updateCloseFactor
+
+    //#region resetAddressesStatus
+
+    async resetAddressesStatus(
+        status: number,
+        network: Network | null = null,
+        context: InvocationContext | null = null
+    ) {
+        logger.initialize("function:updateAddressOnStartup", context);
+
+        const aaveNetworkInfos = common.getNetworkInfos();
+        for (const aaveNetworkInfo of aaveNetworkInfos) {
+            if (
+                !network ||
+                aaveNetworkInfo.network.toString() == network.toString()
+            ) {
+                await logger.log(
+                    `Start updateAddressOnStartup for all networks`
+                );
+                const addresses = await redisManager.getList("addresses:*");
+                if (addresses.length > 0) {
+                    for (let i = 0; i < addresses.length; i++) {
+                        addresses[i].status = status;
+                    }
+                    await redisManager.setArrayProperties(addresses, "status");
+                }
+            }
+        }
+        await logger.log("updateAddressOnStartup: End");
+    }
+
+    //#endregion resetAddressesStatus
 
     //#region updateReservesPrices
 
@@ -1142,11 +1201,18 @@ class Engine {
             for (let update of reservesDbUpdate) {
                 const redisKey = `reserves:${key}:${update.address}`;
                 pipeline.call("JSON.SET", redisKey, "$.price", update.price);
+                const modifiedOn = moment.utc().unix();
                 pipeline.call(
                     "JSON.SET",
                     redisKey,
                     "$.priceModifiedOn",
-                    moment.utc().unix()
+                    modifiedOn
+                );
+                pipeline.call(
+                    "JSON.SET",
+                    redisKey,
+                    "$.priceModifiedOnFormatted",
+                    common.getDateStringFromTimestamp(modifiedOn)
                 );
             }
             await pipeline.exec();
@@ -1181,8 +1247,18 @@ class Engine {
         result = await sqlManager.execQuery("Select * from addresses");
         _.each(result, (o) => {
             o.status = 0;
-            if (o.addedOn) o.addedOn = moment(o.addedOn).unix();
-            if (o.modifiedOn) o.modifiedOn = moment(o.modifiedOn).unix();
+            if (o.addedOn) {
+                o.addedOn = moment(o.addedOn).unix();
+                o.addedOnFormatted = common.getDateStringFromTimestamp(
+                    o.addedOn
+                );
+            }
+            if (o.modifiedOn) {
+                o.modifiedOn = moment(o.modifiedOn).unix();
+                o.modifiedOnFormatted = common.getDateStringFromTimestamp(
+                    o.modifiedOn
+                );
+            }
             o.networkNormalized = common.normalizeRedisKey(o.network);
         });
         keys = _.map(result, (o) => `addresses:${o.network}:${o.address}`);
@@ -1224,14 +1300,21 @@ class Engine {
 
     async doTest() {
         console.log("doTest started");
-        await redisManager.set(
-            common.getProcessingAddressesKey("arb-mainnet"),
-            ["1", "2", "3"]
-        );
-        const val = await redisManager.getArrayValue(
-            common.getProcessingAddressesKey("arb-mainnet")
-        );
-        console.log(val);
+        const ad = await redisManager.getList("addresses:*");
+        for (let i = 0; i < ad.length; i++) {
+            ad[i].key = `addresses:${ad[i].network}:${ad[i].address}`;
+            ad[i].networkNormalized = common.normalizeRedisKey(ad[i].network);
+            ad[i].addedOn = moment.utc().unix();
+            ad[i].addedOnFormatted = common.getDateStringFromTimestamp(
+                ad[i].addedOn
+            );
+        }
+        await redisManager.setArrayProperties(ad, [
+            "addedOn",
+            "addedOnFormatted",
+            "key",
+            "networkNormalized",
+        ]);
 
         return;
         //await this.migrateDataToRedis();

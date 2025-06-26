@@ -4,6 +4,7 @@ import repo from "./repo";
 import { ethers, formatUnits } from "ethers";
 import { Network } from "alchemy-sdk";
 import Constants from "../shared/constants";
+import moment from "moment";
 
 class Common {
     public isProd: boolean;
@@ -29,6 +30,11 @@ class Common {
             default:
                 throw new Error("No cron schedule found for job " + jobName);
         }
+    }
+
+    getDateStringFromTimestamp(timestamp: number) {
+        if (!timestamp) throw new Error("No timestamp provided");
+        return moment.unix(timestamp).format("YYYY-MM-DD HH:mm:ss");
     }
 
     getProcessingAddressesKey(network: Network | string) {
